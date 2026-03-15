@@ -278,7 +278,13 @@ float FVoxelBiomeGenerators::GetSkylandDensity(
         0.02f, 1.f);
     // Scale probability by terrain falloff so lowlands don't saturate with islands.
     Prob *= FMath::Lerp(0.15f, 1.0f, ShardFalloff);
-    const float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob);
+    
+    // Cap maximum probability to prevent chunk-filling islands
+    Prob = FMath::Min(Prob, 0.45f);
+    
+    // Ensure threshold interpolation is monotonic: high probability should have low threshold
+    // This fixes the inverted logic that was causing extreme generation
+    const float Threshold = FMath::Lerp(SC.ThresholdAtMaxProbability, SC.ThresholdAtMinProbability, Prob);
 
     // Domain warping: XY only (no Z warp prevents vertical discontinuities between chunks)
     float WX = WX_base, WY = WY_base;

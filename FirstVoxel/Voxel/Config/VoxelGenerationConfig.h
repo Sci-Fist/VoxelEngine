@@ -307,18 +307,18 @@ struct FSkylandsLayerConfig
 
     // --- Probability ---
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
-        meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="Baseline probability that any sky position has an island. This is the floor value, applied even over flat plains."))
+        meta=(ClampMin="0.001", ClampMax="0.15",
+              ToolTip="Baseline probability that any sky position has an island. This is the floor value, applied even over flat plains. Keep below 0.15 to prevent chunk-filling."))
     float BaseProbability = 0.004f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
-        meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="Probability bonus added at maximum terrain height. High mountains dramatically increase island spawning directly above."))
+        meta=(ClampMin="0.0", ClampMax="0.8",
+              ToolTip="Probability bonus added at maximum terrain height. High mountains dramatically increase island spawning directly above. Keep below 0.8 to prevent extreme generation."))
     float HeightProbabilityBonus = 0.35f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
-        meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="Probability bonus for rough/mountainous terrain. Rocky biomes spawn more islands above them."))
+        meta=(ClampMin="0.0", ClampMax="0.6",
+              ToolTip="Probability bonus for rough/mountainous terrain. Rocky biomes spawn more islands above them. Keep below 0.6 to prevent extreme generation."))
     float RoughnessProbabilityBonus = 0.25f;
 
     // --- Size ---

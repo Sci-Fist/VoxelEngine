@@ -112,7 +112,7 @@ float FVoxelDensityGenerator::GetDensityFull(
         const FCaveTunnelsConfig& CVC = Config.CaveTunnels;
         const float DepthBelow        = FMath::Max(0.f, SurfaceHeight - Z);
 
-        // Worm tunnels: fade in below MinDepth, fade out toward bedrock.
+        // Worm tunnels: fade in below MinDepthBelowSurface, fade out toward bedrock.
         if (DepthBelow > CVC.MinDepthBelowSurface)
         {
             const float SurfFade = FMath::Clamp(
@@ -131,14 +131,20 @@ float FVoxelDensityGenerator::GetDensityFull(
             if (CaveFade > 0.f)
             {
                 // Pass SeedOff in so SampleCaveNoise does not need to recompute it.
-                SurfD -= SampleCaveNoise(WorldPos, SeedOff, Config) * CaveFade;
+                const float TunnelCarve = SampleCaveNoise(WorldPos, SeedOff, Config) * CaveFade;
+                // Limit tunnel carving to prevent entire chunks from being hollowed out
+                const float MaxTunnelCarve = 1.2f;
+                SurfD -= FMath::Min(TunnelCarve, MaxTunnelCarve);
             }
         }
 
         // Crystal caverns: large carved chambers deep underground.
         const float CavernDelta = FVoxelBiomeGenerators::GetCrystalCavernDelta(
             X, Y, Z, SurfaceHeight, Config);
-        SurfD += CavernDelta;
+        
+        // Limit cavern carving to prevent chunk-filling voids
+        const float MaxCavernCarve = 1.0f;
+        SurfD += FMath::Clamp(CavernDelta, -MaxCavernCarve, MaxCavernCarve);
     }
 
     // ============================================================
