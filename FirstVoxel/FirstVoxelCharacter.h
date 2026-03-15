@@ -1,0 +1,223 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Character.h"
+#include "Logging/LogMacros.h"
+#include "FirstVoxelCharacter.generated.h"
+
+class USpringArmComponent;
+class UCameraComponent;
+class UInputAction;
+struct FInputActionValue;
+
+DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
+
+/**
+ * Terrain modification tool modes.
+ * Keep order aligned with tool selection bindings (1-4 / D-Pad).
+ */
+UENUM(BlueprintType)
+enum class EVoxelToolMode : uint8
+{
+	Dig UMETA(DisplayName = "Dig"),
+	Build UMETA(DisplayName = "Build"),
+	Smooth UMETA(DisplayName = "Smooth"),
+	Flatten UMETA(DisplayName = "Flatten")
+};
+
+/**
+ *  A simple player-controllable third person character
+ *  Implements a controllable orbiting camera
+ */
+UCLASS()
+class FIRSTVOXEL_API AFirstVoxelCharacter : public ACharacter
+{
+	GENERATED_BODY()
+
+	/** Camera boom positioning the camera behind the character */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	USpringArmComponent* CameraBoom;
+
+	/** Follow camera */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	UCameraComponent* FollowCamera;
+	
+protected:
+
+	/** Jump Input Action */
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* JumpAction;
+
+	/** Move Input Action */
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* MoveAction;
+
+	/** Look Input Action */
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* LookAction;
+
+	/** Mouse Look Input Action */
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* MouseLookAction;
+
+	/** Sprint Input Action */
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* SprintAction;
+
+	/** Dig Input Action (Remove terrain) */
+	UPROPERTY(EditAnywhere, Category="Input|Voxel")
+	UInputAction* DigAction;
+
+	/** Build Input Action (Add terrain) */
+	UPROPERTY(EditAnywhere, Category="Input|Voxel")
+	UInputAction* BuildAction;
+
+	/** Fly Toggle Input Action (F) */
+	UPROPERTY(EditAnywhere, Category="Input|Voxel")
+	UInputAction* ToggleFlyAction;
+
+	/** Map Toggle Input Action (M) — open/close the world map. */
+	UPROPERTY(EditAnywhere, Category="Input|Voxel",
+		meta=(ToolTip="Input Action for toggling the world map. Assign IA_Map here or let BeginPlay auto-load it."))
+	UInputAction* MapAction;
+
+	/** Fly Down Input Action (Ctrl) */
+	UPROPERTY(EditAnywhere, Category="Input|Voxel")
+	UInputAction* FlyDownAction;
+
+	/** Input Mapping Context */
+	UPROPERTY(EditAnywhere, Category="Input")
+	class UInputMappingContext* DefaultMappingContext;
+
+private:
+	/** Track whether EnhancedInput supplied looking vectors this frame */
+	bool bLookedThisFrame = false;
+
+public:
+
+	/** Constructor */
+	AFirstVoxelCharacter();
+
+protected:
+
+	virtual void BeginPlay() override;
+
+public:
+	// Called every frame
+	virtual void Tick(float DeltaTime) override;
+
+	/** Initialize input action bindings */
+	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+protected:
+
+	/** Called for movement input */
+	void Move(const FInputActionValue& Value);
+
+	/** Called for looking input */
+	void Look(const FInputActionValue& Value);
+
+	/** Sprinting */
+	void Sprint();
+	void StopSprinting();
+
+public:
+
+	/** Handles move inputs from either controls or UI interfaces */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoMove(float Right, float Forward);
+
+	/** Handles look inputs from either controls or UI interfaces */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoLook(float Yaw, float Pitch);
+
+	/** Trigger terrain digging from camera */
+	void Dig();
+
+	/** Trigger terrain building from camera */
+	void Build();
+
+	/** Switches the active terrain tool (0-3). */
+	void SelectToolByIndex(int32 ToolIndex);
+
+	/** Convenience bindings for tool selection inputs. */
+	void SelectToolDig();
+	void SelectToolBuild();
+	void SelectToolSmooth();
+	void SelectToolFlatten();
+
+	/** Apply the currently selected terrain tool. */
+	void ApplyCurrentTool();
+
+	/** Handles jump pressed inputs from either controls or UI interfaces */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoJumpStart();
+
+	/** Handles jump pressed inputs from either controls or UI interfaces */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	virtual void DoJumpEnd();
+
+	/** Toggle flight mode */
+	void ToggleFly();
+
+	/** Toggle world map */
+	void ToggleMap();
+
+	/** Fly Downward – called by EnhancedInput FlyDown action and by Tick gamepad polling */
+	void FlyDown();
+
+	/** Kept for backward-compat with any existing Blueprint bindings; calls FlyDown() */
+	void FlyVertical(const FInputActionValue& Value);
+
+	void IncreaseRadius();
+	void DecreaseRadius();
+
+	/** Radius of voxel modifications. Adjusted with MouseWheel / LB+RB. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category="Voxel|Brush")
+	float InteractionRadius = 300.f;
+
+	/**
+	 * Lazily-cached pointer to the first AVoxelWorld in the level.
+	 * Populated on first use by FindAndCacheVoxelWorld(); null until then.
+	 * Shared by all subclasses (Combat, SideScrolling, Platforming) so the
+	 * TActorIterator scan only ever runs once per character lifetime.
+	 */
+	UPROPERTY()
+	class AVoxelWorld* CachedVoxelWorld = nullptr;
+
+	/**
+	 * Locates and caches AVoxelWorld via the player controller.
+	 * Safe to call every Tick — returns immediately once the cache is warm.
+	 * Returns the cached pointer (may be null if no VoxelWorld exists).
+	 */
+	AVoxelWorld* FindAndCacheVoxelWorld();
+
+	/** True when the last detected input came from a gamepad. Updated every Tick.
+	 *  Read by AFirstVoxelHUD to show controller vs keyboard labels. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Input")
+	bool bLastInputWasGamepad = false;
+
+	/** Look sensitivity for gamepad right stick (degrees per second). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Input", meta=(ClampMin="10.0", ClampMax="500.0"))
+	float GamepadLookSensitivity = 160.f;
+
+	/** Currently selected terrain tool (defaults to Dig). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel|Tools")
+	EVoxelToolMode CurrentTool = EVoxelToolMode::Dig;
+
+private:
+	/** Per-instance dig/build throttle timestamps (replaces static locals to work correctly across PIE sessions). */
+	float DigLastActionTime   = -1.f;
+	float BuildLastActionTime = -1.f;
+
+public:
+
+	/** Returns CameraBoom subobject **/
+	FORCEINLINE class USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
+
+	/** Returns FollowCamera subobject **/
+	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+};
+
