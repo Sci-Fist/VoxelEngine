@@ -258,17 +258,26 @@ float FVoxelBiomeGenerators::GetSkylandDensity(
                        + CurvedRough  * SC.RoughnessAltitudeBonus
                        + ShardFalloff * SC.LowTerrainAltitudeBoost;
 
+    // Early-out: if terrain influence is extremely low, skip skylands entirely.
+    // This prevents flat plains from being blanketed by dense skyland noise.
+    if (ShardFalloff < 0.08f)
+    {
+        return -2.f;
+    }
+
     // ----- Z-gate: skip if clearly outside the island band -----
     const float Margin = HalfThick * 0.4f;
     if (Z < SkyAlt - HalfThick - Margin || Z > SkyAlt + HalfThick + Margin) return -2.f;
 
 
     // ----- Probability -> threshold -----
-    const float Prob = FMath::Clamp(
+    float Prob = FMath::Clamp(
         SC.BaseProbability
         + CurvedHeight * SC.HeightProbabilityBonus
         + CurvedRough  * SC.RoughnessProbabilityBonus,
         0.02f, 1.f);
+    // Scale probability by terrain falloff so lowlands don't saturate with islands.
+    Prob *= FMath::Lerp(0.15f, 1.0f, ShardFalloff);
     const float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob);
 
     // Domain warping: XY only (no Z warp prevents vertical discontinuities between chunks)

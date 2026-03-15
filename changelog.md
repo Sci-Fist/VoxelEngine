@@ -17,3 +17,4 @@
 
 ### Fixed
 - Prevented the editor "Generate World" action from freezing by draining the generation queue with a non-blocking ticker instead of a tight loop.
+- Prevented skylands from blanketing low terrain by adding a low-terrain early-out and scaling skyland probability by terrain falloff.
