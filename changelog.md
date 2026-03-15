@@ -14,3 +14,6 @@
 ### Updated
 - Enforced crater biome spawning with voxel-grid snapping and safe spawn height offsets to avoid unsafe placements.
 - Tuned Skylands generation with sharper low-terrain falloff, updated altitude/size scaling, and new low-terrain altitude boosts for island shards.
+
+### Fixed
+- Prevented the editor "Generate World" action from freezing by draining the generation queue with a non-blocking ticker instead of a tight loop.

@@ -278,18 +278,34 @@ void AVoxelWorld::GenerateWorld()
 	}
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d new chunks to extend the world."), GenerationQueue.Num());
 
-	// 5. Force immediate update if in editor (Tick might not be running)
+	// 5. Editor generation should never block the game thread.
+	// The old tight while-loop prevented async chunk completion callbacks from
+	// running on the game thread, which could freeze the editor when generating.
 	if (!GetWorld()->IsGameWorld())
 	{
-		// We explicitly do NOT loop through LoadedChunks and call GenerateSync here anymore.
-		// We only want to generate NEW chunks.
+#if WITH_EDITOR
+		TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+		FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateLambda([WeakThis](float) -> bool
+			{
+				AVoxelWorld* Self = WeakThis.Get();
+				if (!Self || Self->bShutdown)
+				{
+					return false;
+				}
 
-		// In editor, we want to drain the ENTIRE queue synchronously
-		while (QueueHead < GenerationQueue.Num())
-		{
-			DrainGenerationQueue();
-		}
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Editor generation complete. %d chunks loaded."), LoadedChunks.Num());
+				Self->DrainGenerationQueue();
+				const bool bDone = Self->QueueHead >= Self->GenerationQueue.Num();
+				if (bDone)
+				{
+					UE_LOG(LogVoxelWorld, Log,
+						TEXT("VoxelWorld: Editor generation complete. %d chunks loaded."),
+						Self->LoadedChunks.Num());
+				}
+				return !bDone; // keep ticking until the queue is empty
+			}),
+			0.0f);
+#endif
 	}
 
 	// 5. If at runtime, snap the player
