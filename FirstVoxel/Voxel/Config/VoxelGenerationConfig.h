@@ -309,17 +309,17 @@ struct FSkylandsLayerConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
         meta=(ClampMin="0.0", ClampMax="1.0",
               ToolTip="Baseline probability that any sky position has an island. This is the floor value, applied even over flat plains."))
-    float BaseProbability = 0.008f;
+    float BaseProbability = 0.004f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
         meta=(ClampMin="0.0", ClampMax="1.0",
               ToolTip="Probability bonus added at maximum terrain height. High mountains dramatically increase island spawning directly above."))
-    float HeightProbabilityBonus = 0.50f;
+    float HeightProbabilityBonus = 0.35f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
         meta=(ClampMin="0.0", ClampMax="1.0",
               ToolTip="Probability bonus for rough/mountainous terrain. Rocky biomes spawn more islands above them."))
-    float RoughnessProbabilityBonus = 0.35f;
+    float RoughnessProbabilityBonus = 0.25f;
 
     // --- Size ---
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
@@ -360,12 +360,12 @@ struct FSkylandsLayerConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Absolute Noise Bounds",
         meta=(ClampMin="-1.0", ClampMax="1.0",
               ToolTip="Noise threshold at maximum probability (mountains). Negative = islands appear often. -0.28 = ~64% of positions qualify."))
-    float ThresholdAtMaxProbability = -0.28f;
+    float ThresholdAtMaxProbability = -0.18f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Absolute Noise Bounds",
         meta=(ClampMin="-1.0", ClampMax="1.0",
               ToolTip="Noise threshold at minimum probability (flat plains). 0.58 = only top ~7% of positions qualify, making flatland shards rare."))
-    float ThresholdAtMinProbability = 0.58f;
+    float ThresholdAtMinProbability = 0.68f;
 
 
     // --- Domain Warping ---
@@ -416,10 +416,11 @@ struct FCaveTunnelsConfig
 {
     GENERATED_BODY()
 
+    // Tuned down to reduce over-carving in the cave layer.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tunnels",
         meta=(ClampMin="0.0", ClampMax="1.0",
               ToolTip="Absolute noise threshold for carving tunnels. Higher = thinner, rarer tunnels."))
-    float Threshold = 0.48f;
+    float Threshold = 0.55f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tunnels",
         meta=(ClampMin="0.0001",
@@ -429,7 +430,7 @@ struct FCaveTunnelsConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tunnels",
         meta=(ClampMin="0.0",
               ToolTip="Carve strength. Higher ensures tunnels are fully hollow with no stray voxels."))
-    float Strength = 2.5f;
+    float Strength = 2.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tunnels",
         meta=(ClampMin="0.0",
@@ -491,12 +492,12 @@ struct FCrystalCavernsConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Caverns",
         meta=(ClampMin="0.0", ClampMax="0.5",
               ToolTip="Noise threshold below which chambers carve. Lower = larger, more open chambers."))
-    float ChamberThreshold = 0.28f;
+    float ChamberThreshold = 0.34f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Caverns",
         meta=(ClampMin="0.0",
               ToolTip="Carve multiplier for chambers. Higher ensures chambers are fully hollow."))
-    float ChamberStrength = 8.f;
+    float ChamberStrength = 6.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Veins",
         meta=(ToolTip="Add thin ridged tunnels connecting chamber volumes."))
@@ -510,7 +511,7 @@ struct FCrystalCavernsConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Veins",
         meta=(EditCondition="bEnableConnectingVeins", ClampMin="0.0",
               ToolTip="Contribution strength of connecting veins to the carve field."))
-    float VeinStrength = 1.5f;
+    float VeinStrength = 1.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crystals",
         meta=(ToolTip="Noise frequency for individual crystal stalagmite / stalactite spires."))
