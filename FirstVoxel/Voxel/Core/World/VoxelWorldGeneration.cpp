@@ -183,116 +183,13 @@ void AVoxelWorld::GenerateWorldDeferred()
 	if (GetWorld()->IsGameWorld())
 	{
 		FTimerHandle TempHandle;
-		GetWorldTimerManager().SetTimer(TempHandle, [this]()
+		TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+		GetWorldTimerManager().SetTimer(TempHandle, [WeakThis]()
 		{
-			if (bShutdown)
+			if (AVoxelWorld* StrongThis = WeakThis.Get())
 			{
-				return;
-			}
-			APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
-			if (!Player) return;
-
-			const FVoxelGenerationConfig& Config = GetEffectiveConfig();
-			FVector Pos = Player->GetActorLocation();
-			Pos = SnapToVoxelGrid(Pos);
-			if (bForceCraterSpawn)
-			{
-				Pos = FindCraterSpawnLocation(Pos, Config);
-			}
-			Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
-			const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
-
-			const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Config);
-			const FVoxelBiomeWeightMap& Weights = Wh.Weights;
-			const float Surface = Wh.SurfaceHeight;
-
-			// --- TERRAIN-DRIVEN SKYLAND SPAWN FINDER ---
-			// Compute the island altitude band for this exact (X,Y) column using the same
-			// formula that FVoxelDensityGenerator uses, so we always search the right height.
-			const float HeightNorm    = FMath::Clamp(Surface / SC.MaxTerrainReference, 0.f, 1.f);
-			const float RoughnessNorm = FMath::Clamp(Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
-			const float TerrainStr    = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
-			const float AltBase       = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStr);
-			const float SkyAlt        = Surface
-				+ AltBase
-				+ HeightNorm    * SC.HeightAltitudeBonus
-				+ RoughnessNorm * SC.RoughnessAltitudeBonus;
-			const float IslandHalfThick = (SC.BaseIslandSize
-				+ HeightNorm    * SC.HeightSizeBonus
-				+ RoughnessNorm * SC.RoughnessSizeBonus) * SC.ThicknessRatio;
-
-			const float SearchTop = SkyAlt + IslandHalfThick;
-			// Clamp SearchBot well above the terrain surface so the density probe never
-			// hits solid ground and mistakes it for a skyland.
-			const float SearchBot = FMath::Max(SkyAlt - IslandHalfThick, Surface + 500.f);
-
-			const float SafeOffset = GetSafeSpawnHeightOffset();
-			float TargetZ = Surface + SafeOffset; // fallback: above ground surface
-			
-			// FIX: For craters, force spawn much higher to avoid spawning inside the crater mesh
-			const float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
-			if (CraterWeight > 0.3f)
-			{
-				// Crater basins extend down ~2000m; force spawn 3km above surface to escape
-				TargetZ = Surface + 3000.f;
-			}
-			
-			bool bFoundSkyland = false;
-
-			static FVoxelDensityGenerator SpawnProbe;
-			for (float z = SearchTop; z >= SearchBot; z -= 200.f)
-			{
-				if (SpawnProbe.GetDensity(Pos.X, Pos.Y, z, Config) > 0.f)
-				{
-					// Place clearly above first solid so we don't spawn inside mesh
-					TargetZ = z + SafeOffset;
-					bFoundSkyland = true;
-					break;
-				}
-			}
-
-			// --- ASYNC LOAD AT TARGET (include chunk at spawn Z so mesh exists before teleport) ---
-			InitialSpawnCoords.Empty();
-			bWaitingForInitialSpawn = true;
-			TargetCoordsZ = TargetZ;
-			CachedSurfaceHeight = Surface;
-
-			const FIntVector LandCoord = WorldToChunkCoord(Pos);
-			const float ChunkHeight = ChunkSize * VoxelSize;
-			const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
-
-			for (int32 x = -1; x <= 1; ++x)
-			{
-				for (int32 y = -1; y <= 1; ++y)
-				{
-					// Load horizontal neighbors at ground (Z=0) and at spawn height so mesh is ready
-					FIntVector NeighborCoord = LandCoord + FIntVector(x, y, 0);
-					SpawnChunk(NeighborCoord);
-					InitialSpawnCoords.Add(NeighborCoord);
-					if (AVoxelChunk** Ptr = LoadedChunks.Find(NeighborCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
-
-					if (SpawnChunkZ != 0)
-					{
-						FIntVector SkyCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ);
-						if (!LoadedChunks.Contains(SkyCoord))
-						{
-							SpawnChunk(SkyCoord);
-							InitialSpawnCoords.Add(SkyCoord);
-							if (AVoxelChunk** Ptr = LoadedChunks.Find(SkyCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
-						}
-						// Also load chunk above/below spawn Z for smooth transition
-						if (SpawnChunkZ > 0)
-						{
-							FIntVector BelowCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ - 1);
-							if (!LoadedChunks.Contains(BelowCoord))
-							{
-								SpawnChunk(BelowCoord);
-								InitialSpawnCoords.Add(BelowCoord);
-								if (AVoxelChunk** Ptr = LoadedChunks.Find(BelowCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
-							}
-						}
-					}
-				}
+				if (StrongThis->bShutdown) return;
+				StrongThis->ProcessInitialPlayerSpawn();
 			}
 		}, 0.8f, false);
 	}
@@ -336,7 +233,14 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord)
 	
 	// Async generation enabled for both games and Editor runs
 	ActiveGenerations++;
-	Chunk->OnGenerationComplete = [this]() { ActiveGenerations--; };
+	TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+	Chunk->OnGenerationComplete = [WeakThis]() 
+	{ 
+		if (AVoxelWorld* StrongThis = WeakThis.Get())
+		{
+			StrongThis->ActiveGenerations--; 
+		}
+	};
 
 	// Wire water sim into this chunk
 	InitChunkWater(Chunk);
@@ -454,5 +358,108 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 
 	// Wire water material from the world-level config.
 	Chunk->WaterMaterial      = GenerationConfig.Water.OceanMaterial.Get();
+}
+
+// ============================================================
+//  ProcessInitialPlayerSpawn
+//  Validates crater/skyland height bounds and shifts player position.
+// ============================================================
+void AVoxelWorld::ProcessInitialPlayerSpawn()
+{
+	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+	if (!Player) return;
+
+	const FVoxelGenerationConfig& Config = GetEffectiveConfig();
+	FVector Pos = Player->GetActorLocation();
+	Pos = SnapToVoxelGrid(Pos);
+	if (bForceCraterSpawn)
+	{
+		Pos = FindCraterSpawnLocation(Pos, Config);
+	}
+	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
+	const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+
+	const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Config);
+	const FVoxelBiomeWeightMap& Weights = Wh.Weights;
+	const float Surface = Wh.SurfaceHeight;
+
+	// --- TERRAIN-DRIVEN SKYLAND SPAWN FINDER ---
+	const float HeightNorm    = FMath::Clamp(Surface / SC.MaxTerrainReference, 0.f, 1.f);
+	const float RoughnessNorm = FMath::Clamp(Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
+	const float TerrainStr    = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
+	const float AltBase       = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStr);
+	const float SkyAlt        = Surface
+		+ AltBase
+		+ HeightNorm    * SC.HeightAltitudeBonus
+		+ RoughnessNorm * SC.RoughnessAltitudeBonus;
+	const float IslandHalfThick = (SC.BaseIslandSize
+		+ HeightNorm    * SC.HeightSizeBonus
+		+ RoughnessNorm * SC.RoughnessSizeBonus) * SC.ThicknessRatio;
+
+	const float SearchTop = SkyAlt + IslandHalfThick;
+	const float SearchBot = FMath::Max(SkyAlt - IslandHalfThick, Surface + 500.f);
+
+	const float SafeOffset = GetSafeSpawnHeightOffset();
+	float TargetZ = Surface + SafeOffset; 
+	
+	const float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
+	if (CraterWeight > 0.3f)
+	{
+		TargetZ = Surface + 3000.f;
+	}
+	
+	bool bFoundSkyland = false;
+
+	static FVoxelDensityGenerator SpawnProbe;
+	for (float z = SearchTop; z >= SearchBot; z -= 200.f)
+	{
+		if (SpawnProbe.GetDensity(Pos.X, Pos.Y, z, Config) > 0.f)
+		{
+			TargetZ = z + SafeOffset;
+			bFoundSkyland = true;
+			break;
+		}
+	}
+
+	InitialSpawnCoords.Empty();
+	bWaitingForInitialSpawn = true;
+	TargetCoordsZ = TargetZ;
+	CachedSurfaceHeight = Surface;
+
+	const FIntVector LandCoord = WorldToChunkCoord(Pos);
+	const float ChunkHeight = ChunkSize * VoxelSize;
+	const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
+
+	for (int32 x = -1; x <= 1; ++x)
+	{
+		for (int32 y = -1; y <= 1; ++y)
+		{
+			FIntVector NeighborCoord = LandCoord + FIntVector(x, y, 0);
+			SpawnChunk(NeighborCoord);
+			InitialSpawnCoords.Add(NeighborCoord);
+			if (AVoxelChunk** Ptr = LoadedChunks.Find(NeighborCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
+
+			if (SpawnChunkZ != 0)
+			{
+				FIntVector SkyCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ);
+				if (!LoadedChunks.Contains(SkyCoord))
+				{
+					SpawnChunk(SkyCoord);
+					InitialSpawnCoords.Add(SkyCoord);
+					if (AVoxelChunk** Ptr = LoadedChunks.Find(SkyCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
+				}
+				if (SpawnChunkZ > 0)
+				{
+					FIntVector BelowCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ - 1);
+					if (!LoadedChunks.Contains(BelowCoord))
+					{
+						SpawnChunk(BelowCoord);
+						InitialSpawnCoords.Add(BelowCoord);
+						if (AVoxelChunk** Ptr = LoadedChunks.Find(BelowCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
+					}
+				}
+			}
+		}
+	}
 }
 

@@ -384,6 +384,8 @@ private:
   float WaterSimInterval = 0.2f;
   float WaterSimTimer = 0.f;
 
+  void ProcessInitialPlayerSpawn();
+
   // --- Startup Spawn Tracking ---
   bool bWaitingForInitialSpawn = false;
   TArray<FIntVector> InitialSpawnCoords;

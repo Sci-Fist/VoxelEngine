@@ -233,203 +233,185 @@ float FVoxelBiomeGenerators::GetSkylandDensity(
     float X, float Y, float Z, float SurfaceHeight,
     const FVoxelBiomeWeightMap &Weights, const FVoxelGenerationConfig &Config,
     int32 StepSize) {
-  const FSkylandsLayerConfig &SC = Config.SkylandsLayer;
+    FSkylandColumnCache Cache = GetSkylandColumnCache(X, Y, SurfaceHeight, Weights, Config);
+    return GetSkylandDensityFromCache(Cache, X, Y, Z, Config, StepSize);
+}
 
-  const FVector Off = Config.GetSeedOffset();
+FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
+    float X, float Y, float SurfaceHeight,
+    const FVoxelBiomeWeightMap& Weights,
+    const FVoxelGenerationConfig& Config)
+{
+    FSkylandColumnCache Cache;
+    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+    const FVector Off = Config.GetSeedOffset();
 
-  // --- 🔬 DISCRETE CELLULAR GRID SELECTION [PHASE D] ---
-  const float GridSize = SC.BaseIslandSize * 4.0f; 
-  if (GridSize <= 0.f) return -2.f;
+    const float GridSize = SC.BaseIslandSize * 4.0f; 
+    if (GridSize <= 0.f) return Cache;
 
-  const int32 CellX = FMath::FloorToInt(X / GridSize);
-  const int32 CellY = FMath::FloorToInt(Y / GridSize);
+    const int32 CellX = FMath::FloorToInt(X / GridSize);
+    const int32 CellY = FMath::FloorToInt(Y / GridSize);
 
-  float BestDistSq = 99999999.f;
-  FVector2D BestCenter(0.f, 0.f);
+    float BestDistSq = 99999999.f;
+    FVector2D BestCenter(0.f, 0.f);
 
-  for (int32 dx = -1; dx <= 1; ++dx) {
-    for (int32 dy = -1; dy <= 1; ++dy) {
-      const int32 currentCellX = CellX + dx;
-      const int32 currentCellY = CellY + dy;
+    for (int32 dx = -1; dx <= 1; ++dx) {
+      for (int32 dy = -1; dy <= 1; ++dy) {
+        const int32 currentCellX = CellX + dx;
+        const int32 currentCellY = CellY + dy;
 
-      const float nX = (float)currentCellX * GridSize + Off.X;
-      const float nY = (float)currentCellY * GridSize + Off.Y;
+        const float nX = (float)currentCellX * GridSize + Off.X;
+        const float nY = (float)currentCellY * GridSize + Off.Y;
 
-      const float HashX = (FastNoise3D(nX * 0.001f, nY * 0.001f, 0.f) + 1.f) * 0.5f; 
-      const float HashY = (FastNoise3D(nX * 0.001f, nY * 0.001f, 100.f) + 1.f) * 0.5f;
+        const float HashX = (FastNoise3D(nX * 0.001f, nY * 0.001f, 0.f) + 1.f) * 0.5f; 
+        const float HashY = (FastNoise3D(nX * 0.001f, nY * 0.001f, 100.f) + 1.f) * 0.5f;
 
-      const float CenterX = (currentCellX + 0.12f + HashX * 0.76f) * GridSize;
-      const float CenterY = (currentCellY + 0.12f + HashY * 0.76f) * GridSize;
+        const float CenterX = (currentCellX + 0.12f + HashX * 0.76f) * GridSize;
+        const float CenterY = (currentCellY + 0.12f + HashY * 0.76f) * GridSize;
 
-      float DistSq = FMath::Square(X - CenterX) + FMath::Square(Y - CenterY);
-      if (DistSq < BestDistSq) {
-        BestDistSq = DistSq;
-        BestCenter = FVector2D(CenterX, CenterY);
+        float DistSq = FMath::Square(X - CenterX) + FMath::Square(Y - CenterY);
+        if (DistSq < BestDistSq) {
+          BestDistSq = DistSq;
+          BestCenter = FVector2D(CenterX, CenterY);
+        }
       }
     }
-  }
 
-  // Sample Center height/weights EXACTLY ONCE per winning candidate Node
-  const FVoxelBiomeWeightMap CenterWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(BestCenter.X, BestCenter.Y, Config);
-  const float CenterHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(BestCenter.X, BestCenter.Y, CenterWeights, Config);
+    const float cnX = BestCenter.X + Off.X;
+    const float cnY = BestCenter.Y + Off.Y;
 
-  const float HeightNorm = FMath::Clamp(CenterHeight / SC.MaxTerrainReference, 0.f, 1.f);
-  const float RoughnessNorm = FMath::Clamp(CenterWeights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
+    const FVoxelBiomeWeightMap CenterWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(BestCenter.X, BestCenter.Y, Config);
+    const float CenterHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(BestCenter.X, BestCenter.Y, CenterWeights, Config);
 
-  const float CurvedHeight = FMath::Pow(HeightNorm, 2.5f);
-  const float CurvedRough  = FMath::Pow(RoughnessNorm, 2.0f);
-  const float TerrainStrength = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
-  const float ShardFalloff = FMath::Pow(TerrainStrength, 2.2f);
+    Cache.HeightNorm = FMath::Clamp(CenterHeight / SC.MaxTerrainReference, 0.f, 1.f);
+    const float RoughnessNorm = FMath::Clamp(CenterWeights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
 
-  if (ShardFalloff < 0.08f) return -2.f; 
+    const float CurvedHeight = FMath::Pow(Cache.HeightNorm, 2.5f);
+    const float CurvedRough  = FMath::Pow(RoughnessNorm, 2.0f);
+    const float TerrainStrength = FMath::Clamp(Cache.HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
+    Cache.ShardFalloff = FMath::Pow(TerrainStrength, 2.2f);
 
-  const float cnX = BestCenter.X + Off.X;
-  const float cnY = BestCenter.Y + Off.Y;
-  const float HashProb = (FastNoise3D(cnX * 0.002f, cnY * 0.002f, 200.f) + 1.f) * 0.5f; 
+    if (Cache.ShardFalloff < 0.08f) return Cache; 
 
-  float Prob = FMath::Clamp(SC.BaseProbability + CurvedHeight * SC.HeightProbabilityBonus + CurvedRough * SC.RoughnessProbabilityBonus, 0.02f, 1.f);
-  Prob *= FMath::Lerp(0.15f, 1.0f, ShardFalloff);
-  if (HashProb > Prob) return -2.f; 
+    const float HashProb = (FastNoise3D(cnX * 0.002f, cnY * 0.002f, 200.f) + 1.f) * 0.5f; 
 
-  const float SizeNoise  = FBM(cnX * 0.00008f, cnY * 0.00008f, 50.f, 2, 2.0f, 0.5f, 2);
-  const float SizeFactor = (SizeNoise + 1.f) * 0.5f; 
+    Cache.Prob = FMath::Clamp(SC.BaseProbability + CurvedHeight * SC.HeightProbabilityBonus + CurvedRough * SC.RoughnessProbabilityBonus, 0.02f, 1.f);
+    Cache.Prob *= FMath::Lerp(0.15f, 1.0f, Cache.ShardFalloff);
+    if (HashProb > Cache.Prob) return Cache; 
 
-  float IslandSize = SC.BaseIslandSize + CurvedHeight * SC.HeightSizeBonus + CurvedRough * SC.RoughnessSizeBonus;
-  IslandSize *= (0.5f + 0.5f * SizeFactor);
-  IslandSize *= FMath::Lerp(0.10f, 1.15f, ShardFalloff);
-  IslandSize = FMath::Max(IslandSize, 400.f);
+    const float SizeNoise  = FBM(cnX * 0.00008f, cnY * 0.00008f, 50.f, 2, 2.0f, 0.5f, 2);
+    const float SizeFactor = (SizeNoise + 1.f) * 0.5f; 
 
-  const float MaxIslandSizeForAltitude = FMath::Lerp(20000.f, 8000.f, HeightNorm);
-  IslandSize = FMath::Min(IslandSize, MaxIslandSizeForAltitude);
+    float IslandSize = SC.BaseIslandSize + CurvedHeight * SC.HeightSizeBonus + CurvedRough * SC.RoughnessSizeBonus;
+    IslandSize *= (0.5f + 0.5f * SizeFactor);
+    IslandSize *= FMath::Lerp(0.10f, 1.15f, Cache.ShardFalloff);
+    IslandSize = FMath::Max(IslandSize, 400.f);
 
-  // CRITICAL FIX: To prevent discontinuous sheet mesh bridges at cell borders,
-  // the maximum IslandSize must never exceed half the grid spacing.
-  const float AbsoluteMaxRadius = GridSize * 0.48f; 
-  IslandSize = FMath::Min(IslandSize, AbsoluteMaxRadius);
+    const float MaxIslandSizeForAltitude = FMath::Lerp(20000.f, 8000.f, Cache.HeightNorm);
+    IslandSize = FMath::Min(IslandSize, MaxIslandSizeForAltitude);
 
-  const float Dist = FMath::Sqrt(BestDistSq);
-  if (Dist > IslandSize) return -2.f; 
+    const float AbsoluteMaxRadius = GridSize * 0.48f; 
+    IslandSize = FMath::Min(IslandSize, AbsoluteMaxRadius);
 
-  const float MinHalfThick = FMath::Max(200.f, StepSize * 55.f);
-  const float HalfThick = FMath::Max(MinHalfThick, IslandSize * SC.ThicknessRatio);
+    const float Dist = FMath::Sqrt(BestDistSq);
+    if (Dist > IslandSize) return Cache; 
 
-  const float AltitudeBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrength);
-  const float SkyAlt = CenterHeight + AltitudeBase + CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus + ShardFalloff * SC.LowTerrainAltitudeBoost;
+    const float AltitudeBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrength);
+    Cache.SkyAlt = CenterHeight + AltitudeBase + CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus + Cache.ShardFalloff * SC.LowTerrainAltitudeBoost;
+    Cache.HalfThick = IslandSize * SC.ThicknessRatio;
 
-  const float Margin = HalfThick * 0.4f;
-  if (Z < SkyAlt - HalfThick - Margin || Z > SkyAlt + HalfThick + Margin) return -2.f;
+    Cache.Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Cache.Prob);
+    Cache.WX_base = X + Off.X;
+    Cache.WY_base = Y + Off.Y;
 
-  const float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob);
-  const float WX_base = X + Off.X;
-  const float WY_base = Y + Off.Y;
-
-  // Domain warping: XY only (no Z warp prevents vertical discontinuities
-  // between chunks)
-  float WX = WX_base, WY = WY_base;
-  if (SC.bEnableDomainWarping) {
-    const float WF = SC.DomainWarpFrequency;
-    WX += FastNoise3D(WX * WF + 10.f, WY * WF + 20.f, 0.f) *
-          SC.DomainWarpStrength;
-    WY += FastNoise3D(WX * WF + 50.f, WY * WF + 10.f, 0.f) *
-          SC.DomainWarpStrength;
-  }
-
-  // Frequency scales inversely with size
-  const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
-  float Freq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
-  // Enforce minimum so island shape varies within a chunk (~32m): prevents
-  // entire chunks from becoming one solid skyland block when shape noise is too
-  // low-frequency.
-  const float MinShapeFreqForChunkVariation =
-      0.00025f; // ~0.8 period over 3200 cm
-  Freq = FMath::Max(Freq, MinShapeFreqForChunkVariation);
-
-  // ----- PRIMARY SHAPE TEST: 2D (XY) only -----
-  // A purely 2D test guarantees that any column inside an island region is
-  // fully solid - no Z-axis holes that fragment the island into shards.
-  // Octaves capped at 2 to avoid high-frequency variation that causes
-  // fragmentation.
-  const int32 Oct2D = FMath::Clamp(FMath::Min(SC.ShapeOctaves, 2), 1,
-                                   Config.Performance.MaxNoiseOctaves);
-  const float ShapeXY = FBM(WX * Freq, WY * Freq, 0.f, Oct2D, 2.0f, 0.5f,
-                            Config.Performance.MaxNoiseOctaves);
-
-  // Early exit: this XY position is not part of any island
-  if (ShapeXY <= Threshold)
-    return -2.f;
-
-  // ----- Vertical profile -----
-  // tCenter: 0 = island center, negative = below, positive = above (clamped to
-  // [-1, +1])
-  const float tCenter =
-      FMath::Clamp((Z - SkyAlt) / (HalfThick + 1.f), -1.f, 1.f);
-
-  float Falloff;
-  if (tCenter >= 0.f) {
-    // Top half: flat table surface, then smooth taper to edge
-    const float FlatZone = 0.35f;
-    if (tCenter < FlatZone) {
-      Falloff = 1.0f;
-    } else {
-      const float nt = (tCenter - FlatZone) / (1.f - FlatZone);
-      Falloff = FMath::SmoothStep(0.f, 1.f, 1.f - nt);
+    Cache.WX = Cache.WX_base;
+    Cache.WY = Cache.WY_base;
+    if (SC.bEnableDomainWarping) {
+      const float WF = SC.DomainWarpFrequency;
+      Cache.WX += FastNoise3D(Cache.WX * WF + 10.f, Cache.WY * WF + 20.f, 0.f) * SC.DomainWarpStrength;
+      Cache.WY += FastNoise3D(Cache.WX * WF + 50.f, Cache.WY * WF + 10.f, 0.f) * SC.DomainWarpStrength;
     }
 
-  } else {
-    // Bottom half: stalactite taper (slightly convex for natural rocky bottom)
-    const float t = FMath::Clamp(-tCenter, 0.f, 1.f);
-    Falloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(t, 0.85f));
-  }
+    const float SizeRatio = FMath::Max(1.f, (float)(IslandSize / SC.BaseIslandSize));
+    Cache.Freq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
+    Cache.Freq = FMath::Max(Cache.Freq, 0.00025f);
 
-  // ----- Optional 3D surface detail (TINY Z contribution to avoid holes) -----
-  // Only adds roughness to the island surface, does not create holes in the
-  // interior
-  float ShapeDetail = 0.f;
-  if (Config.Performance.bEnable3DSkylandNoise) {
+    const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves, 2), 1, Config.Performance.MaxNoiseOctaves);
+    Cache.ShapeXY = FBM(Cache.WX * Cache.Freq, Cache.WY * Cache.Freq, 0.f, Oct2D, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
+
+    if (Cache.ShapeXY <= Cache.Threshold)
+      return Cache;
+
+    Cache.bHasSkyland = true;
+    return Cache;
+}
+
+float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
+    const FSkylandColumnCache& Cache, float X, float Y, float Z,
+    const FVoxelGenerationConfig& Config, int32 StepSize)
+{
+    if (!Cache.bHasSkyland) return -2.f;
+
+    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+    const FVector Off = Config.GetSeedOffset();
+
+    const float MinHalfThick = FMath::Max(200.f, (float)(StepSize * 55.f));
+    const float HalfThick = FMath::Max(MinHalfThick, Cache.HalfThick);
+
+    const float Margin = HalfThick * 0.4f;
+    if (Z < Cache.SkyAlt - HalfThick - Margin || Z > Cache.SkyAlt + HalfThick + Margin) return -2.f;
+
+    const float tCenter = FMath::Clamp((Z - Cache.SkyAlt) / (HalfThick + 1.f), -1.f, 1.f);
+
+    float Falloff;
+    if (tCenter >= 0.f) {
+      const float FlatZone = 0.35f;
+      if (tCenter < FlatZone) {
+        Falloff = 1.0f;
+      } else {
+        const float nt = (tCenter - FlatZone) / (1.f - FlatZone);
+        Falloff = FMath::SmoothStep(0.f, 1.f, 1.f - nt);
+      }
+    } else {
+      const float t = FMath::Clamp(-tCenter, 0.f, 1.f);
+      Falloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(t, 0.85f));
+    }
+
+    const float WX_base = X + Off.X;
+    const float WY_base = Y + Off.Y;
     const float WZ = Z + Off.Z;
-    // Z frequency is 0.05x of XY: over 1600cm chunk = 0.08 noise periods,
-    // causing only gentle surface undulation, not vertical holes.
-    ShapeDetail =
-        FastNoise3D(WX * Freq * 0.6f, WY * Freq * 0.6f, WZ * Freq * 0.05f) *
-        0.25f;
-  }
 
-  const float Shape = ShapeXY + ShapeDetail;
+    float WX = WX_base;
+    float WY = WY_base;
 
-  // ----- Hanging roots (below island center) -----
-  float RootDensity = 0.f;
-  if (SC.bEnableHangingRoots && tCenter < -0.25f) {
-    const float WZ = Z + Off.Z;
-    const float RootZNorm = FMath::Clamp((-tCenter - 0.25f) / 0.75f, 0.f, 1.f);
-    const float RootNoise =
-        FMath::Max(0.f, FBM(WX * SC.RootFrequency, WY * SC.RootFrequency,
-                            WZ * SC.RootFrequency, 2, 2.0f, 0.5f,
-                            Config.Performance.MaxNoiseOctaves));
-    // Roots taper from thick at island bottom to thin at tip
-    RootDensity = RootNoise * (1.f - RootZNorm) * 0.4f * Falloff;
-  }
+    if (SC.bEnableDomainWarping) {
+      const float WF = SC.DomainWarpFrequency;
+      WX += FastNoise3D(WX * WF + 10.f, WY * WF + 20.f, 0.f) * SC.DomainWarpStrength;
+      WY += FastNoise3D(WX * WF + 50.f, WY * WF + 10.f, 0.f) * SC.DomainWarpStrength;
+    }
 
-  // ----- Final density -----
-  const float HorizStrength =
-      FMath::SmoothStep(Threshold, Threshold + 0.4f, Shape);
+    float ShapeDetail = 0.f;
+    if (Config.Performance.bEnable3DSkylandNoise) {
+      ShapeDetail = FastNoise3D(WX * Cache.Freq * 0.6f, WY * Cache.Freq * 0.6f, WZ * Cache.Freq * 0.05f) * 0.25f;
+    }
 
-  float D =
-      HorizStrength * Falloff * 2.5f - (1.f - Falloff) * 1.8f + RootDensity;
+    const float Shape = Cache.ShapeXY + ShapeDetail;
 
-  // Break-up term: high-frequency 3D noise so chunks never fill as one solid
-  // block. Over ~32m this oscillates several times, turning some voxels to air.
-  const float WZ = Z + Off.Z;
+    float RootDensity = 0.f;
+    if (SC.bEnableHangingRoots && tCenter < -0.25f) {
+      const float RootZNorm = FMath::Clamp((-tCenter - 0.25f) / 0.75f, 0.f, 1.f);
+      const float RootNoise = FMath::Max(0.f, FBM(WX * SC.RootFrequency, WY * SC.RootFrequency, WZ * SC.RootFrequency, 2, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves));
+      RootDensity = RootNoise * (1.f - RootZNorm) * 0.4f * Falloff;
+    }
 
-  // FIX: Strengthen break-up term at high altitudes where chunk filling is more
-  // likely. At low altitudes: normal break-up strength (0.5). At high altitudes:
-  // much stronger break-up (2.8) to carve air holes and prevent solid monolithic chunk fills.
-  const float BreakUpStrength = FMath::Lerp(0.50f, 2.80f, HeightNorm);
-  const float BreakUp =
-      FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f) *
-      BreakUpStrength;
-  D -= BreakUp;
+    const float HorizStrength = FMath::SmoothStep(Cache.Threshold, Cache.Threshold + 0.4f, Shape);
+    float D = HorizStrength * Falloff * 2.5f - (1.f - Falloff) * 1.8f + RootDensity;
 
-  return FMath::Clamp(D, -2.f, 2.f);
+    const float BreakUpStrength = FMath::Lerp(0.50f, 2.80f, Cache.HeightNorm);
+    const float BreakUp = FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f) * BreakUpStrength;
+    D -= BreakUp;
+
+    return FMath::Clamp(D, -2.f, 2.f);
 }
 
 // ============================================================

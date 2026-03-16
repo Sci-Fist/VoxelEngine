@@ -63,7 +63,8 @@ float FVoxelDensityGenerator::GetDensityFull(
     const FVoxelBiomeWeightMap& Weights,
     float                       SurfaceHeight,
     const FVoxelGenerationConfig& Config,
-    int32 StepSize)
+    int32 StepSize,
+    const FSkylandColumnCache* SkylandCache)
 {
     const float X = WorldPos.X, Y = WorldPos.Y, Z = WorldPos.Z;
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
@@ -171,16 +172,23 @@ float FVoxelDensityGenerator::GetDensityFull(
     //  For a mid-air skyland chunk the condition is false and the full
     //  evaluation runs normally.
     // ============================================================
-    const float SkyLowerBound = SurfaceHeight
-        + SC.MinAltitudeAboveTerrain
-        - (SC.BaseIslandSize * SC.ThicknessRatio)
-        - 400.f;   // 400 cm safety margin
-
     float SkyD = -2.f;
-    if (Z >= SkyLowerBound)
+    if (SkylandCache)
     {
-        SkyD = FVoxelBiomeGenerators::GetSkylandDensity(
-            X, Y, Z, SurfaceHeight, Weights, Config, StepSize);
+        SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(*SkylandCache, X, Y, Z, Config, StepSize);
+    }
+    else
+    {
+        const float SkyLowerBound = SurfaceHeight
+            + SC.MinAltitudeAboveTerrain
+            - (SC.BaseIslandSize * SC.ThicknessRatio)
+            - 400.f;   // 400 cm safety margin
+
+        if (Z >= SkyLowerBound)
+        {
+            SkyD = FVoxelBiomeGenerators::GetSkylandDensity(
+                X, Y, Z, SurfaceHeight, Weights, Config, StepSize);
+        }
     }
 
     // Final composition: Terrain takes precedence, skylands override air above.

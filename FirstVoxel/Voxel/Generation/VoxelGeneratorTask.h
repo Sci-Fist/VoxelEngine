@@ -124,5 +124,11 @@ private:
 	 */
 	void PlaceWaterSources();
 
+	bool bIsFullSolid = false;
+	bool bIsFullAir   = false;
+
+	void CountDensityStates(int32 TotalSamples);
+	void TrimFoliageToCap(const int32 MaxMeshesPerChunk);
+
 	FThreadSafeBool bCancelled { false };
 };

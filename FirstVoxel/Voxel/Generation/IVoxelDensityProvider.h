@@ -31,5 +31,6 @@ public:
                                 const FVoxelBiomeWeightMap& Weights,
                                 float SurfaceHeight,
                                 const FVoxelGenerationConfig& Config,
-                                int32 StepSize = 1) = 0;
+                                int32 StepSize = 1,
+                                const struct FSkylandColumnCache* SkylandCache = nullptr) = 0;
 };

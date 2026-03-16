@@ -8,6 +8,25 @@
 #include "Voxel/Config/VoxelGenerationConfig.h"
 #include "VoxelBiome.h"
 
+struct FSkylandColumnCache
+{
+    bool bHasSkyland = false;
+    float SkyAlt = 0.f;
+    float HalfThick = 0.f;
+    float ShapeXY = 0.f;
+    float Threshold = 0.f;
+    float Prob = 0.f;
+    float HeightNorm = 0.f;
+    float ShardFalloff = 0.f;
+
+    // Cache dimensions
+    float WX = 0.f;
+    float WY = 0.f;
+    float WX_base = 0.f;
+    float WY_base = 0.f;
+    float Freq = 0.f;
+};
+
 struct FIRSTVOXEL_API FVoxelBiomeGenerators
 {
     // ----------------------------------------------------------------
@@ -66,6 +85,15 @@ struct FIRSTVOXEL_API FVoxelBiomeGenerators
         const FVoxelBiomeWeightMap& Weights,
         const FVoxelGenerationConfig& Config,
         int32 StepSize = 1);
+
+    static FSkylandColumnCache GetSkylandColumnCache(
+        float X, float Y, float SurfaceHeight,
+        const FVoxelBiomeWeightMap& Weights,
+        const FVoxelGenerationConfig& Config);
+
+    static float GetSkylandDensityFromCache(
+        const FSkylandColumnCache& Cache, float X, float Y, float Z,
+        const FVoxelGenerationConfig& Config, int32 StepSize = 1);
 
     // ----------------------------------------------------------------
     // CAVE LAYER â€” CRYSTAL CAVERNS

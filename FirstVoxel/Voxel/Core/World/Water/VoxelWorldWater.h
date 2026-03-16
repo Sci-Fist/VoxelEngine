@@ -1,35 +1,33 @@
 // VoxelWorldWater.h
-// Water subsystem manager for AVoxelWorld.
-// Owns the water simulation tick, chunk water init, and source tracking.
-// Intended to be held as a member (or TUniquePtr) on AVoxelWorld so water
-// logic lives in its own translation unit (VoxelWorldWater.cpp).
+// Water simulation and registration manager for AVoxelWorld.
+// Extracted into a dedicated ActorComponent to reduce monolithic AVoxelWorld creep.
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
 #include "Math/IntVector.h"
-#include "Voxel/VoxelLogger.h"
+#include "VoxelWorldWater.generated.h"
 
-class AActor;
+class AVoxelWorld;
 class AVoxelChunk;
 class FVoxelWaterSimulator;
 class UVoxelWaterComponent;
 
-
-
-class FVoxelWorldWater
+UCLASS(ClassGroup = (Voxel), meta = (BlueprintSpawnableComponent))
+class FIRSTVOXEL_API UVoxelWorldWaterComponent : public UActorComponent
 {
+    GENERATED_BODY()
+
 public:
-    explicit FVoxelWorldWater(AActor* InWorldOwner);
+    UVoxelWorldWaterComponent();
 
-    /** Wire up the external simulator and ocean component. Call once after creation. */
-    void Initialize(FVoxelWaterSimulator* InWaterSimulator, UVoxelWaterComponent* InWaterComponent);
+    /** Wire up the external simulator and ocean component. Call during initialization. */
+    void Initialize(TUniquePtr<FVoxelWaterSimulator> InWaterSimulator, UVoxelWaterComponent* InOceanComponent);
 
-    // ---- Tick ---------------------------------------------------------------
-    /** Called every frame from AVoxelWorld::Tick. Advances the sim on a fixed interval. */
-    void TickWater(float DeltaTime);
+    virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
     // ---- Chunk lifecycle ----------------------------------------------------
-    /** Register a freshly generated chunk with the simulator and seed its sources. */
+    /** Register chunk with simulator and bind chunk source callback. */
     void InitChunkWater(AVoxelChunk* Chunk);
 
     /** Unregister a chunk that is about to be destroyed or pooled. */
@@ -45,10 +43,11 @@ public:
     void ClearChunkWaterData(const FIntVector& ChunkCoord);
     bool IsChunkWaterDirty  (const FIntVector& ChunkCoord) const;
 
+    FVoxelWaterSimulator* GetSimulator() const { return WaterSimulator.Get(); }
+
 private:
-    AActor*               WorldOwner    = nullptr;
-    FVoxelWaterSimulator* WaterSimulator = nullptr;
-    TWeakObjectPtr<UVoxelWaterComponent> WaterComponent;
+    TUniquePtr<FVoxelWaterSimulator> WaterSimulator;
+    TWeakObjectPtr<UVoxelWaterComponent> OceanComponent;
 
     /** All world-voxel coordinates that have been registered as water sources. */
     TArray<FIntVector> WaterSources;
@@ -64,8 +63,4 @@ private:
     void UpdateWaterSimulation(float DeltaTime);
     void ProcessChunkWaterSources(AVoxelChunk* Chunk, const FIntVector& ChunkCoord);
     void RebuildWaterMeshForChunk(AVoxelChunk* Chunk);
-
-    void LogWaterSimulationStep() const;
-    void LogChunkWaterInit(const FIntVector& ChunkCoord) const;
-    void LogWaterSourceRegistration(const FIntVector& WorldVoxelCoord) const;
 };

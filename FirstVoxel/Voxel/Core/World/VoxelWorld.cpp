@@ -38,6 +38,9 @@ AVoxelWorld::AVoxelWorld()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.TickGroup = TG_PrePhysics;
 
+	Root = CreateDefaultSubobject<USceneComponent>(TEXT("DefaultSceneRoot"));
+	RootComponent = Root;
+
 	WaterComponent = CreateDefaultSubobject<UVoxelWaterComponent>(TEXT("WaterComponent"));
 }
 
@@ -169,12 +172,16 @@ void AVoxelWorld::InitChunkWater(AVoxelChunk* Chunk)
 	// OnChunkWaterReady is fired on the GameThread once by ApplyMesh();
 	// it delivers the list of world-voxel coordinates that the generator
 	// identified as pool / spring candidates.
-	Chunk->OnChunkWaterReady = [this](const TArray<FIntVector>& Sources)
+	TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+	Chunk->OnChunkWaterReady = [WeakThis](const TArray<FIntVector>& Sources)
 	{
-		if (!WaterSimulator.IsValid()) return;
-		for (const FIntVector& SrcVoxel : Sources)
+		if (AVoxelWorld* StrongThis = WeakThis.Get())
 		{
-			WaterSimulator->SetSource(SrcVoxel);
+			if (!StrongThis->WaterSimulator.IsValid()) return;
+			for (const FIntVector& SrcVoxel : Sources)
+			{
+				StrongThis->WaterSimulator->SetSource(SrcVoxel);
+			}
 		}
 	};
 

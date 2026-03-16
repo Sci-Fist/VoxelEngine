@@ -41,7 +41,8 @@ struct FIRSTVOXEL_API FVoxelDensityGenerator : public IVoxelDensityProvider
                                  const FVoxelBiomeWeightMap& Weights,
                                  float SurfaceHeight,
                                  const FVoxelGenerationConfig& Config,
-                                 int32 StepSize = 1) override;
+                                 int32 StepSize = 1,
+                                 const struct FSkylandColumnCache* SkylandCache = nullptr) override;
 
     // ---- World anchor constants ----
     // TerrainMidZ: Z=0 is sea level and the world origin for chunk coordinate math.

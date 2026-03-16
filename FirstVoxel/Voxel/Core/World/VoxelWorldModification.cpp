@@ -13,9 +13,8 @@
 #include "Engine/World.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
-#include "Serialization/JsonSerializer.h"
-#include "Serialization/JsonWriter.h"
-#include "Dom/JsonObject.h"
+#include "Serialization/BufferArchive.h"
+#include "Serialization/MemoryReader.h"
 
 
 // ============================================================
@@ -93,48 +92,24 @@ void AVoxelWorld::SaveToFile(const FString& SlotName)
 
 	const FString FilePath = FPaths::Combine(SaveDir, FString::Printf(TEXT("%s_%s.sav"), *GetName(), *SlotName));
 
-	// Serialize the data map to JSON
-	TSharedPtr<FJsonObject> RootObject = MakeShared<FJsonObject>();
-	TArray<TSharedPtr<FJsonValue>> VoxelArray;
+	// -- ⚡ HIGH SPEED BINARY SAVING --
+	FBufferArchive ToBuffer;
+	
+	float Version = 1.0f;
+	int32 Seed = GetEffectiveConfig().Seed;
+	ToBuffer << Version;
+	ToBuffer << Seed;
 
-	for (const auto& ChunkPair : DataMap.GetChunks())
-	{
-		const FIntVector& ChunkCoord = ChunkPair.Key;
-		for (const auto& VoxelPair : ChunkPair.Value.ModifiedVoxels)
-		{
-			const int32 LocalIdx = VoxelPair.Key;
-			const float Density = VoxelPair.Value;
+	// Serialize sparse data map
+	DataMap.Serialize(ToBuffer);
 
-			TSharedPtr<FJsonObject> VoxelObject = MakeShared<FJsonObject>();
-			VoxelObject->SetNumberField(TEXT("X"), ChunkCoord.X);
-			VoxelObject->SetNumberField(TEXT("Y"), ChunkCoord.Y);
-			VoxelObject->SetNumberField(TEXT("Z"), ChunkCoord.Z);
-			VoxelObject->SetNumberField(TEXT("Idx"), LocalIdx);
-			VoxelObject->SetNumberField(TEXT("Value"), Density);
-			VoxelArray.Add(MakeShared<FJsonValueObject>(VoxelObject));
-		}
-	}
-
-	RootObject->SetArrayField(TEXT("Voxels"), VoxelArray);
-
-	// Add metadata
-	RootObject->SetNumberField(TEXT("Version"), 1.0);
-	RootObject->SetStringField(TEXT("WorldName"), GetName());
-	RootObject->SetNumberField(TEXT("Seed"), GetEffectiveConfig().Seed);
-
-	FString OutputString;
-	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
-	FJsonSerializer::Serialize(RootObject.ToSharedRef(), Writer);
-
-	if (FFileHelper::SaveStringToFile(OutputString, *FilePath))
+	if (FFileHelper::SaveArrayToFile(ToBuffer, *FilePath))
 	{
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Successfully saved modifications to slot '%s'"), *SlotName);
-		UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Saved to slot '%s'"), *SlotName));
 	}
 	else
 	{
 		UE_LOG(LogVoxelWorld, Error, TEXT("VoxelWorld: Failed to save modifications to slot '%s'"), *SlotName);
-		UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Save failed to slot '%s'"), *SlotName));
 	}
 }
 
@@ -145,62 +120,24 @@ void AVoxelWorld::LoadFromFile(const FString& SlotName)
 	const FString SaveDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("VoxelSaves"));
 	const FString FilePath = FPaths::Combine(SaveDir, FString::Printf(TEXT("%s_%s.sav"), *GetName(), *SlotName));
 
-	if (!FPaths::FileExists(FilePath))
+	if (!FPaths::FileExists(FilePath)) return;
+
+	TArray<uint8> FromBuffer;
+	if (FFileHelper::LoadFileToArray(FromBuffer, *FilePath))
 	{
-		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Save file not found: %s"), *FilePath);
-		return;
-	}
+		FMemoryReader FromBufferReader(FromBuffer);
 
-	FString FileContent;
-	if (FFileHelper::LoadFileToString(FileContent, *FilePath))
-	{
-		TSharedPtr<FJsonObject> RootObject;
-		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileContent);
+		// Read Header/Version
+		float Version = 0.0f;
+		int32 Seed = 0;
+		FromBufferReader << Version;
+		FromBufferReader << Seed;
 
-		if (FJsonSerializer::Deserialize(Reader, RootObject) && RootObject.IsValid())
-		{
-			DataMap.Clear();
+		// Serialize sparse data map
+		DataMap.Clear();
+		DataMap.Serialize(FromBufferReader);
 
-			const TArray<TSharedPtr<FJsonValue>>* VoxelArray;
-			if (RootObject->TryGetArrayField(TEXT("Voxels"), VoxelArray))
-			{
-				int32 LoadCount = 0;
-				const int32 CS = ChunkSize;
-
-				for (const auto& Value : *VoxelArray)
-				{
-					TSharedPtr<FJsonObject> VoxelObject = Value->AsObject();
-					if (VoxelObject.IsValid())
-					{
-						const int32 X = VoxelObject->GetIntegerField(TEXT("X"));
-						const int32 Y = VoxelObject->GetIntegerField(TEXT("Y"));
-						const int32 Z = VoxelObject->GetIntegerField(TEXT("Z"));
-						const int32 LocalIdx = VoxelObject->GetIntegerField(TEXT("Idx"));
-						const float Density = static_cast<float>(VoxelObject->GetNumberField(TEXT("Value")));
-
-						const int32 LX = LocalIdx % CS;
-						const int32 Rem = LocalIdx / CS;
-						const int32 LY = Rem % CS;
-						const int32 LZ = Rem / CS;
-
-						const FIntVector GlobalCoord(X * CS + LX, Y * CS + LY, Z * CS + LZ);
-						DataMap.SetDensity(GlobalCoord, Density);
-						LoadCount++;
-					}
-				}
-
-				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Loaded %d voxel modifications from %s"),
-					LoadCount, *SlotName);
-			}
-		}
-		else
-		{
-			UE_LOG(LogVoxelWorld, Error, TEXT("VoxelWorld: Failed to parse save file: %s"), *FilePath);
-		}
-	}
-	else
-	{
-		UE_LOG(LogVoxelWorld, Error, TEXT("VoxelWorld: Failed to read save file: %s"), *FilePath);
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Loaded modifications from slot '%s'"), *SlotName);
 	}
 }
 
@@ -231,7 +168,6 @@ float AVoxelWorld::GetSurfaceZ(float X, float Y) const
 
 FVector AVoxelWorld::SnapToVoxelGrid(const FVector& WorldPos) const
 {
-	const float HalfVoxel = VoxelSize * 0.5f;
 	const float SnappedX = FMath::RoundToFloat(WorldPos.X / VoxelSize) * VoxelSize;
 	const float SnappedY = FMath::RoundToFloat(WorldPos.Y / VoxelSize) * VoxelSize;
 	const float SnappedZ = FMath::RoundToFloat(WorldPos.Z / VoxelSize) * VoxelSize;

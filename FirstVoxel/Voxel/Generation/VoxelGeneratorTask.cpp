@@ -11,6 +11,7 @@
 #include "Generation/VoxelMeshGenerator.h"
 #include "Generation/VoxelDensityGenerator.h"
 #include "Biomes/VoxelBiomeManager.h"
+#include "Biomes/VoxelBiomeGenerators.h"
 #include "Async/ParallelFor.h"
 #include "VoxelLogger.h"
 
@@ -82,7 +83,7 @@ void FVoxelGeneratorTask::Execute()
     if (bCancelled) return;
     BuildDensityField();
 
-    if (bCancelled) return;
+    if (bCancelled || bIsFullSolid || bIsFullAir) return;
     BuildMesh();
 
     if (bCancelled) return;
@@ -151,56 +152,58 @@ void FVoxelGeneratorTask::BuildDensityField()
     ColumnWeights.SetNumUninitialized(EffCS * EffCS);
 
     // ---- Main density loop ----
-    // Outer dispatch is by Y row so each thread handles a contiguous X stripe,
-    // giving good spatial locality in the XZ-ordered density array.
-    ParallelFor(EffectiveSize, [&](int32 Y)
+    // Parallelized across both X and Y dimensions to fully utilize multi-core CPUs.
+    ParallelFor(EffectiveSize * EffectiveSize, [&](int32 Index)
     {
         if (bCancelled) return;
 
-        for (int32 X = 0; X < EffectiveSize; ++X)
+        const int32 Y = Index / EffectiveSize;
+        const int32 X = Index % EffectiveSize;
+
+        const float WorldX = WorldOrigin.X + (X - 1.f) * EffVoxelSize;
+        const float WorldY = WorldOrigin.Y + (Y - 1.f) * EffVoxelSize;
+
+        // ---- Per-column work (O(n^2)) ----
+        // Biome weights and surface height are the same for the entire
+        // vertical column, so they are computed once here and reused
+        // for every Z below.
+        const FVoxelBiomeWeightMap Weights       = Provider->GetBiomeWeights(WorldX, WorldY, Config);
+        const float               SurfaceHeight  = FVoxelBiomeManager::GetSurfaceHeightStatic(
+                                                      WorldX, WorldY, Weights, Config);
+
+        // Cache Skyland data for the column to avoid running 2D cellular lists for every Z step.
+        const FSkylandColumnCache SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(
+            WorldX, WorldY, SurfaceHeight, Weights, Config);
+
+        // Cache weights for foliage pass (inner non-padding columns only).
+        const int32 LX = X - 1, LY = Y - 1;
+        if (LX >= 0 && LX < EffCS && LY >= 0 && LY < EffCS)
+            ColumnWeights[LX + LY * EffCS] = Weights;
+
+        // ---- Per-voxel work (O(n^3)) ----
+        for (int32 Z = 0; Z < EffectiveSize; ++Z)
         {
-            const float WorldX = WorldOrigin.X + (X - 1.f) * EffVoxelSize;
-            const float WorldY = WorldOrigin.Y + (Y - 1.f) * EffVoxelSize;
+            const float WorldZ = WorldOrigin.Z + (Z - 1.f) * EffVoxelSize;
+            const int32 Idx    = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
 
-            // ---- Per-column work (O(n^2)) ----
-            // Biome weights and surface height are the same for the entire
-            // vertical column, so they are computed once here and reused
-            // for every Z below.
-            const FVoxelBiomeWeightMap Weights       = Provider->GetBiomeWeights(WorldX, WorldY, Config);
-            const float               SurfaceHeight  = FVoxelBiomeManager::GetSurfaceHeightStatic(
-                                                          WorldX, WorldY, Weights, Config);
+            float D = Provider->GetDensityFull(
+                FVector(WorldX, WorldY, WorldZ), Weights, SurfaceHeight, Config, StepSize, &SkylandCache);
 
-            // Cache weights for foliage pass (inner non-padding columns only).
-            const int32 LX = X - 1, LY = Y - 1;
-            if (LX >= 0 && LX < EffCS && LY >= 0 && LY < EffCS)
-                ColumnWeights[LX + LY * EffCS] = Weights;
-
-            // ---- Per-voxel work (O(n^3)) ----
-            for (int32 Z = 0; Z < EffectiveSize; ++Z)
+            // Apply player edits (constant-time dense array lookup).
+            if (bHasEdits)
             {
-                const float WorldZ = WorldOrigin.Z + (Z - 1.f) * EffVoxelSize;
-                const int32 Idx    = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
-
-                float D = Provider->GetDensityFull(
-                    FVector(WorldX, WorldY, WorldZ), Weights, SurfaceHeight, Config, StepSize);
-
-                // Apply player edits (constant-time dense array lookup).
-                if (bHasEdits)
+                const float Override = DenseEdits[Idx];
+                if (Override != 1e9f)
                 {
-                    const float Override = DenseEdits[Idx];
-                    if (Override != 1e9f)
-                    {
-                        D = (Override < 0.f) ? FMath::Min(D, Override)
-                                             : FMath::Max(D, Override);
-                    }
+                    D = (Override < 0.f) ? FMath::Min(D, Override)
+                                         : FMath::Max(D, Override);
                 }
-                Densities[Idx] = D;
             }
+            Densities[Idx] = D;
         }
     });
 
-    // Post-process densities disabled as it destroys continuous gradients causing staircase ridges
-    // PostProcessDensities(TotalSamples);
+    CountDensityStates(TotalSamples);
 }
 
 void FVoxelGeneratorTask::PostProcessDensities(int32 TotalSamples)
@@ -399,43 +402,8 @@ void FVoxelGeneratorTask::CalculateFoliage()
 
     }
 
-    // ---- SAFETY CAP: Hard-clamp total foliage instances per chunk ----
-    // Each HISM instance costs memory + GPU draw budget; 15k is the safe ceiling.
-    // We truncate slot-by-slot (largest slots first) so smaller biomes are not
-    // silently wiped while dense biomes consume the full budget.
     const int32 MaxMeshesPerChunk = 15000;
-
-    int32 TotalInstances = LegacyTreeTransforms.Num() + LegacyGrassTransforms.Num();
-    for (const auto& SlotTransforms : PerFoliageTransforms)
-        TotalInstances += SlotTransforms.Num();
-
-    if (TotalInstances > MaxMeshesPerChunk)
-    {
-        UE_LOG(LogTemp, Warning,
-            TEXT("Chunk [%d,%d,%d] foliage cap hit: %d > %d — truncating."),
-            ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, TotalInstances, MaxMeshesPerChunk);
-
-        // Trim per-biome slots proportionally until we are under the cap.
-        for (auto& SlotTransforms : PerFoliageTransforms)
-        {
-            if (TotalInstances <= MaxMeshesPerChunk) break;
-            const int32 Excess   = TotalInstances - MaxMeshesPerChunk;
-            const int32 TrimThis = FMath::Min(Excess, SlotTransforms.Num());
-            if (TrimThis > 0)
-            {
-                SlotTransforms.RemoveAt(SlotTransforms.Num() - TrimThis, TrimThis);
-                TotalInstances -= TrimThis;
-            }
-        }
-
-        // Trim legacy transforms if still over cap.
-        if (TotalInstances > MaxMeshesPerChunk)
-        {
-            const int32 Trim = FMath::Min(TotalInstances - MaxMeshesPerChunk, LegacyGrassTransforms.Num());
-            LegacyGrassTransforms.RemoveAt(LegacyGrassTransforms.Num() - Trim, Trim);
-            TotalInstances -= Trim;
-        }
-    }
+    TrimFoliageToCap(MaxMeshesPerChunk);
 }
 
 void FVoxelGeneratorTask::ProcessLegacyFoliage(const FVector& Center, float SlopeZ, const FVoxelBiomeWeightMap& TriWeights, const FVector& WorldCenter)
@@ -596,6 +564,62 @@ void FVoxelGeneratorTask::PlaceWaterSources()
                     ChunkCoord.Z * CS + lz);
                 WaterSources.Add(WV);
             }
+        }
+    }
+}
+
+// ============================================================
+//  CountDensityStates
+//  Sums total solid/air voxels to detect full chunks.
+// ============================================================
+void FVoxelGeneratorTask::CountDensityStates(int32 TotalSamples)
+{
+    int32 SolidCount = 0;
+    int32 AirCount = 0;
+
+    for (int32 i = 0; i < TotalSamples; ++i)
+    {
+        if (Densities[i] > 0.0f) SolidCount++;
+        else AirCount++;
+    }
+
+    bIsFullSolid = (SolidCount == TotalSamples);
+    bIsFullAir   = (AirCount == TotalSamples);
+}
+
+// ============================================================
+//  TrimFoliageToCap
+//  Truncates slots to preserve GPU ceiling.
+// ============================================================
+void FVoxelGeneratorTask::TrimFoliageToCap(const int32 MaxMeshesPerChunk)
+{
+    int32 TotalInstances = LegacyTreeTransforms.Num() + LegacyGrassTransforms.Num();
+    for (const auto& SlotTransforms : PerFoliageTransforms)
+        TotalInstances += SlotTransforms.Num();
+
+    if (TotalInstances > MaxMeshesPerChunk)
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("Chunk [%d,%d,%d] foliage cap hit: %d > %d — truncating."),
+            ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, TotalInstances, MaxMeshesPerChunk);
+
+        for (auto& SlotTransforms : PerFoliageTransforms)
+        {
+            if (TotalInstances <= MaxMeshesPerChunk) break;
+            const int32 Excess   = TotalInstances - MaxMeshesPerChunk;
+            const int32 TrimThis = FMath::Min(Excess, SlotTransforms.Num());
+            if (TrimThis > 0)
+            {
+                SlotTransforms.RemoveAt(SlotTransforms.Num() - TrimThis, TrimThis);
+                TotalInstances -= TrimThis;
+            }
+        }
+
+        if (TotalInstances > MaxMeshesPerChunk)
+        {
+            const int32 Trim = FMath::Min(TotalInstances - MaxMeshesPerChunk, LegacyGrassTransforms.Num());
+            LegacyGrassTransforms.RemoveAt(LegacyGrassTransforms.Num() - Trim, Trim);
+            TotalInstances -= Trim;
         }
     }
 }
