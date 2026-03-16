@@ -78,6 +78,8 @@ float FVoxelDensityGenerator::GetDensityFull(
     //  Positive = solid, negative = air.
     // ============================================================
     float SurfD = FVoxelBiomeManager::GetBaseSurfaceDensity(Z, SurfaceHeight, Config);
+    // Clamp so one bad column (e.g. extreme surface height) cannot force a whole chunk solid/air.
+    SurfD = FMath::Clamp(SurfD, -2.f, 2.f);
 
     // Optional overhangs: protrusions on steep cliff/peak faces near the surface.
     // Gated on SteepnessWeight > 0.05 so flat plains never pay the noise cost.
@@ -132,8 +134,8 @@ float FVoxelDensityGenerator::GetDensityFull(
             {
                 // Pass SeedOff in so SampleCaveNoise does not need to recompute it.
                 const float TunnelCarve = SampleCaveNoise(WorldPos, SeedOff, Config) * CaveFade;
-                // Limit tunnel carving to prevent entire chunks from being hollowed out
-                const float MaxTunnelCarve = 1.2f;
+                // Limit tunnel carving so one uniform tunnel layer cannot hollow an entire chunk.
+                const float MaxTunnelCarve = 0.85f;
                 SurfD -= FMath::Min(TunnelCarve, MaxTunnelCarve);
             }
         }
@@ -141,9 +143,8 @@ float FVoxelDensityGenerator::GetDensityFull(
         // Crystal caverns: large carved chambers deep underground.
         const float CavernDelta = FVoxelBiomeGenerators::GetCrystalCavernDelta(
             X, Y, Z, SurfaceHeight, Config);
-        
-        // Limit cavern carving to prevent chunk-filling voids
-        const float MaxCavernCarve = 1.0f;
+        // Limit cavern carve so chambers cannot turn a whole chunk into one void.
+        const float MaxCavernCarve = 0.6f;
         SurfD += FMath::Clamp(CavernDelta, -MaxCavernCarve, MaxCavernCarve);
     }
 

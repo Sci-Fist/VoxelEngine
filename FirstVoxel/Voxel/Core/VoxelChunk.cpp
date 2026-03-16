@@ -41,11 +41,9 @@ void AVoxelChunk::BeginPlay()
 
 void AVoxelChunk::CancelGeneration()
 {
-	// Cancel any in-flight task so shutdown/streaming doesn't hang waiting on completion.
-	if (!bGenerating)
-	{
-		return;
-	}
+	if (!bGenerating) return;
+
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: CancelGeneration (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 
 	if (CurrentTask.IsValid())
 	{
@@ -71,6 +69,8 @@ void AVoxelChunk::GenerateAsync()
 	if (bGenerating) return;
 	bGenerating = true;
 	bMeshApplied = false;
+
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: GenerateAsync (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 
 	uint32 TaskId = ++GenerationId;
 	FVector Origin = GetActorLocation();
@@ -153,9 +153,9 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	const FVoxelMeshOutput& Out = CompletedTask->GetMeshOutput();
 
 	// ── Determine per-biome material overrides ────────────────────────────
-	// Sample the dominant biome at the chunk centre (cheap 2D noise).
-	const FVector ChunkCentre = GetActorLocation()
-		+ FVector(ChunkSize * VoxelSize * 0.5f, ChunkSize * VoxelSize * 0.5f, 0.f);
+	// Sample the dominant biome at the chunk geometric centre (XY and Z).
+	const float HalfChunk = ChunkSize * VoxelSize * 0.5f;
+	const FVector ChunkCentre = GetActorLocation() + FVector(HalfChunk, HalfChunk, HalfChunk);
 	const FVoxelBiomeWeightMap CentreWeights =
 		FVoxelBiomeManager::GetBiomeWeightsStatic(ChunkCentre.X, ChunkCentre.Y, GenerationConfig);
 	const EVoxelBiome DominantBiome = CentreWeights.GetDominantBiome();

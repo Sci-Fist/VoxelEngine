@@ -27,13 +27,11 @@ DEFINE_LOG_CATEGORY(LogVoxelBiome);
 // ============================================================
 FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y, const FVoxelGenerationConfig& Config)
 {
-    const float Temp    = GetTemperature(X, Y, Config); // [0, 1]
-    const float Erosion = GetErosion    (X, Y, Config); // [0, 1]
+    const FVector Off = Config.GetSeedOffset();
+    const float Temp    = GetTemperatureWithSeed(X, Y, Config, Off);
+    const float Erosion = GetErosionWithSeed    (X, Y, Config, Off);
 
     const FBiomeBlendConfig& B   = Config.BiomeBlend;
-    // Compute seed offset once here for the crater noise below.
-    // Temperature and Erosion compute it internally via their helper functions.
-    const FVector Off = Config.GetSeedOffset();
 
     FVoxelBiomeWeightMap Map;
 
@@ -82,6 +80,14 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     return Map;
 }
 
+FVoxelBiomeManager::FWeightsAndHeight FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(float X, float Y, const FVoxelGenerationConfig& Config)
+{
+    FWeightsAndHeight Out;
+    Out.Weights = GetBiomeWeightsStatic(X, Y, Config);
+    Out.SurfaceHeight = GetSurfaceHeightStatic(X, Y, Out.Weights, Config);
+    return Out;
+}
+
 // ============================================================
 //  GetSurfaceHeightStatic
 //  Additive weighted blend of all surface biome height functions.
@@ -122,26 +128,28 @@ float FVoxelBiomeManager::GetBaseSurfaceDensity(float Z, float SurfaceHeight, co
 // ============================================================
 //  PRIVATE — noise fields
 // ============================================================
-// GetSeedOffset() is deliberately not called here — the caller already computed it.
-// These helpers accept a pre-computed offset so the LCG hash runs only once per
-// GetBiomeWeightsStatic call instead of three times.
 float FVoxelBiomeManager::GetTemperature(float X, float Y, const FVoxelGenerationConfig& Config)
 {
-    const FVector Off = Config.GetSeedOffset();
-    // Remap Perlin [-1, 1] to Temperature [0, 1].
-    return FMath::PerlinNoise2D(FVector2D(
-        (X + Off.X) * Config.BiomeBlend.TemperatureFrequency,
-        (Y + Off.Y) * Config.BiomeBlend.TemperatureFrequency))
-        * 0.5f + 0.5f;
+    return GetTemperatureWithSeed(X, Y, Config, Config.GetSeedOffset());
 }
 
 float FVoxelBiomeManager::GetErosion(float X, float Y, const FVoxelGenerationConfig& Config)
 {
-    const FVector Off = Config.GetSeedOffset();
-    // +100 offset separates Erosion from Temperature in noise space so they are
-    // visually independent even when both frequencies are equal.
+    return GetErosionWithSeed(X, Y, Config, Config.GetSeedOffset());
+}
+
+float FVoxelBiomeManager::GetTemperatureWithSeed(float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff)
+{
     return FMath::PerlinNoise2D(FVector2D(
-        (X + Off.X) * Config.BiomeBlend.ErosionFrequency + 100.f,
-        (Y + Off.Y) * Config.BiomeBlend.ErosionFrequency + 100.f))
+        (X + SeedOff.X) * Config.BiomeBlend.TemperatureFrequency,
+        (Y + SeedOff.Y) * Config.BiomeBlend.TemperatureFrequency))
+        * 0.5f + 0.5f;
+}
+
+float FVoxelBiomeManager::GetErosionWithSeed(float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff)
+{
+    return FMath::PerlinNoise2D(FVector2D(
+        (X + SeedOff.X) * Config.BiomeBlend.ErosionFrequency + 100.f,
+        (Y + SeedOff.Y) * Config.BiomeBlend.ErosionFrequency + 100.f))
         * 0.5f + 0.5f;
 }

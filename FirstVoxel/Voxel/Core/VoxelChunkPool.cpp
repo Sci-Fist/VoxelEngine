@@ -30,7 +30,9 @@ AVoxelChunk* FVoxelChunkPool::RetrieveOrCreateChunk(UWorld* World, const FVector
 
     if (!Chunk && World)
     {
-        Chunk = World->SpawnActor<AVoxelChunk>(AVoxelChunk::StaticClass(), Location, FRotator::ZeroRotator);
+        FActorSpawnParameters SpawnParams;
+        SpawnParams.ObjectFlags |= RF_Transient;
+        Chunk = World->SpawnActor<AVoxelChunk>(AVoxelChunk::StaticClass(), Location, FRotator::ZeroRotator, SpawnParams);
     }
 
     if (Chunk && Owner)

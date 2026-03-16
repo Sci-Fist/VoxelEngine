@@ -9,28 +9,33 @@ IFileHandle*  UVoxelLogger::FileHandle  = nullptr;
 
 void UVoxelLogger::InitLogger()
 {
-	// Close any handle left open from a previous PIE session so it doesn't
-	// keep pointing at a stale file after the path changes below.
 	if (FileHandle)
 	{
 		delete FileHandle;
 		FileHandle = nullptr;
 	}
 
-	const FString LogDir   = FPaths::ProjectLogDir();
-	const FString Timestamp = FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H-%M-%S"));
-	LogFilePath = LogDir / FString::Printf(TEXT("FirstVoxel_%s.log"), *Timestamp);
+	// Log folder under project Source: <ProjectDir>/Source/Log/
+	const FString LogDir = FPaths::Combine(FPaths::ProjectDir(), TEXT("Source"), TEXT("Log"));
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	if (!PlatformFile.DirectoryExists(*LogDir))
+	{
+		PlatformFile.CreateDirectoryTree(*LogDir);
+	}
 
-	// Write a session header so the start of each PIE run is easy to find in the log.
+	// Filename: date and time so each session gets a unique file
+	const FDateTime Now = FDateTime::Now();
+	const FString Timestamp = Now.ToString(TEXT("%Y-%m-%d_%H-%M-%S"));
+	LogFilePath = FPaths::Combine(LogDir, FString::Printf(TEXT("FirstVoxel_%s.log"), *Timestamp));
+
 	const FString Header = FString::Printf(
-		TEXT("=== VOXEL PLAYTEST SESSION [%s] ===\n"), *FDateTime::Now().ToString());
+		TEXT("=== FIRSTVOXEL SESSION [%s] ===\n"), *Now.ToString());
 	FFileHelper::SaveStringToFile(
 		Header, *LogFilePath,
 		FFileHelper::EEncodingOptions::AutoDetect,
 		&IFileManager::Get(), FILEWRITE_EvenIfReadOnly);
 
-	// Open the append handle now so LogVoxelEvent never has to re-open it mid-session.
-	FileHandle = FPlatformFileManager::Get().GetPlatformFile().OpenWrite(*LogFilePath, /*bAppend=*/true);
+	FileHandle = PlatformFile.OpenWrite(*LogFilePath, /*bAppend=*/true);
 }
 
 void UVoxelLogger::LogVoxelEvent(FString Message)

@@ -17,7 +17,7 @@ struct FVoxelMeshData
 	TArray<int32>            Triangles;
 	TArray<FVector>          Normals;
 	TArray<FVector2D>        UVs;
-	TArray<FColor>           VertexColors; // R = AO hint, G = height blend
+	TArray<FColor>           VertexColors; // Per-vertex biome blend for material tinting
 	TArray<FProcMeshTangent> Tangents;
 
 	void Reset()

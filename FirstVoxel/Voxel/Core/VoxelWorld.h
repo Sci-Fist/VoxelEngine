@@ -10,6 +10,7 @@
 #include "VoxelLogger.h"
 #include "VoxelChunkPool.h"
 #include "Generation/VoxelDensityGenerator.h"  // Required: TUniquePtr<FVoxelDensityGenerator> needs complete type
+#include "Containers/Ticker.h"
 #include "VoxelWorld.generated.h"
 
 class AVoxelChunk;
@@ -220,40 +221,66 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")
 	FVoxelBiomeRenderConfig ForestRender;
 
+	/** Forest water configuration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")
+	FVoxelBiomeWaterConfig ForestWater;
+
 	/** Jagged Peaks biome — alpine mountains. Expand to set materials + foliage. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")
 	FVoxelBiomeRenderConfig PeaksRender;
+
+	/** Peaks water configuration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")
+	FVoxelBiomeWaterConfig PeaksWater;
 
 	/** Steep Cliffs biome — ridged canyon walls. Expand to set materials + foliage. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Cliffs")
 	FVoxelBiomeRenderConfig CliffsRender;
 
+	/** Cliffs water configuration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Cliffs")
+	FVoxelBiomeWaterConfig CliffsWater;
+
 	/** Mesa Plateaus biome — flat-top sandstone columns. Expand to set materials + foliage. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Mesa")
 	FVoxelBiomeRenderConfig MesaRender;
+
+	/** Mesa water configuration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Mesa")
+	FVoxelBiomeWaterConfig MesaWater;
 
 	/** Impact Craters biome — rare meteorite basins. Expand to set materials + foliage. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters")
 	FVoxelBiomeRenderConfig CratersRender;
 
+	/** Craters water configuration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters")
+	FVoxelBiomeWaterConfig CratersWater;
+
 	/** Sand Dunes biome — low erosion, high temp. Expand to set materials + foliage. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")
 	FVoxelBiomeRenderConfig DesertRender;
+
+	/** Desert water configuration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")
+	FVoxelBiomeWaterConfig DesertWater;
 
 	/** Implicit water rendering wrapper to isolate ocean translated budgets. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel")
 	class UVoxelWaterComponent* WaterComponent = nullptr;
 
-
 	/**
 	 * Skylands — floating islands high above the terrain.
-
 	 * Material overrides apply to ALL island surfaces regardless of the biome below.
 	 * Foliage entries use MinWorldZ / MaxWorldZ to restrict spawns to island altitude.
 	 * Leave material slots null to fall back to the global MasterFlat/SlopeMaterial.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands")
 	FVoxelBiomeRenderConfig SkylandsRender;
+
+	/** Skylands water configuration. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands")
+	FVoxelBiomeWaterConfig SkylandsWater;
 
 	/**
 	 * Legacy tree mesh — used ONLY if no foliage entries are defined in the generation config's
@@ -325,6 +352,7 @@ private:
 	FVector    FindCraterSpawnLocation(const FVector& StartPos, const FVoxelGenerationConfig& Config) const;
 	float      GetSafeSpawnHeightOffset() const;
 
+	void GenerateWorldDeferred();
 	void SpawnChunk(const FIntVector& Coord);
 	void DestroyChunk(const FIntVector& Coord);
 	void RebuildChunk(const FIntVector& Coord);
@@ -335,6 +363,9 @@ private:
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	
+	/** Handle for the editor drain ticker to prevent stacking. */
+	FTSTicker::FDelegateHandle DrainTickerHandle;
 #endif
 
 	void ConfigureChunk(AVoxelChunk* Chunk) const;

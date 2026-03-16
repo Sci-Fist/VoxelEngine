@@ -41,6 +41,13 @@ AVoxelWorld::AVoxelWorld()
 	RootComponent = Root;
 
 	WaterComponent = CreateDefaultSubobject<UVoxelWaterComponent>(TEXT("VoxelWaterComponent"));
+
+	// Initialize per-biome water configs with tuned defaults
+	DesertWater  = MakeDesertWaterDefaults();
+	PeaksWater   = MakePeaksWaterDefaults();
+	CliffsWater  = MakeCliffsWaterDefaults();
+	MesaWater    = MakeMesaWaterDefaults();
+	CratersWater = MakeCratersWaterDefaults();
 }
 
 
@@ -53,15 +60,15 @@ void AVoxelWorld::BeginPlay()
 		return;
 	}
 
-	// Sync global configs to isolated components before they initialize
 	if (WaterComponent)
 	{
 		const FVoxelGenerationConfig& Config = GetEffectiveConfig();
 		WaterComponent->SeaLevel = Config.SeaLevel;
+		WaterComponent->bEnableOcean = Config.Water.bEnableOcean;
+		WaterComponent->OceanPlaneScale = RenderDistanceXY * ChunkSize * VoxelSize * 1.5f;
 		if (Config.Water.OceanMaterial)
-		{
 			WaterComponent->OceanMaterial = Config.Water.OceanMaterial;
-		}
+		UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Water synced (SeaLevel=%.0f, bEnableOcean=%d)"), Config.SeaLevel, Config.Water.bEnableOcean ? 1 : 0));
 	}
 
 	Super::BeginPlay();
@@ -130,14 +137,20 @@ void AVoxelWorld::GenerateWorld()
 	if (!GetWorld() || bShutdown) return;
 
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: GenerateWorld called."));
+	UVoxelLogger::LogVoxelEvent(TEXT("VoxelWorld: GenerateWorld called."));
+
+#if WITH_EDITOR
+	// Guard against multiple concurrent generation tickers
+	if (DrainTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(DrainTickerHandle);
+		DrainTickerHandle.Reset();
+	}
+#endif
 
 	// Auto-randomize seed every time "Generate World" is pressed in the editor so
-	// each press produces a completely different world without needing to manually
-	// hit RandomizeSeed first. At runtime BeginPlay handles seeding via bRandomizeSeedOnStartup.
 	if (!GetWorld()->IsGameWorld())
 	{
-		// Mix hardware cycle counter with wall-clock nanoseconds for strong entropy.
-		// Guaranteed to produce a different seed even if called multiple times per frame.
 		const uint64 CycleBits  = FPlatformTime::Cycles64();
 		const uint64 ClockBits  = (uint64)FDateTime::Now().GetTicks();
 		const int32  NewSeed    = (int32)(CycleBits ^ (ClockBits << 13) ^ (ClockBits >> 7));
@@ -146,6 +159,31 @@ void AVoxelWorld::GenerateWorld()
 			BiomePreset->Config.Seed = NewSeed;
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Editor generate — new seed %d"), NewSeed);
 	}
+
+	if (!GetWorld()->IsGameWorld())
+	{
+#if WITH_EDITOR
+		TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+		FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateLambda([WeakThis](float) -> bool
+			{
+				AVoxelWorld* Self = WeakThis.Get();
+				if (!Self || Self->bShutdown || !Self->GetWorld()) return false;
+				Self->GenerateWorldDeferred();
+				return false;
+			}),
+			0.0f);
+#endif
+		return;
+	}
+	GenerateWorldDeferred();
+}
+
+void AVoxelWorld::GenerateWorldDeferred()
+{
+	if (!GetWorld() || bShutdown) return;
+
+	UVoxelLogger::LogVoxelEvent(TEXT("VoxelWorld: GenerateWorldDeferred started."));
 
 	// 0. Reconcile existing chunks to avoid "stacking"
 	DiscoverExistingChunks();
@@ -196,8 +234,9 @@ void AVoxelWorld::GenerateWorld()
 	}
 
 	// RESET active generations for editor calls. 
-	// This prevents the synchronous loop from hanging if a leak occurred earlier.
 	ActiveGenerations = 0;
+	GenerationQueue.Empty();
+	QueueHead = 0;
 
 	// 4. Calculate generation bounds
 	FIntVector MinCoord(FIntVector::ZeroValue);
@@ -270,13 +309,19 @@ void AVoxelWorld::GenerateWorld()
 
 	// Nearest first to the center bounds
 	SortedChunks.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key < B.Key; });
-	
+
+	// Use TSet for O(1) dedupe; GenerationQueue.Contains() in a loop was O(n^2) and froze editor with 3k+ chunks.
+	TSet<FIntVector> QueueSet;
 	for (auto& P : SortedChunks)
 	{
-		if (!GenerationQueue.Contains(P.Value))
+		if (!QueueSet.Contains(P.Value))
+		{
+			QueueSet.Add(P.Value);
 			GenerationQueue.Add(P.Value);
+		}
 	}
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d new chunks to extend the world."), GenerationQueue.Num());
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Queued %d chunks."), GenerationQueue.Num()));
 
 	// 5. Editor generation should never block the game thread.
 	// The old tight while-loop prevented async chunk completion callbacks from
@@ -285,12 +330,15 @@ void AVoxelWorld::GenerateWorld()
 	{
 #if WITH_EDITOR
 		TWeakObjectPtr<AVoxelWorld> WeakThis(this);
-		FTSTicker::GetCoreTicker().AddTicker(
+		DrainTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
 			FTickerDelegate::CreateLambda([WeakThis](float) -> bool
 			{
 				AVoxelWorld* Self = WeakThis.Get();
 				if (!Self || Self->bShutdown)
 				{
+					#if WITH_EDITOR
+					if (Self) Self->DrainTickerHandle.Reset();
+					#endif
 					return false;
 				}
 
@@ -301,6 +349,10 @@ void AVoxelWorld::GenerateWorld()
 					UE_LOG(LogVoxelWorld, Log,
 						TEXT("VoxelWorld: Editor generation complete. %d chunks loaded."),
 						Self->LoadedChunks.Num());
+					UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Editor generation complete, %d chunks."), Self->LoadedChunks.Num()));
+					#if WITH_EDITOR
+					Self->DrainTickerHandle.Reset();
+					#endif
 				}
 				return !bDone; // keep ticking until the queue is empty
 			}),
@@ -331,8 +383,9 @@ void AVoxelWorld::GenerateWorld()
 			Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
 			const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
 
-			FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(Pos.X, Pos.Y, Config);
-			float Surface = FVoxelBiomeManager::GetSurfaceHeightStatic(Pos.X, Pos.Y, Weights, Config);
+			const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Config);
+			const FVoxelBiomeWeightMap& Weights = Wh.Weights;
+			const float Surface = Wh.SurfaceHeight;
 
 			// --- TERRAIN-DRIVEN SKYLAND SPAWN FINDER ---
 			// Compute the island altitude band for this exact (X,Y) column using the same
@@ -351,14 +404,11 @@ void AVoxelWorld::GenerateWorld()
 
 			const float SearchTop = SkyAlt + IslandHalfThick;
 			// Clamp SearchBot well above the terrain surface so the density probe never
-			// hits solid ground and mistakes it for a skyland. Without this clamp,
-			// over flat terrain SkyAlt ≈ Surface+3000 and IslandHalfThick ≈ 800cm,
-			// so SearchBot could reach Surface+2200 — still fine now, but previously
-			// with MinAltitude=300 it went Surface-500cm (underground), causing the
-			// player to spawn buried in terrain.
+			// hits solid ground and mistakes it for a skyland.
 			const float SearchBot = FMath::Max(SkyAlt - IslandHalfThick, Surface + 500.f);
 
-			float TargetZ = Surface + 300.f; // safe fallback: land on the ground
+			const float SafeOffset = GetSafeSpawnHeightOffset();
+			float TargetZ = Surface + SafeOffset; // fallback: above ground surface
 			bool bFoundSkyland = false;
 
 			static FVoxelDensityGenerator SpawnProbe;
@@ -366,27 +416,50 @@ void AVoxelWorld::GenerateWorld()
 			{
 				if (SpawnProbe.GetDensity(Pos.X, Pos.Y, z, Config) > 0.f)
 				{
-					TargetZ = z + 300.f;
+					// Place clearly above first solid so we don't spawn inside mesh
+					TargetZ = z + SafeOffset;
 					bFoundSkyland = true;
 					break;
 				}
 			}
 
-			// --- ASYNC LOAD AT TARGET ---
+			// --- ASYNC LOAD AT TARGET (include chunk at spawn Z so mesh exists before teleport) ---
 			InitialSpawnCoords.Empty();
 			bWaitingForInitialSpawn = true;
 			TargetCoordsZ = TargetZ;
 			CachedSurfaceHeight = Surface;
 
 			const FIntVector LandCoord = WorldToChunkCoord(Pos);
+			const float ChunkHeight = ChunkSize * VoxelSize;
+			const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
 
 			for (int32 x = -1; x <= 1; ++x)
 			{
 				for (int32 y = -1; y <= 1; ++y)
 				{
+					// Load horizontal neighbors at ground (Z=0) and at spawn height so mesh is ready
 					FIntVector NeighborCoord = LandCoord + FIntVector(x, y, 0);
 					SpawnChunk(NeighborCoord);
 					InitialSpawnCoords.Add(NeighborCoord);
+					if (SpawnChunkZ != 0)
+					{
+						FIntVector SkyCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ);
+						if (!LoadedChunks.Contains(SkyCoord))
+						{
+							SpawnChunk(SkyCoord);
+							InitialSpawnCoords.Add(SkyCoord);
+						}
+						// Also load chunk above/below spawn Z for smooth transition
+						if (SpawnChunkZ > 0)
+						{
+							FIntVector BelowCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ - 1);
+							if (!LoadedChunks.Contains(BelowCoord))
+							{
+								SpawnChunk(BelowCoord);
+								InitialSpawnCoords.Add(BelowCoord);
+							}
+						}
+					}
 				}
 			}
 		}, 0.8f, false);
@@ -396,6 +469,7 @@ void AVoxelWorld::GenerateWorld()
 void AVoxelWorld::ClearWorld()
 {
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Clearing World."));
+	UVoxelLogger::LogVoxelEvent(TEXT("VoxelWorld: ClearWorld called."));
 	
 	// Flush queue
 	GenerationQueue.Empty();
@@ -443,9 +517,9 @@ void AVoxelWorld::SnapPlayerToGround()
 
 	FVector Pos = TargetActor->GetActorLocation();
 	const FVoxelGenerationConfig& Config = GetEffectiveConfig();
-	FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(Pos.X, Pos.Y, Config);
-	float Surface = FVoxelBiomeManager::GetSurfaceHeightStatic(Pos.X, Pos.Y, Weights, Config);
-	
+	const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Config);
+	const float Surface = Wh.SurfaceHeight;
+
 	const float SafeOffset = GetSafeSpawnHeightOffset();
 	// Snap player above the surface using the configured safe offset
 	TargetActor->SetActorLocation(FVector(Pos.X, Pos.Y, Surface + SafeOffset), false, nullptr, ETeleportType::TeleportPhysics);
@@ -680,10 +754,11 @@ void AVoxelWorld::Tick(float DeltaTime)
 			{
 				FVector Pos = Player->GetActorLocation();
 				const float SafeOffset = GetSafeSpawnHeightOffset();
-				// Use local X,Y so movement before spawn is respected, only override Z
+				// Ensure Z is above surface and above any detected solid so we don't spawn inside mesh
 				const float SafeZ = FMath::Max(TargetCoordsZ, CachedSurfaceHeight + SafeOffset);
 				Player->SetActorLocation(FVector(Pos.X, Pos.Y, SafeZ), false, nullptr, ETeleportType::TeleportPhysics);
-				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Async Spawn Finished. Set player at Z=%.f"), TargetCoordsZ);
+				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Async Spawn Finished. Set player at Z=%.0f (surface+offset=%.0f)"), SafeZ, CachedSurfaceHeight + SafeOffset);
+				UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Async spawn finished, player Z=%.0f"), SafeZ));
 
 				if (ACharacter* Character = Cast<ACharacter>(Player))
 				{
@@ -760,13 +835,12 @@ void AVoxelWorld::UpdateChunkStreaming()
 	// that over mountains (surface ~80,000cm) islands at ~100,000cm are streamed in.
 	// The old approach used only BaseAltitudeAboveTerrain (4500cm), placing the
 	// skylands pass at chunk Z ~3, while mountain skylands live at chunk Z ~60+.
-	const FVoxelBiomeWeightMap SkyWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(
+	const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(
 		PlayerPos.X, PlayerPos.Y, Config);
-	const float PlayerSurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(
-		PlayerPos.X, PlayerPos.Y, SkyWeights, Config);
+	const float PlayerSurfH = Wh.SurfaceHeight;
 
 	const float HeightNormSky    = FMath::Clamp(PlayerSurfH / SC.MaxTerrainReference, 0.f, 1.f);
-	const float RoughnessNormSky = FMath::Clamp(SkyWeights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
+	const float RoughnessNormSky = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
 	const float TerrainStrSky    = FMath::Clamp(HeightNormSky * 1.5f + RoughnessNormSky * 0.8f, 0.f, 1.f);
 	const float CurvedH          = FMath::Pow(HeightNormSky,    2.5f);
 	const float CurvedR          = FMath::Pow(RoughnessNormSky, 2.0f);
@@ -891,7 +965,6 @@ void AVoxelWorld::DrainGenerationQueue()
 
 void AVoxelWorld::SpawnChunk(const FIntVector& Coord)
 {
-	// AVOID DUPLICATES: If chunk already exists, don't spawn another one.
 	if (LoadedChunks.Contains(Coord)) return;
 
 	FVector Loc = ChunkCoordToWorld(Coord);
@@ -973,6 +1046,15 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 	Chunk->GenerationConfig.CratersRender  = CratersRender;
 	Chunk->GenerationConfig.SkylandsRender = SkylandsRender;
 
+	// Inject per-biome water configs into the chunk's generation config
+	Chunk->GenerationConfig.ForestWater    = ForestWater;
+	Chunk->GenerationConfig.DesertWater    = DesertWater;
+	Chunk->GenerationConfig.PeaksWater     = PeaksWater;
+	Chunk->GenerationConfig.CliffsWater    = CliffsWater;
+	Chunk->GenerationConfig.MesaWater      = MesaWater;
+	Chunk->GenerationConfig.CratersWater   = CratersWater;
+	Chunk->GenerationConfig.SkylandsWater  = SkylandsWater;
+
 	if (DensityGenerator.IsValid())
 	{
 		Chunk->DensityGenerator = DensityGenerator.Get();
@@ -1025,6 +1107,7 @@ void AVoxelWorld::RebuildWorld()
 	LoadedChunks.Empty();
 	ChunkPool.Clear();
 	GenerationQueue.Empty();
+	QueueHead = 0;
 
 	// 2. Reset data limits and trigger loop
 	DataMap.Init(ChunkSize);
@@ -1066,8 +1149,7 @@ void AVoxelWorld::RunTests()
 }
 float AVoxelWorld::GetTerrainHeight(float X, float Y) const
 {
-	FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(X, Y, GetEffectiveConfig());
-	return FVoxelBiomeManager::GetSurfaceHeightStatic(X, Y, Weights, GetEffectiveConfig());
+	return FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(X, Y, GetEffectiveConfig()).SurfaceHeight;
 }
 float AVoxelWorld::GetSurfaceZ(float X, float Y) const { return GetTerrainHeight(X, Y); }
 

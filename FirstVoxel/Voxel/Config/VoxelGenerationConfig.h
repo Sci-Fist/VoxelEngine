@@ -1097,43 +1097,16 @@ struct FVoxelGenerationConfig
               ToolTip="World-wide water settings: ocean, rivers, swimming. Per-biome water tuning lives in the WaterBiome sections below."))
     FVoxelGlobalWaterConfig Water;
 
-    // --- Per-biome water ---
-    // Each section controls lake probability, river width/depth, water color,
-    // turbidity, shoreline foam, and gameplay effects for that specific biome.
-    // Expand the section to see all options. Defaults are tuned per biome character.
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="WaterBiome|Forest",
-        meta=(ShowOnlyInnerProperties,
-              ToolTip="Forest: moderate lake probability, clear rivers, blue water with gentle foam."))
+    // ---- Per-biome water (populated at runtime by AVoxelWorld) ----
+    // These are NOT exposed as UPROPERTYs here to avoid duplication with the
+    // per-biome water sections on the VoxelWorld actor.
+    // AVoxelWorld::ConfigureChunk() writes them before each chunk is generated.
     FVoxelBiomeWaterConfig ForestWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="WaterBiome|Desert",
-        meta=(ShowOnlyInnerProperties,
-              ToolTip="Desert: rare oasis lakes, no rivers, warm murky sandy water, no foam."))
     FVoxelBiomeWaterConfig DesertWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="WaterBiome|Peaks",
-        meta=(ShowOnlyInnerProperties,
-              ToolTip="Peaks: high probability alpine tarns, narrow fast glacial rivers, ice-blue crystal-clear water."))
     FVoxelBiomeWaterConfig PeaksWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="WaterBiome|Cliffs",
-        meta=(ShowOnlyInnerProperties,
-              ToolTip="Cliffs: no still lakes, deep fast gorge rivers, choppy aerated water with heavy shoreline spray."))
     FVoxelBiomeWaterConfig CliffsWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="WaterBiome|Mesa",
-        meta=(ShowOnlyInnerProperties,
-              ToolTip="Mesa: rare drying plateau pools, no rivers, reddish-brown sediment-laden water."))
     FVoxelBiomeWaterConfig MesaWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="WaterBiome|Craters",
-        meta=(ShowOnlyInnerProperties,
-              ToolTip="Craters: bowl almost always fills to the rim, deep teal-green mineral water."))
     FVoxelBiomeWaterConfig CratersWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="WaterBiome|Skylands",
-        meta=(ShowOnlyInnerProperties,
-              ToolTip="Skylands: small pools on island tops, no rivers, pure clear water."))
     FVoxelBiomeWaterConfig SkylandsWater;
 
     // ---- Per-biome rendering (populated at runtime by AVoxelWorld) ----

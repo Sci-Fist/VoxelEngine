@@ -297,7 +297,11 @@ float FVoxelBiomeGenerators::GetSkylandDensity(
 
     // Frequency scales inversely with size
     const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
-    const float Freq      = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
+    float Freq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
+    // Enforce minimum so island shape varies within a chunk (~32m): prevents entire chunks
+    // from becoming one solid skyland block when shape noise is too low-frequency.
+    const float MinShapeFreqForChunkVariation = 0.00025f; // ~0.8 period over 3200 cm
+    Freq = FMath::Max(Freq, MinShapeFreqForChunkVariation);
 
     // ----- PRIMARY SHAPE TEST: 2D (XY) only -----
     // A purely 2D test guarantees that any column inside an island region is
@@ -363,16 +367,17 @@ float FVoxelBiomeGenerators::GetSkylandDensity(
     }
 
     // ----- Final density -----
-    // HorizStrength: smooth [0,1] transition from threshold edge to full solid
     const float HorizStrength = FMath::SmoothStep(Threshold, Threshold + 0.4f, Shape);
 
-    // Core formula: solid interior guaranteed by 2D early-exit above.
-    // Vertical falloff ensures clean top/bottom edges with no leakage.
-    // Edge penalty: (1-Falloff)*1.8 forces air at the island boundary even if
-    // noise somehow passes threshold there.
-    const float D = HorizStrength * Falloff * 2.5f
-                  - (1.f - Falloff) * 1.8f
-                  + RootDensity;
+    float D = HorizStrength * Falloff * 2.5f
+            - (1.f - Falloff) * 1.8f
+            + RootDensity;
+
+    // Break-up term: high-frequency 3D noise so chunks never fill as one solid block.
+    // Over ~32m this oscillates several times, turning some voxels to air.
+    const float WZ = Z + Off.Z;
+    const float BreakUp = FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f) * 0.45f;
+    D -= BreakUp;
 
     return FMath::Clamp(D, -2.f, 2.f);
 }
@@ -399,7 +404,10 @@ float FVoxelBiomeGenerators::GetCrystalCavernDelta(
 
     const float Fade = FMath::Clamp((CavernCeiling - Z) / CVC.FadeDepth, 0.f, 1.f);
 
-    const float CF = CVC.ChamberFrequency;
+    // Enforce minimum frequency so chamber pattern varies within a chunk; prevents
+    // one chamber from filling an entire chunk and creating a single void.
+    const float MinChamberFreq = 0.00005f;
+    const float CF = FMath::Max(CVC.ChamberFrequency, MinChamberFreq);
 
     const float Ch1 = FMath::Abs(FBM(nX * CF,         nY * CF,         nZ * CF,           4, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves));
     const float Ch2 = FMath::Abs(FBM(nX * CF * 0.7f,  nY * CF * 0.7f,  nZ * CF + 5678.f,  3, 2.1f, 0.5f, Config.Performance.MaxNoiseOctaves));
@@ -409,13 +417,13 @@ float FVoxelBiomeGenerators::GetCrystalCavernDelta(
     float Veins = 0.f;
     if (CVC.bEnableConnectingVeins)
     {
-        const float VeinNoise = FBM(X * CF * 2.5f, Y * CF * 2.5f, Z * CF * 2.5f, 2, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
+        const float VeinNoise = FBM(nX * CF * 2.5f, nY * CF * 2.5f, nZ * CF * 2.5f, 2, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
         Veins = FMath::Pow(FMath::Max(0.f, 1.f - FMath::Abs(VeinNoise)), CVC.VeinPower) * CVC.VeinStrength;
     }
 
     CarveFactor = FMath::Clamp(CarveFactor + Veins, 0.f, 1.5f);
 
-    const float Detail      = FastNoise3D(X * CVC.CrystalDetailFrequency, Y * CVC.CrystalDetailFrequency, Z * CVC.CrystalDetailFrequency);
+    const float Detail = FastNoise3D(nX * CVC.CrystalDetailFrequency, nY * CVC.CrystalDetailFrequency, nZ * CVC.CrystalDetailFrequency);
     const float CrystalFill = FMath::Max(0.f, Detail - CVC.CrystalThreshold) * CVC.CrystalAmplitude;
 
     return (-(CarveFactor * 1.2f) + CrystalFill * 1.0f) * Fade;

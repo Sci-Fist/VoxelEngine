@@ -26,12 +26,19 @@ public:
     // Blended terrain surface height from all weighted surface biomes.
     static float GetSurfaceHeightStatic(float X, float Y, const FVoxelBiomeWeightMap& Weights, const FVoxelGenerationConfig& Config);
 
+    // Single call for weights + surface height (avoids duplicate GetSeedOffset / weight computation).
+    struct FWeightsAndHeight { FVoxelBiomeWeightMap Weights; float SurfaceHeight = 0.f; };
+    static FWeightsAndHeight GetWeightsAndSurfaceHeightStatic(float X, float Y, const FVoxelGenerationConfig& Config);
+
     // Simple surface-layer density: positive below surface, negative above.
     // Does NOT include caves, skylands, or overhangs.
     static float GetBaseSurfaceDensity(float Z, float SurfaceHeight, const FVoxelGenerationConfig& Config);
 
 private:
     // Two orthogonal 2D noise fields that drive biome distribution.
+    // WithSeed variants avoid redundant GetSeedOffset() when caller already has it.
     static float GetTemperature(float X, float Y, const FVoxelGenerationConfig& Config);
     static float GetErosion    (float X, float Y, const FVoxelGenerationConfig& Config);
+    static float GetTemperatureWithSeed(float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff);
+    static float GetErosionWithSeed    (float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff);
 };

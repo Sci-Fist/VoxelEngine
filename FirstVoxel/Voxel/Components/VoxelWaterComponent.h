@@ -28,6 +28,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Water")
 	float SeaLevel = 0.f;
 
+	/** If false, ocean plane is not created or shown. Set from FVoxelGlobalWaterConfig::bEnableOcean. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Water")
+	bool bEnableOcean = true;
+
+	/** World-space scale of the ocean plane (single axis). Set from world render distance so plane covers playable area. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Water", meta = (ClampMin = "100.0"))
+	float OceanPlaneScale = 10000.f;
+
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 protected:

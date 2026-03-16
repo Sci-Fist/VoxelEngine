@@ -325,11 +325,11 @@ void FVoxelGeneratorTask::CalculateFoliage()
             // ---- Legacy fallback (no per-biome foliage configured) ----
             if (SlopeZ < MaxFoliageSlope) continue;
 
-            const FColor TriColor = Colors.IsValidIndex(Tris[i]) ? Colors[Tris[i]] : FColor::White;
-            const float  ForestW  = TriColor.G / 255.f;
-            const float  SkylandW = TriColor.B / 255.f;
+            // Use cached biome weights; vertex color is biome blend for materials, not Forest/Skyland weights.
+            const float ForestW = TriWeights.GetWeight(EVoxelBiome::Forest);
+            const float RoughW  = TriWeights.GetRoughness(); // grass on varied terrain (peaks/cliffs)
 
-            if (FMath::FRand() < FoliageDensity * 5.f * (ForestW + SkylandW))
+            if (FMath::FRand() < FoliageDensity * 5.f * (ForestW + RoughW * 0.5f))
             {
                 LegacyGrassTransforms.Add(FTransform(
                     FRotator(0.f, FMath::FRand() * 360.f, 0.f),

@@ -17,7 +17,7 @@ class FIRSTVOXEL_API UVoxelLogger : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
-	/** Log a message to the dedicated Voxel log file. */
+	/** Log a message to Source/Log/FirstVoxel_<date>_<time>.log */
 	UFUNCTION(BlueprintCallable, Category = "Voxel|Logging")
 	static void LogVoxelEvent(FString Message);
 
