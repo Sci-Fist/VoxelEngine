@@ -378,11 +378,8 @@ private:
   FThreadSafeBool bShutdown{false};
 
   TUniquePtr<FVoxelDensityGenerator> DensityGenerator;
-  TUniquePtr<FVoxelWaterSimulator> WaterSimulator;
-
-  /** Seconds between water simulation steps (default 0.2 s = 5 steps/sec). */
-  float WaterSimInterval = 0.2f;
-  float WaterSimTimer = 0.f;
+  UPROPERTY(VisibleAnywhere, Category = "Voxel|Water")
+  class UVoxelWorldWaterComponent* WaterSystemComponent = nullptr;
 
   void ProcessInitialPlayerSpawn();
 
@@ -408,12 +405,6 @@ private:
   void OnChunkGenerationComplete();
   void DiscoverExistingChunks();
 
-  /** Wire up water callbacks, register chunk with sim, place initial water
-   * sources. */
-  void InitChunkWater(AVoxelChunk *Chunk);
-
-  /** Drain water simulation tick and rebuild dirty water meshes. */
-  void TickWater(float DeltaTime);
 
 #if WITH_EDITOR
   virtual void

@@ -4,6 +4,8 @@
 // the size of VoxelWorld.cpp and improve maintainability.
 
 #include "VoxelWorld.h"
+#include "Voxel/Core/World/Water/VoxelWorldWater.h"
+#include "Voxel/Water/VoxelWaterSimulator.h"
 #include "Voxel/Core/VoxelChunk.h"
 #include "Voxel/Core/VoxelChunkPool.h"
 #include "Voxel/Generation/VoxelGeneratorTask.h"
@@ -243,7 +245,10 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord)
 	};
 
 	// Wire water sim into this chunk
-	InitChunkWater(Chunk);
+	if (WaterSystemComponent)
+	{
+		WaterSystemComponent->InitChunkWater(Chunk);
+	}
 
 	Chunk->GenerateAsync();
 
@@ -259,8 +264,13 @@ void AVoxelWorld::DestroyChunk(const FIntVector& Coord)
 		AVoxelChunk* Chunk = *ChunkPtr;
 
 		// Unregister from water simulator before clearing the chunk
-		if (WaterSimulator.IsValid())
-			WaterSimulator->UnregisterChunk(Coord);
+		if (WaterSystemComponent)
+		{
+			if (WaterSystemComponent->GetSimulator())
+				WaterSystemComponent->GetSimulator()->UnregisterChunk(Coord);
+
+			WaterSystemComponent->RemoveChunkFromWaterSimulation(Coord);
+		}
 
 		if (Chunk->IsGenerating())
 		{

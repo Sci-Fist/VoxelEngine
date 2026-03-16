@@ -4,10 +4,10 @@
 // from a 3D density field. The algorithm produces high-quality, continuous mesh
 // that preserves sharp features while maintaining smooth surfaces.
 
+#include "Generation/VoxelMeshGenerator.h"
 #include "CoreMinimal.h"
 #include "Async/ParallelFor.h"
 #include "ProceduralMeshComponent.h"
-#include "Generation/VoxelMeshGenerator.h"
 #include "Generation/VoxelDensityGenerator.h"
 #include "Biomes/VoxelBiomeManager.h"
 #include "VoxelLogger.h"

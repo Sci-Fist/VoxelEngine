@@ -117,7 +117,9 @@ float FVoxelDensityGenerator::GetDensityFull(
         const float DepthBelow        = FMath::Max(0.f, SurfaceHeight - Z);
 
         // Worm tunnels: fade in below MinDepthBelowSurface, fade out toward bedrock.
-        if (DepthBelow > CVC.MinDepthBelowSurface)
+        // Ensure minimum robust padding below landscape so no caves break the surface crust
+        const float EffectiveMinDepth = FMath::Max(CVC.MinDepthBelowSurface, 600.f); 
+        if (DepthBelow > EffectiveMinDepth)
         {
             const float SurfFade = FMath::Clamp(
                 (DepthBelow - CVC.MinDepthBelowSurface) / CVC.SurfaceFadeDepth, 0.f, 1.f);

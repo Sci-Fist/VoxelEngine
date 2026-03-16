@@ -1,7 +1,5 @@
 // VoxelWorldWater.cpp
-// Implementation of water simulation and rendering management for AVoxelWorld.
-// This class handles water simulation, component management, and water mesh updates.
-
+// Implementation of UVoxelWorldWaterComponent managing water sim and sources.
 #include "Voxel/Core/World/Water/VoxelWorldWater.h"
 #include "Voxel/Core/World/VoxelWorld.h"
 #include "Voxel/Core/VoxelChunk.h"
@@ -10,53 +8,50 @@
 #include "Engine/World.h"
 #include "Voxel/VoxelLogger.h"
 
-
-FVoxelWorldWater::FVoxelWorldWater(AActor* InWorldOwner)
-    : WorldOwner(InWorldOwner)
+UVoxelWorldWaterComponent::UVoxelWorldWaterComponent()
 {
+    PrimaryComponentTick.bCanEverTick = true;
+    bTickInEditor = false;
 }
 
-void FVoxelWorldWater::Initialize(class FVoxelWaterSimulator* InWaterSimulator, UVoxelWaterComponent* InWaterComponent)
-
+void UVoxelWorldWaterComponent::Initialize(TUniquePtr<FVoxelWaterSimulator> InWaterSimulator, UVoxelWaterComponent* InOceanComponent)
 {
-    WaterSimulator = InWaterSimulator;
-    WaterComponent = InWaterComponent;
-    
-    
-    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorldWater: Initialized with simulator=%s, component=%s"),
-           WaterSimulator ? TEXT("valid") : TEXT("null"),
-           WaterComponent.IsValid() ? TEXT("valid") : TEXT("null"));
+    WaterSimulator = MoveTemp(InWaterSimulator);
+    OceanComponent = InOceanComponent;
 
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorldWaterComponent: Initialized with simulator=%s, OceanComponent=%s"),
+           WaterSimulator ? TEXT("valid") : TEXT("null"),
+           OceanComponent.IsValid() ? TEXT("valid") : TEXT("null"));
 }
 
 // ============================================================
 //  Water Simulation Tick
 // ============================================================
 
-void FVoxelWorldWater::TickWater(float DeltaTime)
+void UVoxelWorldWaterComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
-    if (!bWaterSimulationEnabled || !WaterSimulator || !WorldOwner || !WorldOwner->GetWorld())
+    Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+    if (!bWaterSimulationEnabled || !WaterSimulator.IsValid() || !GetWorld() || !GetWorld()->IsGameWorld())
         return;
 
     WaterSimTimer += DeltaTime;
     if (WaterSimTimer < WaterSimInterval)
         return;
-    
+
     WaterSimTimer = 0.f;
     UpdateWaterSimulation(DeltaTime);
 }
 
-void FVoxelWorldWater::UpdateWaterSimulation(float DeltaTime)
+void UVoxelWorldWaterComponent::UpdateWaterSimulation(float DeltaTime)
 {
-    if (!WaterSimulator || !WorldOwner) return;
+    if (!WaterSimulator.IsValid()) return;
 
-    
     // Run water simulation step
     // Step() returns coordinates of chunks whose water data changed.
     TArray<FIntVector> DirtyChunks = WaterSimulator->Step();
-    
-    class AVoxelWorld* VoxelWorld = Cast<AVoxelWorld>(WorldOwner);
-    if (VoxelWorld)
+
+    if (AVoxelWorld* VoxelWorld = Cast<AVoxelWorld>(GetOwner()))
     {
         const TMap<FIntVector, AVoxelChunk*>* LoadedChunks = VoxelWorld->GetLoadedChunks();
         if (LoadedChunks)
@@ -67,15 +62,13 @@ void FVoxelWorldWater::UpdateWaterSimulation(float DeltaTime)
                 {
                     if (AVoxelChunk* Chunk = *ChunkPtr)
                     {
-                        RebuildWaterMeshForChunk(Chunk);
+                        if (Chunk->WaterData.bMeshDirty)
+                            RebuildWaterMeshForChunk(Chunk);
                     }
                 }
             }
         }
     }
-
-    // Log simulation step (verbose level)
-    LogWaterSimulationStep();
 }
 
 
@@ -83,98 +76,104 @@ void FVoxelWorldWater::UpdateWaterSimulation(float DeltaTime)
 //  Chunk Water Management
 // ============================================================
 
-void FVoxelWorldWater::InitChunkWater(AVoxelChunk* Chunk)
+void UVoxelWorldWaterComponent::InitChunkWater(AVoxelChunk* Chunk)
 {
-    if (!Chunk || !WaterSimulator) return;
-    
+    if (!Chunk || !WaterSimulator.IsValid()) return;
+
     const FIntVector ChunkCoord = Chunk->ChunkCoord;
-    
+
     // Register the chunk with the water simulator
     WaterSimulator->RegisterChunk(ChunkCoord, &Chunk->WaterData);
 
-    
+    // Bind safe weak-lambda callback to feed runtime edits/sources into simulator
+    TWeakObjectPtr<UVoxelWorldWaterComponent> WeakThis(this);
+    Chunk->OnChunkWaterReady = [WeakThis](const TArray<FIntVector>& Sources)
+    {
+        if (UVoxelWorldWaterComponent* StrongThis = WeakThis.Get())
+        {
+            if (!StrongThis->WaterSimulator.IsValid()) return;
+            for (const FIntVector& Src : Sources)
+            {
+                StrongThis->WaterSimulator->SetSource(Src);
+            }
+        }
+    };
+
     // Process any pre-registered water sources for this chunk
     ProcessChunkWaterSources(Chunk, ChunkCoord);
-    
-    LogChunkWaterInit(ChunkCoord);
+
+    UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorldWaterComponent: Initialized water for chunk (%d,%d,%d)"),
+           ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
 }
 
-void FVoxelWorldWater::RebuildWaterMeshForChunk(AVoxelChunk* Chunk)
+void UVoxelWorldWaterComponent::RebuildWaterMeshForChunk(AVoxelChunk* Chunk)
 {
-    if (!Chunk) return;
-    
-    // Rebuild the water mesh for this chunk
-    Chunk->RebuildWaterMesh();
-    
-    UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorldWater: Rebuilt water mesh for chunk (%d,%d,%d)"),
-           Chunk->ChunkCoord.X, Chunk->ChunkCoord.Y, Chunk->ChunkCoord.Z);
+    if (Chunk)
+    {
+        // Rebuild the water mesh for this chunk
+        Chunk->RebuildWaterMesh();
+    }
 }
 
 // ============================================================
 //  Water Source Management
 // ============================================================
 
-void FVoxelWorldWater::RegisterWaterSource(const FIntVector& WorldVoxelCoord)
+void UVoxelWorldWaterComponent::RegisterWaterSource(const FIntVector& WorldVoxelCoord)
 {
-    WaterSources.Add(WorldVoxelCoord);
-    LogWaterSourceRegistration(WorldVoxelCoord);
-    
+    WaterSources.AddUnique(WorldVoxelCoord);
+
     // If water simulator exists, register the source with it
-    if (WaterSimulator)
+    if (WaterSimulator.IsValid())
     {
         WaterSimulator->SetSource(WorldVoxelCoord);
-
     }
 }
 
-void FVoxelWorldWater::UnregisterWaterSource(const FIntVector& WorldVoxelCoord)
+void UVoxelWorldWaterComponent::UnregisterWaterSource(const FIntVector& WorldVoxelCoord)
 {
     WaterSources.Remove(WorldVoxelCoord);
-    
-    if (WaterSimulator)
+
+    if (WaterSimulator.IsValid())
     {
         WaterSimulator->ClearCell(WorldVoxelCoord);
-
     }
 }
 
-void FVoxelWorldWater::ClearAllWaterSources()
+void UVoxelWorldWaterComponent::ClearAllWaterSources()
 {
     WaterSources.Empty();
-    
-    if (WaterSimulator)
+
+    if (WaterSimulator.IsValid())
     {
         WaterSimulator->ClearAll();
-
     }
-    
-    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorldWater: Cleared all water sources"));
 }
 
 // ============================================================
 //  Chunk Water Source Processing
 // ============================================================
 
-void FVoxelWorldWater::ProcessChunkWaterSources(AVoxelChunk* Chunk, const FIntVector& ChunkCoord)
+void UVoxelWorldWaterComponent::ProcessChunkWaterSources(AVoxelChunk* Chunk, const FIntVector& ChunkCoord)
 {
     if (!Chunk) return;
-    
+
     // Find water sources that belong to this chunk
-    class AVoxelWorld* VoxelWorld = Cast<AVoxelWorld>(WorldOwner);
+    AVoxelWorld* VoxelWorld = Cast<AVoxelWorld>(GetOwner());
     if (!VoxelWorld) return;
 
     const float ChunkWorldSize = VoxelWorld->ChunkSize * VoxelWorld->VoxelSize;
     const FVector ChunkOrigin = VoxelWorld->ChunkCoordToWorld(ChunkCoord);
-    
+
     TArray<FIntVector> ChunkSources;
-    
+
     for (const FIntVector& Source : WaterSources)
     {
         // Convert world voxel to chunk-local voxel coordinates
         FVector SourceWorldPos = VoxelWorld->ChunkCoordToWorld(Source);
 
         FVector LocalPos = SourceWorldPos - ChunkOrigin;
-        
+
         // Check if source is within this chunk's bounds
         if (LocalPos.X >= 0 && LocalPos.X < ChunkWorldSize &&
             LocalPos.Y >= 0 && LocalPos.Y < ChunkWorldSize &&
@@ -183,29 +182,22 @@ void FVoxelWorldWater::ProcessChunkWaterSources(AVoxelChunk* Chunk, const FIntVe
             ChunkSources.Add(Source);
         }
     }
-    
+
     if (ChunkSources.Num() > 0)
     {
         ChunkWaterSources.Add(ChunkCoord, ChunkSources);
-        UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorldWater: Chunk (%d,%d,%d) has %d water sources"),
-               ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, ChunkSources.Num());
     }
 }
 
-void FVoxelWorldWater::RemoveChunkFromWaterSimulation(const FIntVector& ChunkCoord)
+void UVoxelWorldWaterComponent::RemoveChunkFromWaterSimulation(const FIntVector& ChunkCoord)
 {
     // Remove from chunk water sources tracking
     ChunkWaterSources.Remove(ChunkCoord);
-    
-    // Note: The water simulator maintains its own internal state and will
-    // continue to simulate water that flows across chunk boundaries.
-    // Chunk removal is handled by the simulator's internal cleanup.
 }
 
-bool FVoxelWorldWater::IsChunkWaterDirty(const FIntVector& ChunkCoord) const
+bool UVoxelWorldWaterComponent::IsChunkWaterDirty(const FIntVector& ChunkCoord) const
 {
     // For now, we consider a chunk's water dirty if it has registered sources
-    // In a more sophisticated system, we'd track actual water state changes
     return ChunkWaterSources.Contains(ChunkCoord);
 }
 
@@ -213,46 +205,18 @@ bool FVoxelWorldWater::IsChunkWaterDirty(const FIntVector& ChunkCoord) const
 //  State Management
 // ============================================================
 
-void FVoxelWorldWater::ResetWaterState()
+void UVoxelWorldWaterComponent::ResetWaterState()
 {
     ClearAllWaterSources();
     ChunkWaterSources.Empty();
-    
-    if (WaterSimulator)
+
+    if (WaterSimulator.IsValid())
     {
         WaterSimulator->ClearAll();
-
     }
-    
-    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorldWater: Water state reset"));
 }
 
-void FVoxelWorldWater::ClearChunkWaterData(const FIntVector& ChunkCoord)
+void UVoxelWorldWaterComponent::ClearChunkWaterData(const FIntVector& ChunkCoord)
 {
     RemoveChunkFromWaterSimulation(ChunkCoord);
-    
-    UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorldWater: Cleared water data for chunk (%d,%d,%d)"),
-           ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
-}
-
-// ============================================================
-//  Logging Helpers
-// ============================================================
-
-void FVoxelWorldWater::LogWaterSimulationStep() const
-{
-    // Only log at verbose level to avoid spam
-    UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorldWater: Simulation step completed"));
-}
-
-void FVoxelWorldWater::LogChunkWaterInit(const FIntVector& ChunkCoord) const
-{
-    UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorldWater: Initialized water for chunk (%d,%d,%d)"),
-           ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
-}
-
-void FVoxelWorldWater::LogWaterSourceRegistration(const FIntVector& WorldVoxelCoord) const
-{
-    UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorldWater: Registered water source at (%d,%d,%d)"),
-           WorldVoxelCoord.X, WorldVoxelCoord.Y, WorldVoxelCoord.Z);
 }

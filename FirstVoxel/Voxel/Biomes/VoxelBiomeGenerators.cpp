@@ -395,7 +395,11 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
       ShapeDetail = FastNoise3D(WX * Cache.Freq * 0.6f, WY * Cache.Freq * 0.6f, WZ * Cache.Freq * 0.05f) * 0.25f;
     }
 
-    const float Shape = Cache.ShapeXY + ShapeDetail;
+    // Point-wise ShapeXY prevents absolute grid-cell fractures on cell boundaries
+    const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves, 2), 1, Config.Performance.MaxNoiseOctaves);
+    const float ShapeXY = FBM(WX * Cache.Freq, WY * Cache.Freq, 0.f, Oct2D, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
+
+    const float Shape = ShapeXY + ShapeDetail;
 
     float RootDensity = 0.f;
     if (SC.bEnableHangingRoots && tCenter < -0.25f) {

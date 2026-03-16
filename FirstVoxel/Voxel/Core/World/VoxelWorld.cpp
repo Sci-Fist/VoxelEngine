@@ -11,6 +11,7 @@
 //   - EndPlay properly cancels all chunks before clearing LoadedChunks
 
 #include "VoxelWorld.h"
+#include "Voxel/Core/World/Water/VoxelWorldWater.h"
 #include "Voxel/Core/VoxelChunk.h"
 #include "Voxel/Core/VoxelChunkPool.h"
 #include "Voxel/Core/VoxelDataMap.h"
@@ -42,6 +43,8 @@ AVoxelWorld::AVoxelWorld()
 	RootComponent = Root;
 
 	WaterComponent = CreateDefaultSubobject<UVoxelWaterComponent>(TEXT("WaterComponent"));
+
+	WaterSystemComponent = CreateDefaultSubobject<UVoxelWorldWaterComponent>(TEXT("WaterSystemComponent"));
 }
 
 AVoxelWorld::~AVoxelWorld()
@@ -61,9 +64,11 @@ void AVoxelWorld::BeginPlay()
 	// ---- Density generator (all 3 layers: Surface / Skylands / Caves) ----
 	DensityGenerator = MakeUnique<FVoxelDensityGenerator>();
 
-	// ---- Water simulator ----
-	// Must be created BEFORE GenerateWorld() so InitChunkWater() can register chunks.
-	WaterSimulator = MakeUnique<FVoxelWaterSimulator>(ChunkSize, VoxelSize);
+	// ---- Water subsystem component ----
+	if (WaterSystemComponent)
+	{
+		WaterSystemComponent->Initialize(MakeUnique<FVoxelWaterSimulator>(ChunkSize, VoxelSize), WaterComponent);
+	}
 
 	// ---- Data map (tracks player edits) ----
 	if (!bInitialized)
@@ -127,7 +132,6 @@ void AVoxelWorld::Tick(float DeltaTime)
 
 	DrainGenerationQueue();
 
-	TickWater(DeltaTime);
 
 	// Rebuild any chunks dirtied by player edits.
 	for (auto& It : LoadedChunks)
@@ -157,64 +161,6 @@ void AVoxelWorld::OnConstruction(const FTransform& Transform)
 	}
 }
 
-// ============================================================
-//  InitChunkWater
-//  Registers the chunk with the simulator and binds the water-source
-//  callback so sources detected during generation reach the sim.
-// ============================================================
-void AVoxelWorld::InitChunkWater(AVoxelChunk* Chunk)
-{
-	if (!Chunk || !WaterSimulator.IsValid()) return;
-
-	WaterSimulator->RegisterChunk(Chunk->ChunkCoord, &Chunk->WaterData);
-
-	// Bind the water-source callback.
-	// OnChunkWaterReady is fired on the GameThread once by ApplyMesh();
-	// it delivers the list of world-voxel coordinates that the generator
-	// identified as pool / spring candidates.
-	TWeakObjectPtr<AVoxelWorld> WeakThis(this);
-	Chunk->OnChunkWaterReady = [WeakThis](const TArray<FIntVector>& Sources)
-	{
-		if (AVoxelWorld* StrongThis = WeakThis.Get())
-		{
-			if (!StrongThis->WaterSimulator.IsValid()) return;
-			for (const FIntVector& SrcVoxel : Sources)
-			{
-				StrongThis->WaterSimulator->SetSource(SrcVoxel);
-			}
-		}
-	};
-
-	UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Water initialized for chunk (%d,%d,%d)"),
-		Chunk->ChunkCoord.X, Chunk->ChunkCoord.Y, Chunk->ChunkCoord.Z);
-}
-
-// ============================================================
-//  TickWater
-//  Runs the CA water sim at a fixed interval and rebuilds mesh
-//  for any chunk whose water data changed this step.
-// ============================================================
-void AVoxelWorld::TickWater(float DeltaTime)
-{
-	if (!WaterSimulator.IsValid() || !GetWorld()->IsGameWorld()) return;
-
-	WaterSimTimer += DeltaTime;
-	if (WaterSimTimer < WaterSimInterval) return;
-	WaterSimTimer = 0.f;
-
-	const TArray<FIntVector> DirtyChunks = WaterSimulator->Step();
-	for (const FIntVector& Coord : DirtyChunks)
-	{
-		if (AVoxelChunk** ChunkPtr = LoadedChunks.Find(Coord))
-		{
-			if (AVoxelChunk* Chunk = *ChunkPtr)
-			{
-				if (Chunk->WaterData.bMeshDirty)
-					Chunk->RebuildWaterMesh();
-			}
-		}
-	}
-}
 
 // ============================================================
 //  ClearWorld
