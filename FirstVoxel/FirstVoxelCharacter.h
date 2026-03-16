@@ -28,8 +28,14 @@ enum class EVoxelToolMode : uint8
 };
 
 /**
- *  A simple player-controllable third person character
- *  Implements a controllable orbiting camera
+ * Main character class for the voxel-based gameplay.
+ * 
+ * This character provides voxel terrain interaction capabilities including
+ * terrain modification and world map functionality.
+ * 
+ * Note: Combat and Side-Scrolling variants have their own specialized character
+ * classes (CombatCharacter and SideScrollingCharacter) that are currently unused
+ * but preserved for future development.
  */
 UCLASS()
 class FIRSTVOXEL_API AFirstVoxelCharacter : public ACharacter
@@ -164,6 +170,18 @@ public:
 
 	/** Toggle world map */
 	void ToggleMap();
+
+	/**
+	 * Toggle auto-walk on/off.
+	 * While active the character walks forward at current speed every frame.
+	 * Cancelled automatically when the player pushes the move stick/keys in any direction.
+	 */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	void ToggleAutoWalk();
+
+	/** True while auto-walk is active. Read by HUD to show the indicator. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Input")
+	bool bAutoWalk = false;
 
 	/** Fly Downward – called by EnhancedInput FlyDown action and by Tick gamepad polling */
 	void FlyDown();

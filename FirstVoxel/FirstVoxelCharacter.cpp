@@ -7,7 +7,7 @@ DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 #include "CoreMinimal.h"
 #include "FirstVoxel.h"
 #include "FirstVoxelPlayerController.h"
-#include "Voxel/Core/VoxelWorld.h"
+#include "Voxel/Core/World/VoxelWorld.h"
 
 #include "Camera/CameraComponent.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -130,6 +130,10 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AFirstVoxelCharacter::SelectToolSmooth);
 	PlayerInputComponent->BindKey(EKeys::Four,  IE_Pressed, this, &AFirstVoxelCharacter::SelectToolFlatten);
 
+	// ── Auto-walk (keyboard R / gamepad Select) ─────────────────────────────
+	PlayerInputComponent->BindKey(EKeys::R,                      IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left,   IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
+
 	// ── Gamepad bindings ─────────────────────────────────────────────────────
 	// B  → Toggle Flight
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
@@ -189,6 +193,35 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 
 	const bool bFlying = GetCharacterMovement() &&
 		GetCharacterMovement()->MovementMode == MOVE_Flying;
+
+	// ── 0. Auto-walk (cancelled by any manual move input) ───────────────────
+	if (bAutoWalk)
+	{
+		// Cancel auto-walk if player pushes any movement controls
+		if (!bLastInputWasGamepad)
+		{
+			if (PC->IsInputKeyDown(EKeys::W) || PC->IsInputKeyDown(EKeys::S) ||
+				PC->IsInputKeyDown(EKeys::A) || PC->IsInputKeyDown(EKeys::D))
+			{
+				bAutoWalk = false;
+				UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk cancelled by manual input"));
+			}
+		}
+		else // Gamepad
+		{
+			if (FMath::Abs(GPLx) > 0.15f || FMath::Abs(GPLy) > 0.15f)
+			{
+				bAutoWalk = false;
+				UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk cancelled by manual input"));
+			}
+		}
+
+		// If auto-walk is still active, move forward
+		if (bAutoWalk)
+		{
+			DoMove(0.f, 1.f);
+		}
+	}
 
 	// ── 1. Keyboard: Move (WASD) ──────────────────────────────────────────
 	// Note: NOT duplicated in PlayerController::PlayerTick — that path was removed.
@@ -418,6 +451,19 @@ void AFirstVoxelCharacter::SelectToolSmooth()
 void AFirstVoxelCharacter::SelectToolFlatten()
 {
 	SelectToolByIndex(3);
+}
+
+void AFirstVoxelCharacter::ToggleAutoWalk()
+{
+	bAutoWalk = !bAutoWalk;
+	if (bAutoWalk)
+	{
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk ENABLED"));
+	}
+	else
+	{
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk DISABLED"));
+	}
 }
 
 void AFirstVoxelCharacter::ApplyCurrentTool()

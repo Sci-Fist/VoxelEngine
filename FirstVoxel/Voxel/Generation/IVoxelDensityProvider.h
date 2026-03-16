@@ -30,5 +30,6 @@ public:
     virtual float GetDensityFull(const FVector& WorldPos,
                                 const FVoxelBiomeWeightMap& Weights,
                                 float SurfaceHeight,
-                                const FVoxelGenerationConfig& Config) = 0;
+                                const FVoxelGenerationConfig& Config,
+                                int32 StepSize = 1) = 0;
 };

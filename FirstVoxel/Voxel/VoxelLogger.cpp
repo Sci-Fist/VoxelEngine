@@ -6,9 +6,14 @@
 
 FString       UVoxelLogger::LogFilePath = TEXT("");
 IFileHandle*  UVoxelLogger::FileHandle  = nullptr;
+FCriticalSection UVoxelLogger::LogLock;
+bool UVoxelLogger::bLogInitFailed = false;
 
 void UVoxelLogger::InitLogger()
 {
+	if (bLogInitFailed) return;
+	FScopeLock ScopeLock(&LogLock);
+
 	if (FileHandle)
 	{
 		delete FileHandle;
@@ -36,20 +41,26 @@ void UVoxelLogger::InitLogger()
 		&IFileManager::Get(), FILEWRITE_EvenIfReadOnly);
 
 	FileHandle = PlatformFile.OpenWrite(*LogFilePath, /*bAppend=*/true);
+	if (!FileHandle)
+	{
+		bLogInitFailed = true;
+	}
 }
 
 void UVoxelLogger::LogVoxelEvent(FString Message)
 {
-	// Lazily initialise on first use (e.g. when called before BeginPlay).
+	if (bLogInitFailed) return;
+
+	FScopeLock ScopeLock(&LogLock);
+
 	if (LogFilePath.IsEmpty() || !FileHandle)
 		InitLogger();
 
-	if (!FileHandle) return; // filesystem unavailable (e.g. packaged with no write access)
+	if (!FileHandle) return; 
 
 	const FString Timestamped = FString::Printf(
 		TEXT("[%s] %s\n"), *FDateTime::Now().GetTimeOfDay().ToString(), *Message);
 
 	const FTCHARToUTF8 Converter(*Timestamped);
 	FileHandle->Write(reinterpret_cast<const uint8*>(Converter.Get()), Converter.Length());
-	FileHandle->Flush();
 }

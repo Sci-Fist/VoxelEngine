@@ -1,25 +1,27 @@
 // VoxelMeshGenerator.cpp
 // Surface Nets implementation â€” smooth terrain mesh from density field perfectly preserving sharp boxy edits.
+// This file implements the Surface Nets algorithm for generating smooth terrain mesh
+// from a 3D density field. The algorithm produces high-quality, continuous mesh
+// that preserves sharp features while maintaining smooth surfaces.
+
+#include "CoreMinimal.h"
+#include "Async/ParallelFor.h"
+#include "ProceduralMeshComponent.h"
 #include "Generation/VoxelMeshGenerator.h"
 #include "Generation/VoxelDensityGenerator.h"
 #include "Biomes/VoxelBiomeManager.h"
-#include "Async/ParallelFor.h"
-#include "ProceduralMeshComponent.h"
+#include "VoxelLogger.h"
 
 // ---------------------------------------------------------------------------
-// LOOKUP TABLES
-// EdgeTable[256]  â€” bitmask of which 12 edges are cut for each of 256 cube configs
+// SURFACE NETS ALGORITHM OVERVIEW
 // ---------------------------------------------------------------------------
-
-
-const int32 FVoxelMeshGenerator::EdgeTable[256] =
-{
-	0x000,0x109,0x203,0x30a,0x406,0x50f,0x605,0x70c,
-	0x80c,0x905,0xa0f,0xb06,0xc0a,0xd03,0xe09,0xf00,
-	0x190,0x099,0x393,0x29a,0x596,0x49f,0x795,0x69c,
-	0x99c,0x895,0xb9f,0xa96,0xd9a,0xc93,0xf99,0xe90,
-	0x230,0x339,0x033,0x13a,0x636,0x73f,0x435,0x53c,
-	0xa3c,0xb35,0x83f,0x936,0xe3a,0xf33,0xc39,0xd30,
+// The Surface Nets algorithm generates a smooth mesh from a 3D density field by:
+// 1. Finding cells that contain the surface (where density transitions from solid to air)
+// 2. Computing a single vertex for each cell at the average position of edge intersections
+// 3. Generating quads for each edge that crosses the surface, connecting the 4 vertices
+//    of the sharing cells
+// This approach produces smoother results than Marching Cubes while preserving sharp features
+// when the user builds with blocks.
 	0x3a0,0x2a9,0x1a3,0x0aa,0x7a6,0x6af,0x5a5,0x4ac,
 	0xbac,0xaa5,0x9af,0x8a6,0xfaa,0xea3,0xda9,0xca0,
 	0x460,0x569,0x663,0x76a,0x066,0x16f,0x265,0x36c,
@@ -81,7 +83,7 @@ FVector FVoxelMeshGenerator::ComputeNormal(
 			Densities[CenterIdx + S] - Densities[CenterIdx - S],
 			Densities[CenterIdx + S2] - Densities[CenterIdx - S2]
 		);
-		return (-Grad).GetSafeNormal();
+		return Grad.GetSafeNormal(); // Gradient points from low to high density (air to solid)
 	}
 
 	// Border fallback
@@ -93,15 +95,14 @@ FVector FVoxelMeshGenerator::ComputeNormal(
 		return Densities[Idx(ix, iy, iz, S)];
 	};
 
-	// Central diff
+	// Central diff - fixed gradient direction for correct normals
 	FVector Grad(
 		SafeGet(X+1,Y,Z) - SafeGet(X-1,Y,Z),
 		SafeGet(X,Y+1,Z) - SafeGet(X,Y-1,Z),
 		SafeGet(X,Y,Z+1) - SafeGet(X,Y,Z-1)
 	);
 
-	Grad = -Grad;
-	return Grad.GetSafeNormal();
+	return Grad.GetSafeNormal(); // Gradient points from low to high density (air to solid)
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +124,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 	int32                InStepSize)
 {
 	OutMesh.Reset();
-	
+
 	const int32 Reserve = 2048;
 	OutMesh.FlatMesh.ReserveInitial(Reserve);
 	OutMesh.SlopeMesh.ReserveInitial(Reserve);
@@ -340,8 +341,8 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const float D1 = Densities[Idx(X+1, Y, Z, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
-			EmitQuad(Idx(X, Y,   Z,   S), Idx(X, Y-1, Z,   S),
-			         Idx(X, Y-1, Z-1, S), Idx(X, Y,   Z-1, S),
+			EmitQuad(Idx(X, Y,   Z,   S), Idx(X, Y,   Z-1, S),
+					 Idx(X, Y-1, Z-1, S), Idx(X, Y-1, Z,   S),
 			         X, Y, D0 > 0.f);
 		}
 	}
@@ -361,24 +362,19 @@ void FVoxelMeshGenerator::GenerateMesh(
 		}
 	}
 
-	// 3. Z-Axis edges: surface between (X, Y, Z) and (X, Y, Z+1).
-	for (int32 Z = 1; Z <= EffectiveSize; ++Z)
-	for (int32 Y = 1; Y <= EffectiveSize; ++Y)
-	for (int32 X = 1; X <= EffectiveSize; ++X)
-	{
+// 3. Z-Axis edges: surface between (X, Y, Z) and (X, Y, Z+1).
+for (int32 Z = 1; Z <= EffectiveSize + 1; ++Z)
+for (int32 Y = 1; Y <= EffectiveSize; ++Y)
+for (int32 X = 1; X <= EffectiveSize; ++X)
+{
 		const float D0 = Densities[Idx(X, Y, Z,   S)];
 		const float D1 = Densities[Idx(X, Y, Z+1, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
-			// Z-axis quad winding is flipped compared to X/Y axes.
-			if (D0 > 0.f)
-				EmitQuad(Idx(X,   Y,   Z, S), Idx(X-1, Y,   Z, S),
-				         Idx(X-1, Y-1, Z, S), Idx(X,   Y-1, Z, S),
-				         X, Y, /*bSolidToAir=*/false); // flipped: solid→air uses CCW
-			else
-				EmitQuad(Idx(X,   Y,   Z, S), Idx(X-1, Y,   Z, S),
-				         Idx(X-1, Y-1, Z, S), Idx(X,   Y-1, Z, S),
-				         X, Y, /*bSolidToAir=*/true);
+			// Z-axis quad winding - fixed to match X/Y axis pattern
+			EmitQuad(Idx(X,   Y,   Z, S), Idx(X-1, Y,   Z, S),
+			         Idx(X-1, Y-1, Z, S), Idx(X,   Y-1, Z, S),
+			         X, Y, D0 > 0.f); // Use same logic as X/Y axes
 		}
 	}
 }

@@ -37,15 +37,18 @@ public:
 	/** Bulk copy overrides from another map */
 	void CopyFrom(const FVoxelDataMap& Other);
 
-private:
-	int32 ChunkSize = 32;
-
 	struct FChunkData
 	{
 		TMap<int32, float> ModifiedVoxels;
 	};
 
+	const TMap<FIntVector, FChunkData>& GetChunks() const { return Chunks; }
+
+private:
+	int32 ChunkSize = 32;
+
 	TMap<FIntVector, FChunkData> Chunks;
+
 
 	mutable FCriticalSection MapLock;
 

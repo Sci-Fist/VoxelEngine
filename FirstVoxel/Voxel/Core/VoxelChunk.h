@@ -10,6 +10,8 @@
 #include "Components/InstancedStaticMeshComponent.h"
 #include "VoxelLogger.h"
 #include "Generation/VoxelGeneratorTask.h"
+#include "Voxel/Water/VoxelWaterTypes.h"
+#include "Voxel/Water/VoxelWaterSimulator.h"
 #include "VoxelChunk.generated.h"
 
 class UProceduralMeshComponent;
@@ -86,14 +88,33 @@ public:
 	/** Callback fired on the GameThread after mesh upload completes. Used by AVoxelWorld to decrement ActiveGenerations. */
 	TFunction<void()> OnGenerationComplete;
 
+	/**
+	 * Callback fired on the GameThread after ApplyMesh() with the list of water source world-voxel
+	 * coordinates detected during generation.  AVoxelWorld binds this to register sources with
+	 * FVoxelWaterSimulator.  Cleared after first call (sources are registered once per generation).
+	 */
+	TFunction<void(const TArray<FIntVector>&)> OnChunkWaterReady;
+
 	void GenerateAsync();
 	void CancelGeneration();
 	void GenerateSync();
 	void DestroyAndRebuildMesh();
 	void ClearMesh();
 
+	/**
+	 * Rebuild the translucent water surface mesh from WaterData.
+	 * Called by AVoxelWorld when the simulator marks this chunk's water dirty.
+	 * Safe to call repeatedly; clears old water mesh sections first.
+	 */
+	void RebuildWaterMesh();
+
+	/** Water voxel simulation state.  Populated in ApplyMesh(), updated by FVoxelWaterSimulator. */
+	FVoxelWaterData WaterData;
+
 	bool IsReady()      const { return bMeshApplied; }
 	bool IsGenerating() const { return bGenerating;  }
+	
+	FORCEINLINE UProceduralMeshComponent* GetProceduralMesh() const { return ProceduralMesh; }
 
 	/** Injected density evaluator. Falls back to an internal static instance when null. */
 	struct FVoxelDensityGenerator* DensityGenerator = nullptr;
@@ -101,8 +122,30 @@ public:
 	/** Set to true when player edits have invalidated this chunk's mesh; rebuilt on the next Tick. */
 	bool bMeshDirty = false;
 
+	/** Water material — assigned by AVoxelWorld from GenerationConfig.Water.OceanMaterial. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
+	UMaterialInterface* WaterMaterial = nullptr;
+
+	/** Smoothly transition to a new LOD level. */
+	UFUNCTION(BlueprintCallable, Category = "Voxel|LOD")
+	void TransitionToLOD(int32 NewLOD);
+
+	/** Current mesh state for managing LOD transitions and visibility. */
+	enum class EChunkMeshState : uint8
+	{
+		Empty,           // No mesh data
+		Generating,      // Background task running
+		Ready,           // Mesh ready and visible
+		Transitioning,   // In LOD transition
+		Error            // Generation failed
+	};
+
+	/** Current mesh state for managing LOD transitions and visibility. */
+	EChunkMeshState MeshState { EChunkMeshState::Empty };
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
@@ -111,6 +154,10 @@ protected:
 private:
 	UPROPERTY(VisibleAnywhere)
 	UProceduralMeshComponent* ProceduralMesh;
+
+	/** Separate translucent mesh component for voxel water surfaces. */
+	UPROPERTY(VisibleAnywhere)
+	UProceduralMeshComponent* WaterMesh;
 
 	// Legacy fixed-slot HISM components (used when no per-biome foliage is configured)
 	UPROPERTY(VisibleAnywhere)
@@ -138,6 +185,36 @@ private:
 	/** Incremented each time a new task is launched; stale task completions are silently discarded. */
 	TAtomic<uint32> GenerationId { 0 };
 
+	/** Previous mesh data for smooth transitions during LOD changes. */
+	FVoxelMeshOutput PreviousMesh;
+
+	/** Current mesh output for state management. */
+	FVoxelMeshOutput MeshOutput;
+
+	/** Target LOD for smooth transitions. */
+	int32 TargetLOD { 0 };
+
+	/** Transition progress (0.0 to 1.0) for smooth LOD blending. */
+	float TransitionProgress { 0.0f };
+
+	/** Time when transition started for timing-based blending. */
+	float TransitionStartTime { 0.0f };
+
+	/** Duration of LOD transitions in seconds. */
+	static constexpr float TransitionDuration = 0.2f;
+
 	void ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask);
 	void UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat);
+
+	/** Build water surface mesh from WaterData. Internal — call RebuildWaterMesh() instead. */
+	void BuildWaterMeshInternal();
+
+	/** Update mesh state and handle transitions. */
+	void UpdateMeshState();
+
+	/** Blend between two mesh outputs for smooth transitions. */
+	void BlendMeshes(const FVoxelMeshOutput& From, const FVoxelMeshOutput& To, float Alpha);
+
+	/** Set mesh visibility while maintaining proper state. */
+	void SetMeshVisibility(bool bVisible);
 };

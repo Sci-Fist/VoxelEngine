@@ -25,6 +25,9 @@ public:
 	static void InitLogger();
 
 private:
+	/** Critical section for thread-safe logging from background tasks. */
+	static FCriticalSection LogLock;
+
 	/** Absolute path of the current session's log file. */
 	static FString LogFilePath;
 
@@ -35,4 +38,5 @@ private:
 	 * call so each PIE session gets its own fresh file.
 	 */
 	static IFileHandle* FileHandle;
+	static bool bLogInitFailed;
 };

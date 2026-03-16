@@ -60,6 +60,19 @@ public:
 	const TArray<FTransform>& GetTreeTransforms()  const { return LegacyTreeTransforms;  }
 	const TArray<FTransform>& GetGrassTransforms() const { return LegacyGrassTransforms; }
 
+	/**
+	 * World-voxel coordinates of detected water source positions for this chunk.
+	 * These are terrain depressions and skyland pool surfaces where water should spawn.
+	 * Populated by PlaceWaterSources() — consumed by AVoxelChunk::ApplyMesh().
+	 */
+	const TArray<FIntVector>& GetWaterSources() const { return WaterSources; }
+
+	/**
+	 * Raw terrain density field, size = (ChunkSize/StepSize + 3)^3.
+	 * Exposed so AVoxelChunk can build FVoxelWaterData::SolidCells without re-running noise.
+	 */
+	const TArray<float>& GetDensities() const { return Densities; }
+
 private:
 	// --- Inputs ---
 	FIntVector             ChunkCoord;
@@ -93,11 +106,23 @@ private:
 	TArray<float> Densities;
 	TArray<FVoxelBiomeWeightMap> ColumnWeights; // Cache for foliage speedups
 
+	// Water source positions (world-voxel coords) detected during generation.
+	TArray<FIntVector> WaterSources;
 
 	void BuildDensityField();
-
+	void PostProcessDensities(int32 TotalSamples);
 	void BuildMesh();
+
 	void CalculateFoliage();
+	void ProcessLegacyFoliage(const FVector& Center, float SlopeZ, const FVoxelBiomeWeightMap& TriWeights, const FVector& WorldCenter);
+
+
+	/**
+	 * Scan the density field for terrain depressions and skyland flat surfaces
+	 * suitable for water pools/springs.  Populates WaterSources.
+	 * Called after BuildMesh() so we have both density and mesh normal data.
+	 */
+	void PlaceWaterSources();
 
 	FThreadSafeBool bCancelled { false };
 };

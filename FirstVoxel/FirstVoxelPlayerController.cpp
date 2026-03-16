@@ -1,7 +1,7 @@
 // FirstVoxelPlayerController.cpp
 #include "FirstVoxelPlayerController.h"
 #include "UI/VoxelMapWidget.h"
-#include "Voxel/Core/VoxelWorld.h"
+#include "Voxel/Core/World/VoxelWorld.h"
 #include "Voxel/Core/VoxelChunk.h"
 
 #include "CoreMinimal.h"

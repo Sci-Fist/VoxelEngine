@@ -40,7 +40,8 @@ struct FIRSTVOXEL_API FVoxelDensityGenerator : public IVoxelDensityProvider
     virtual float GetDensityFull(const FVector& WorldPos,
                                  const FVoxelBiomeWeightMap& Weights,
                                  float SurfaceHeight,
-                                 const FVoxelGenerationConfig& Config) override;
+                                 const FVoxelGenerationConfig& Config,
+                                 int32 StepSize = 1) override;
 
     // ---- World anchor constants ----
     // TerrainMidZ: Z=0 is sea level and the world origin for chunk coordinate math.

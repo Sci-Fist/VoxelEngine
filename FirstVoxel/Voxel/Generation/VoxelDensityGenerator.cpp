@@ -62,7 +62,8 @@ float FVoxelDensityGenerator::GetDensityFull(
     const FVector&              WorldPos,
     const FVoxelBiomeWeightMap& Weights,
     float                       SurfaceHeight,
-    const FVoxelGenerationConfig& Config)
+    const FVoxelGenerationConfig& Config,
+    int32 StepSize)
 {
     const float X = WorldPos.X, Y = WorldPos.Y, Z = WorldPos.Z;
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
@@ -78,8 +79,8 @@ float FVoxelDensityGenerator::GetDensityFull(
     //  Positive = solid, negative = air.
     // ============================================================
     float SurfD = FVoxelBiomeManager::GetBaseSurfaceDensity(Z, SurfaceHeight, Config);
-    // Clamp so one bad column (e.g. extreme surface height) cannot force a whole chunk solid/air.
-    SurfD = FMath::Clamp(SurfD, -2.f, 2.f);
+    // Clamp removed to preserve smooth interpolation gradient.
+
 
     // Optional overhangs: protrusions on steep cliff/peak faces near the surface.
     // Gated on SteepnessWeight > 0.05 so flat plains never pay the noise cost.
@@ -179,12 +180,22 @@ float FVoxelDensityGenerator::GetDensityFull(
     if (Z >= SkyLowerBound)
     {
         SkyD = FVoxelBiomeGenerators::GetSkylandDensity(
-            X, Y, Z, SurfaceHeight, Weights, Config);
+            X, Y, Z, SurfaceHeight, Weights, Config, StepSize);
     }
 
-    // Combine: max() ensures skylands always override empty air,
-    // while surface terrain fills in where no island exists.
-    return FMath::Clamp(FMath::Max(SkyD, SurfD), -2.f, 2.f);
+    // Final composition: Terrain takes precedence, skylands override air above.
+    // Water is NOT part of the density field:
+    //   - Ocean surface is a flat UStaticMeshComponent driven by VoxelWaterComponent.
+    //   - Voxel pools and flow are simulated by FVoxelWaterSimulator post-generation.
+    // Adding water density here caused two bugs:
+    //   (a) WaterD=1.5 below SeaLevel re-solidified carved caves -> filled entire chunks.
+    //   (b) Skyland depression sampling ran 8x GetBiomeWeightsStatic per skyland voxel -> massive perf hit.
+
+    // Final composition: Terrain takes precedence, skylands override air above.
+    float FinalDensity = FMath::Max(SkyD, SurfD);
+
+    return FinalDensity;
+
 }
 
 // ============================================================

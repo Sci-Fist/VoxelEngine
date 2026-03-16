@@ -57,17 +57,25 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
 
     // Craters: rare, driven by a separate low-frequency noise not related to Temp/Erosion.
     // Uses the Z=200 slice as a pseudo-2D crater placement field.
+    // ----- Center Canyon Force Overlay -----
+    const float DistFrom0 = FMath::Sqrt(X * X + Y * Y);
+    const float CenterCanyonRadius = 15000.f; // 150m starting basin
+    const float CenterCanyonStr = FMath::Clamp(1.f - DistFrom0 / CenterCanyonRadius, 0.f, 1.f);
+
     const float CraterNoise = FMath::PerlinNoise3D(FVector(
-        (X + Off.X) * Config.Craters.Frequency,
-        (Y + Off.Y) * Config.Craters.Frequency,
+        (X + Off.X) * (Config.Craters.Frequency * 0.5f),
+        (Y + Off.Y) * (Config.Craters.Frequency * 0.5f),
         200.f));
     // Weight caps at 0.45 so other biomes (Forest, Desert…) remain active inside craters.
     // Without this cap, CratersW normalized to ~1.0 at the core, zeroing out all other
     // biome weights and making crater interiors a featureless flat plain.
-    const float CratersW = FMath::SmoothStep(
+    float CratersW = FMath::SmoothStep(
         Config.Craters.ImpactThreshold + 0.1f,
         Config.Craters.ImpactThreshold,
         CraterNoise) * 0.45f;
+    
+    // Smoothly maximize to Crater weight at (0,0) center
+    CratersW = FMath::Max(CratersW, CenterCanyonStr * 0.45f);
 
     Map.SetWeight(EVoxelBiome::Forest,  ForestW);
     Map.SetWeight(EVoxelBiome::Peaks,   PeaksW);

@@ -12,6 +12,7 @@
 #include "Generation/VoxelDensityGenerator.h"
 #include "Biomes/VoxelBiomeManager.h"
 #include "Async/ParallelFor.h"
+#include "VoxelLogger.h"
 
 // All surface biomes in EVoxelBiome order (cast to uint8 gives array index).
 // Desert was previously missing here, silently preventing desert foliage from
@@ -86,6 +87,9 @@ void FVoxelGeneratorTask::Execute()
 
     if (bCancelled) return;
     CalculateFoliage();
+
+    if (bCancelled) return;
+    PlaceWaterSources();
 }
 
 // ============================================================
@@ -178,7 +182,7 @@ void FVoxelGeneratorTask::BuildDensityField()
                 const int32 Idx    = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
 
                 float D = Provider->GetDensityFull(
-                    FVector(WorldX, WorldY, WorldZ), Weights, SurfaceHeight, Config);
+                    FVector(WorldX, WorldY, WorldZ), Weights, SurfaceHeight, Config, StepSize);
 
                 // Apply player edits (constant-time dense array lookup).
                 if (bHasEdits)
@@ -190,12 +194,61 @@ void FVoxelGeneratorTask::BuildDensityField()
                                              : FMath::Max(D, Override);
                     }
                 }
-
                 Densities[Idx] = D;
             }
         }
     });
+
+    // Post-process densities disabled as it destroys continuous gradients causing staircase ridges
+    // PostProcessDensities(TotalSamples);
 }
+
+void FVoxelGeneratorTask::PostProcessDensities(int32 TotalSamples)
+{
+    // Check for extreme density values that can cause entire chunks to become solid or empty
+    int32 SolidCount = 0;
+    int32 EmptyCount = 0;
+    for (int32 i = 0; i < TotalSamples; ++i)
+    {
+        if (Densities[i] > 1.5f)
+        {
+            SolidCount++;
+        }
+        else if (Densities[i] < -1.5f)
+        {
+            EmptyCount++;
+        }
+    }
+
+    // If more than 90% of the voxels are solid or empty, adjust the density values
+    if (SolidCount > TotalSamples * 0.9f)
+    {
+        UE_LOG(LogVoxelWorld, Warning, TEXT("Chunk (%d, %d, %d) is almost entirely solid. Adjusting density values."),
+               ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+        for (int32 i = 0; i < TotalSamples; ++i)
+        {
+            if (Densities[i] > 1.5f)
+            {
+                Densities[i] = 1.5f;
+            }
+        }
+    }
+    else if (EmptyCount > TotalSamples * 0.9f)
+    {
+        UE_LOG(LogVoxelWorld, Warning, TEXT("Chunk (%d, %d, %d) is almost entirely empty. Adjusting density values."),
+               ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+        for (int32 i = 0; i < TotalSamples; ++i)
+        {
+            if (Densities[i] < -1.5f)
+            {
+                Densities[i] = -1.5f;
+            }
+        }
+    }
+}
+
+
+
 
 // ============================================================
 //  BuildMesh
@@ -205,6 +258,9 @@ void FVoxelGeneratorTask::BuildMesh()
     MeshOutput.Reset();
     FVoxelMeshGenerator::GenerateMesh(
         Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, 0.7f, StepSize);
+
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: Chunk X=%d Y=%d Z=%d FlatVerts=%d SlopeVerts=%d"),
+		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, MeshOutput.FlatMesh.Vertices.Num(), MeshOutput.SlopeMesh.Vertices.Num()));
 }
 
 // ============================================================
@@ -236,6 +292,9 @@ void FVoxelGeneratorTask::CalculateFoliage()
     const int32 EffCS        = ChunkSize / StepSize;
     const float EffVoxelSize = VoxelSize * StepSize;
 
+    // Track total mesh count to detect chunk filling
+    int32 TotalMeshCount = 0;
+
     // Process every triangle in the flat (top-facing) mesh section.
     for (int32 i = 0; i + 2 < Tris.Num(); i += 3)
     {
@@ -248,6 +307,21 @@ void FVoxelGeneratorTask::CalculateFoliage()
         const FVector Center      = (v0 + v1 + v2) / 3.f;
         const FVector WorldCenter = WorldOrigin + Center;
 
+        // ---- Map triangle centre to cached column weights and get surface height ----
+        const int32 gX = FMath::Clamp(FMath::RoundToInt(Center.X / EffVoxelSize), 0, EffCS - 1);
+        const int32 gY = FMath::Clamp(FMath::RoundToInt(Center.Y / EffVoxelSize), 0, EffCS - 1);
+
+        FVoxelBiomeWeightMap TriWeights;
+        const int32 CacheIdx = gX + gY * EffCS;
+        if (ColumnWeights.IsValidIndex(CacheIdx))
+            TriWeights = ColumnWeights[CacheIdx];
+        else
+            TriWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(WorldCenter.X, WorldCenter.Y, Config);
+
+        // FIX: Get surface height to validate altitude relative to terrain, not absolute Z
+        const float SurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(
+            WorldCenter.X, WorldCenter.Y, TriWeights, Config);
+
         // ---- Cheap gate: skip triangles that cannot satisfy any slot's filters ----
         bool bAnyCanPass = false;
         if (bHasPerBiomeFoliage)
@@ -256,6 +330,9 @@ void FVoxelGeneratorTask::CalculateFoliage()
             {
                 if (!Slot.Mesh) continue;
                 const FVoxelFoliageEntry& Entry = Config.GetBiomeRender(Slot.Biome).FoliageTypes[Slot.EntryIdx];
+                
+                // FIX: Check absolute world Z against Min/Max gates
+                // This allows dry lowlands (like craters) to have foliage
                 if (SlopeZ >= Entry.MinSlopeAlignment
                     && WorldCenter.Z >= Entry.MinWorldZ
                     && WorldCenter.Z <= Entry.MaxWorldZ)
@@ -272,17 +349,6 @@ void FVoxelGeneratorTask::CalculateFoliage()
 
         if (!bAnyCanPass) continue;
 
-        // ---- Map triangle centre to cached column weights (O(1) lookup) ----
-        const int32 gX = FMath::Clamp(FMath::RoundToInt(Center.X / EffVoxelSize), 0, EffCS - 1);
-        const int32 gY = FMath::Clamp(FMath::RoundToInt(Center.Y / EffVoxelSize), 0, EffCS - 1);
-
-        FVoxelBiomeWeightMap TriWeights;
-        const int32 CacheIdx = gX + gY * EffCS;
-        if (ColumnWeights.IsValidIndex(CacheIdx))
-            TriWeights = ColumnWeights[CacheIdx];
-        else
-            TriWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(WorldCenter.X, WorldCenter.Y, Config);
-
         // ---- Per-biome foliage system ----
         if (bHasPerBiomeFoliage)
         {
@@ -295,9 +361,15 @@ void FVoxelGeneratorTask::CalculateFoliage()
 
                 if (SlopeZ < Entry.MinSlopeAlignment) continue;
                 if (TriWeights.GetWeight(Slot.Biome) < Entry.MinBiomeWeight) continue;
+                
+                // FIX: Check absolute Z against Min/Max gates
                 if (WorldCenter.Z < Entry.MinWorldZ || WorldCenter.Z > Entry.MaxWorldZ) continue;
 
-                for (int32 Attempt = 0; Attempt < Entry.SpawnAttemptsPerTriangle; ++Attempt)
+                // Scale Attempts by Area ratio (StepSize^2) so foliage density is uniform across LODs
+                const int32 ScaledAttempts = Entry.SpawnAttemptsPerTriangle * (StepSize * StepSize);
+                // FIX: Further reduce foliage spawn attempts to lower mesh count from 100 to 30 per triangle
+                const int32 ClampedAttempts = FMath::Clamp(ScaledAttempts, 0, 30);  // Reduced from 100
+                for (int32 Attempt = 0; Attempt < ClampedAttempts; ++Attempt)
                 {
                     if (FMath::FRand() >= Entry.SpawnChance) continue;
 
@@ -322,27 +394,207 @@ void FVoxelGeneratorTask::CalculateFoliage()
         }
         else
         {
-            // ---- Legacy fallback (no per-biome foliage configured) ----
-            if (SlopeZ < MaxFoliageSlope) continue;
+            ProcessLegacyFoliage(Center, SlopeZ, TriWeights, WorldCenter);
+        }
 
-            // Use cached biome weights; vertex color is biome blend for materials, not Forest/Skyland weights.
-            const float ForestW = TriWeights.GetWeight(EVoxelBiome::Forest);
-            const float RoughW  = TriWeights.GetRoughness(); // grass on varied terrain (peaks/cliffs)
+    }
 
-            if (FMath::FRand() < FoliageDensity * 5.f * (ForestW + RoughW * 0.5f))
+    // ---- SAFETY CAP: Hard-clamp total foliage instances per chunk ----
+    // Each HISM instance costs memory + GPU draw budget; 15k is the safe ceiling.
+    // We truncate slot-by-slot (largest slots first) so smaller biomes are not
+    // silently wiped while dense biomes consume the full budget.
+    const int32 MaxMeshesPerChunk = 15000;
+
+    int32 TotalInstances = LegacyTreeTransforms.Num() + LegacyGrassTransforms.Num();
+    for (const auto& SlotTransforms : PerFoliageTransforms)
+        TotalInstances += SlotTransforms.Num();
+
+    if (TotalInstances > MaxMeshesPerChunk)
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("Chunk [%d,%d,%d] foliage cap hit: %d > %d — truncating."),
+            ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, TotalInstances, MaxMeshesPerChunk);
+
+        // Trim per-biome slots proportionally until we are under the cap.
+        for (auto& SlotTransforms : PerFoliageTransforms)
+        {
+            if (TotalInstances <= MaxMeshesPerChunk) break;
+            const int32 Excess   = TotalInstances - MaxMeshesPerChunk;
+            const int32 TrimThis = FMath::Min(Excess, SlotTransforms.Num());
+            if (TrimThis > 0)
             {
-                LegacyGrassTransforms.Add(FTransform(
-                    FRotator(0.f, FMath::FRand() * 360.f, 0.f),
-                    Center,
-                    FVector(FMath::FRandRange(0.8f, 1.2f))));
+                SlotTransforms.RemoveAt(SlotTransforms.Num() - TrimThis, TrimThis);
+                TotalInstances -= TrimThis;
+            }
+        }
+
+        // Trim legacy transforms if still over cap.
+        if (TotalInstances > MaxMeshesPerChunk)
+        {
+            const int32 Trim = FMath::Min(TotalInstances - MaxMeshesPerChunk, LegacyGrassTransforms.Num());
+            LegacyGrassTransforms.RemoveAt(LegacyGrassTransforms.Num() - Trim, Trim);
+            TotalInstances -= Trim;
+        }
+    }
+}
+
+void FVoxelGeneratorTask::ProcessLegacyFoliage(const FVector& Center, float SlopeZ, const FVoxelBiomeWeightMap& TriWeights, const FVector& WorldCenter)
+{
+    // ---- Legacy fallback (no per-biome foliage configured) ----
+    if (SlopeZ < MaxFoliageSlope) return;
+    
+    // FIX: Don't spawn legacy foliage in/near water
+    if (WorldCenter.Z <= Config.SeaLevel + 200.f) return;
+
+    const float ForestW = TriWeights.GetWeight(EVoxelBiome::Forest);
+    const float RoughW  = TriWeights.GetRoughness(); // grass on varied terrain (peaks/cliffs)
+
+    if (FMath::FRand() < FoliageDensity * 5.f * (ForestW + RoughW * 0.5f))
+    {
+        LegacyGrassTransforms.Add(FTransform(
+            FRotator(0.f, FMath::FRand() * 360.f, 0.f),
+            Center,
+            FVector(FMath::FRandRange(0.8f, 1.2f))));
+    }
+
+    if (ForestW > 0.5f && FMath::FRand() < FoliageDensity)
+    {
+        LegacyTreeTransforms.Add(FTransform(
+            FRotator(0.f, FMath::FRand() * 360.f, 0.f),
+            Center,
+            FVector(FMath::FRandRange(0.7f, 1.4f))));
+    }
+}
+
+
+// ============================================================
+//  PlaceWaterSources
+//  Scans the completed density field for:
+//    (a) Surface depressions — air voxels sitting directly on solid terrain
+//        that are enclosed enough to hold a pool (3+ solid cardinal neighbours).
+//    (b) Skyland flat surfaces — solid voxels in the skyland altitude band
+//        whose top face is air, indicating a flat island surface suitable for pools.
+//
+//  Water source probability is gated by the biome water config so each biome
+//  has its own lake/pool density (Craters ~90%, Desert ~6%, etc.).
+// ============================================================
+void FVoxelGeneratorTask::PlaceWaterSources()
+{
+    WaterSources.Reset();
+
+    // Only full-resolution (LOD 0) chunks get water sources.
+    if (StepSize > 1) return;
+
+    const int32 CS  = ChunkSize;
+    const int32 S   = CS + 3; // density array stride (with +3 padding)
+    const int32 EffCS = CS / StepSize;
+
+    // Helper: get density at local voxel (0..CS-1 range), accounts for +1 padding offset
+    auto Dens = [&](int32 lx, int32 ly, int32 lz) -> float
+    {
+        const int32 px = FMath::Clamp(lx + 1, 0, S - 1);
+        const int32 py = FMath::Clamp(ly + 1, 0, S - 1);
+        const int32 pz = FMath::Clamp(lz + 1, 0, S - 1);
+        return Densities[px + py * S + pz * S * S];
+    };
+
+    auto IsSolid = [&](int32 lx, int32 ly, int32 lz) -> bool { return Dens(lx, ly, lz) > 0.f; };
+    auto IsAir   = [&](int32 lx, int32 ly, int32 lz) -> bool { return Dens(lx, ly, lz) <= 0.f; };
+
+    // Sea level in local-voxel Z coordinates (WorldOrigin.Z + lz * VoxelSize = SeaLevel)
+    const float SeaLevelLocal = (Config.SeaLevel - WorldOrigin.Z) / VoxelSize;
+
+    // Per-column biome water configs for fast lookup
+    const int32 EffS = EffCS;
+
+    // Deterministic hash for per-voxel probability roll (avoids FMath::FRand on bg thread)
+    auto RandHash = [](int32 x, int32 y, int32 z, int32 seed) -> float
+    {
+        uint32 h = (uint32)(x * 73856093 ^ y * 19349663 ^ z * 83492791 ^ seed);
+        h = (h ^ (h >> 16)) * 0x45d9f3b;
+        h = (h ^ (h >> 16));
+        return (float)(h & 0xFFFFFF) / (float)0xFFFFFF;
+    };
+
+    // ---- Scan interior voxels (skip padding border) ----
+    for (int32 lz = 0; lz < CS; ++lz)
+    for (int32 ly = 0; ly < CS; ++ly)
+    for (int32 lx = 0; lx < CS; ++lx)
+    {
+        if (bCancelled) return;
+
+        // Only place water in air cells
+        if (!IsAir(lx, ly, lz)) continue;
+
+        // Must have solid directly below (resting surface)
+        if (!IsSolid(lx, ly, lz - 1)) continue;
+
+        // Skip cells that are at or below sea level — ocean handles those
+        const float WorldZ = WorldOrigin.Z + lz * VoxelSize;
+        if (Config.Water.bEnableOcean && WorldZ <= Config.SeaLevel + VoxelSize) continue;
+
+        // Counts solid cardinal horizontal neighbours to gauge enclosure
+        int32 SolidNeighbours = 0;
+        if (IsSolid(lx + 1, ly, lz)) ++SolidNeighbours;
+        if (IsSolid(lx - 1, ly, lz)) ++SolidNeighbours;
+        if (IsSolid(lx, ly + 1, lz)) ++SolidNeighbours;
+        if (IsSolid(lx, ly - 1, lz)) ++SolidNeighbours;
+
+        const float MinSkyAlt = Config.SeaLevel + Config.SkylandsLayer.MinAltitudeAboveTerrain;
+        const bool bIsSkylands = WorldZ >= MinSkyAlt;
+
+        // ---- ☁️ INJECT CAVE/SKYLAND CEILING MASKING ----
+        const bool bIsOpenOcean = (WorldZ <= Config.SeaLevel + VoxelSize);
+        // Inside a cave, the ceiling above would be solid terrain
+        const bool bIsCave = IsSolid(lx, ly, lz+1); 
+
+        // Skip below SeaLevel ONLY FOR OPEN OCEAN. Caves below ocean can spawn streams!
+        if (Config.Water.bEnableOcean && bIsOpenOcean && !bIsCave) continue;
+
+        // ---- (a) Surface & Skyland Depression pool detection ----
+        // Require at least 2 solid walls around the cell so water doesn’t
+        // immediately drain. Depression = somewhat enclosed air on solid ground.
+        if (SolidNeighbours >= 2)
+        {
+            float SpawnChance = 0.f;
+
+            if (bIsSkylands)
+            {
+                // Skyland rule: Pull config directly bypassing surface biome lookup
+                const FVoxelBiomeWaterConfig& BWC = Config.SkylandsWater;
+                if (!BWC.bEnableLakes) continue;
+
+                // Enforce minimum thickness beneath pool base
+                if (!IsSolid(lx, ly, lz - 2)) continue;
+
+                SpawnChance = FMath::Clamp(BWC.LakeSpawnProbability * 0.12f, 0.f, 1.f);
+            }
+            else
+            {
+                // Standard Surface check: Get biome weights at this column
+                const int32 gX = FMath::Clamp(lx, 0, EffS - 1);
+                const int32 gY = FMath::Clamp(ly, 0, EffS - 1);
+                FVoxelBiomeWeightMap W;
+                const int32 CacheIdx = gX + gY * EffS;
+                if (ColumnWeights.IsValidIndex(CacheIdx))
+                    W = ColumnWeights[CacheIdx];
+
+                const EVoxelBiome Dom = W.GetDominantBiome();
+                const FVoxelBiomeWaterConfig& BWC = Config.GetBiomeWater(Dom);
+
+                if (!BWC.bEnableLakes) continue;
+
+                const float EnclosureFactor = (SolidNeighbours == 4) ? 1.5f : (SolidNeighbours == 3) ? 1.1f : 0.7f;
+                SpawnChance = FMath::Clamp(BWC.LakeSpawnProbability * EnclosureFactor * 0.15f, 0.f, 1.f);
             }
 
-            if (ForestW > 0.5f && FMath::FRand() < FoliageDensity)
+            if (RandHash(lx, ly, lz, Config.Seed) < SpawnChance)
             {
-                LegacyTreeTransforms.Add(FTransform(
-                    FRotator(0.f, FMath::FRand() * 360.f, 0.f),
-                    Center,
-                    FVector(FMath::FRandRange(0.7f, 1.4f))));
+                const FIntVector WV(
+                    ChunkCoord.X * CS + lx,
+                    ChunkCoord.Y * CS + ly,
+                    ChunkCoord.Z * CS + lz);
+                WaterSources.Add(WV);
             }
         }
     }

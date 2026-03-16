@@ -57,6 +57,10 @@ protected:
      * Map widget class.
      * Defaults to UVoxelMapWidget (pure C++, no Blueprint needed).
      * Override with a Blueprint subclass (WBP_VoxelMap) to customise the layout.
+     * 
+     * Note: Combat and Side-Scrolling variants have their own specialized player
+     * controllers (CombatPlayerController and SideScrollingPlayerController) that
+     * are currently unused but preserved for future development.
      */
     UPROPERTY(EditDefaultsOnly, Category="UI|Map",
         meta=(ToolTip="Widget class for the world map. Defaults to UVoxelMapWidget. Assign a Blueprint subclass to override layout."))

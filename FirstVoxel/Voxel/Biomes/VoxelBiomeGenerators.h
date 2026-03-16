@@ -64,7 +64,8 @@ struct FIRSTVOXEL_API FVoxelBiomeGenerators
         float X, float Y, float Z,
         float SurfaceHeight,
         const FVoxelBiomeWeightMap& Weights,
-        const FVoxelGenerationConfig& Config);
+        const FVoxelGenerationConfig& Config,
+        int32 StepSize = 1);
 
     // ----------------------------------------------------------------
     // CAVE LAYER â€” CRYSTAL CAVERNS

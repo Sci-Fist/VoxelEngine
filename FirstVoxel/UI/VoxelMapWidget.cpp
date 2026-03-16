@@ -4,7 +4,7 @@
 // and the FVector2f + FSlateLayoutTransform overload of ToPaintGeometry.
 
 #include "UI/VoxelMapWidget.h"
-#include "Voxel/Core/VoxelWorld.h"
+#include "Voxel/Core/World/VoxelWorld.h"
 #include "Voxel/VoxelMapGenerator.h"
 #include "Voxel/Biomes/VoxelBiomeManager.h"
 

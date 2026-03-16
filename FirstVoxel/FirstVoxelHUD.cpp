@@ -5,9 +5,9 @@
 #include "FirstVoxelHUD.h"
 #include "Engine/Canvas.h"
 #include "FirstVoxelCharacter.h"
-#include "Variant_Combat/CombatCharacter.h"
-#include "Variant_SideScrolling/SideScrollingCharacter.h"
-#include "Variant_Platforming/PlatformingCharacter.h"
+// #include "Variant_Combat/CombatCharacter.h"
+// #include "Variant_SideScrolling/SideScrollingCharacter.h"
+// #include "Variant_Platforming/PlatformingCharacter.h"
 
 
 // ---------------------------------------------------------------------------
@@ -80,47 +80,16 @@ void AFirstVoxelHUD::DrawHUD()
     // ── Control rows ──────────────────────────────────────────────────────
     const FColor& BC = bGamepad ? ColBadgeGP : ColBadgeKB;
 
-    // [Expert Refactor] Adaptive Variant Character Hint Lists
-    ACombatCharacter* CombatChar = nullptr;
-    ASideScrollingCharacter* SideChar = nullptr;
-    APlatformingCharacter* PlatChar = nullptr;
-
-    if (APawn* Pawn = GetOwningPawn())
-    {
-        CombatChar = Cast<ACombatCharacter>(Pawn);
-        SideChar = Cast<ASideScrollingCharacter>(Pawn);
-        PlatChar = Cast<APlatformingCharacter>(Pawn);
-    }
-
     if (bGamepad)
     {
-        if (CombatChar)
-        {
-            DrawRow(this, X, Y, LineH, TEXT("[RT]"),           BC, TEXT(": Combo Attack"),     ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[LT]"),           BC, TEXT(": Charged Attack"),   ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[B]"),            BC, TEXT(": Toggle Camera"),    ColAction, SmallFont);
-        }
-        else if (SideChar)
-        {
-            DrawRow(this, X, Y, LineH, TEXT("[A]"),            BC, TEXT(": Jump / Wall Jump"), ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[B]"),            BC, TEXT(": Drop from Platform"), ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[X]"),            BC, TEXT(": Interact"),         ColAction, SmallFont);
-        }
-        else if (PlatChar)
-        {
-            DrawRow(this, X, Y, LineH, TEXT("[RT]"),           BC, TEXT(": Dash Action"),      ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[A]"),            BC, TEXT(": Multi-Jump / Wall"), ColAction, SmallFont);
-        }
-        else // Default voxel character hints
-        {
-            DrawRow(this, X, Y, LineH, TEXT("[RT]"),           BC, TEXT(": Dig"),              ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[LT]"),           BC, TEXT(": Build"),            ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[RB] / [LB]"),    BC, TEXT(": Brush Radius +/-"), ColAction, SmallFont);
-            DrawText(FString::Printf(TEXT("Brush Size : [%.f]"), BrushRad), FLinearColor(ColBrush), X, Y, SmallFont); Y += LineH + 6.f;
-            DrawRow(this, X, Y, LineH, TEXT("[B]"),            BC, TEXT(": Toggle Flight"),    ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[A]"),            BC, TEXT(": Jump / Fly Up"),    ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[X]"),            BC, TEXT(": Fly Down"),         ColAction, SmallFont);
-        }
+        // Default voxel character hints
+        DrawRow(this, X, Y, LineH, TEXT("[RT]"),           BC, TEXT(": Dig"),              ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[LT]"),           BC, TEXT(": Build"),            ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[RB] / [LB]"),    BC, TEXT(": Brush Radius +/-"), ColAction, SmallFont);
+        DrawText(FString::Printf(TEXT("Brush Size : [%.f]"), BrushRad), FLinearColor(ColBrush), X, Y, SmallFont); Y += LineH + 6.f;
+        DrawRow(this, X, Y, LineH, TEXT("[B]"),            BC, TEXT(": Toggle Flight"),    ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[A]"),            BC, TEXT(": Jump / Fly Up"),    ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[X]"),            BC, TEXT(": Fly Down"),         ColAction, SmallFont);
 
         DrawRow(this, X, Y, LineH, TEXT("[Y] / Start"),    BC, TEXT(": Map"),              ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[Left Stick]"),   BC, TEXT(": Move"),             ColAction, SmallFont);
@@ -128,33 +97,14 @@ void AFirstVoxelHUD::DrawHUD()
     }
     else
     {
-        if (CombatChar)
-        {
-            DrawRow(this, X, Y, LineH, TEXT("[LMB]"),          BC, TEXT(": Combo Attack"),     ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[RMB]"),          BC, TEXT(": Charged Attack"),   ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[F]"),            BC, TEXT(": Toggle Camera"),    ColAction, SmallFont);
-        }
-        else if (SideChar)
-        {
-            DrawRow(this, X, Y, LineH, TEXT("[Space]"),        BC, TEXT(": Jump / Wall Jump"), ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[Ctrl]"),         BC, TEXT(": Drop from Platform"), ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[E]"),            BC, TEXT(": Interact"),         ColAction, SmallFont);
-        }
-        else if (PlatChar)
-        {
-            DrawRow(this, X, Y, LineH, TEXT("[Shift]"),        BC, TEXT(": Dash"),             ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[Space]"),        BC, TEXT(": Multi-Jump / Wall"), ColAction, SmallFont);
-        }
-        else
-        {
-            DrawRow(this, X, Y, LineH, TEXT("[LMB]"),          BC, TEXT(": Dig (hold)"),       ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[RMB]"),          BC, TEXT(": Build (hold)"),     ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[Scroll]"),       BC, TEXT(": Brush Radius +/-"), ColAction, SmallFont);
-            DrawText(FString::Printf(TEXT("Brush Size : [%.f]"), BrushRad), FLinearColor(ColBrush), X, Y, SmallFont); Y += LineH + 6.f;
-            DrawRow(this, X, Y, LineH, TEXT("[F]"),            BC, TEXT(": Toggle Flight"),    ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[Space]"),        BC, TEXT(": Jump / Fly Up"),    ColAction, SmallFont);
-            DrawRow(this, X, Y, LineH, TEXT("[Ctrl]"),         BC, TEXT(": Fly Down"),         ColAction, SmallFont);
-        }
+        // Default voxel character hints
+        DrawRow(this, X, Y, LineH, TEXT("[LMB]"),          BC, TEXT(": Dig (hold)"),       ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[RMB]"),          BC, TEXT(": Build (hold)"),     ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[Scroll]"),       BC, TEXT(": Brush Radius +/-"), ColAction, SmallFont);
+        DrawText(FString::Printf(TEXT("Brush Size : [%.f]"), BrushRad), FLinearColor(ColBrush), X, Y, SmallFont); Y += LineH + 6.f;
+        DrawRow(this, X, Y, LineH, TEXT("[F]"),            BC, TEXT(": Toggle Flight"),    ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[Space]"),        BC, TEXT(": Jump / Fly Up"),    ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[Ctrl]"),         BC, TEXT(": Fly Down"),         ColAction, SmallFont);
 
         DrawRow(this, X, Y, LineH, TEXT("[M]"),            BC, TEXT(": Map"),              ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[WASD]"),         BC, TEXT(": Move"),             ColAction, SmallFont);
