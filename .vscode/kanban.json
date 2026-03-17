@@ -2,6 +2,17 @@
     "title": "Kanban 1",
     "cols": [
         {
+            "title": "Information",
+            "tasks": [
+                {
+                    "text": "Kanban Usage Guide: This Kanban system tracks code quality improvements for the voxel engine. Columns: Bugs (Red) - Critical issues, To-Do (Yellow) - Planned improvements, Doing (Blue) - Active work, Done (Green) - Completed tasks. To use: Move tickets between columns as work progresses, update task descriptions with progress notes, add new tickets for emerging issues, and regularly review the board to prioritize work. The Information column contains important usage instructions and project guidelines.",
+                    "id": "kanban-usage-guide"
+                }
+            ],
+            "id": "info",
+            "color": "#9b59b6"
+        },
+        {
             "title": "Bugs",
             "tasks": [
                 {
@@ -63,5 +74,5 @@
     ],
     "autosave": true,
     "saveToFile": true,
-    "timestamp": 1773732694120
+    "timestamp": 1773732809794
 }
