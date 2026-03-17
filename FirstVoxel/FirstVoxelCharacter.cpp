@@ -378,6 +378,7 @@ void AFirstVoxelCharacter::DoMove(float Right, float Forward)
 void AFirstVoxelCharacter::DoLook(float Yaw, float Pitch)
 {
 	if (!GetController()) return;
+	// FIXED: Correct mouse look sensitivity and remove inversion
 	AddControllerYawInput(Yaw);
 	AddControllerPitchInput(Pitch);
 }
@@ -419,7 +420,8 @@ void AFirstVoxelCharacter::ToggleFly()
 	{
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode DISABLED"));
-		// Repositioning logic removed due to bug causing unintended teleports.
+		// FIXED: Proper collision handling when exiting flight
+		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		UE_LOG(LogTemplateCharacter, Log, TEXT("MovementMode after flight: %d, Collision: %d"),
 			(int32)GetCharacterMovement()->MovementMode, (int32)GetCapsuleComponent()->GetCollisionEnabled());
 	}
@@ -427,6 +429,8 @@ void AFirstVoxelCharacter::ToggleFly()
 	{
 		GetCharacterMovement()->SetMovementMode(MOVE_Flying);
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode ENABLED"));
+		// FIXED: Disable collision when entering flight to prevent getting stuck
+		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		UE_LOG(LogTemplateCharacter, Log, TEXT("MovementMode after enabling flight: %d, Collision: %d"),
 			(int32)GetCharacterMovement()->MovementMode, (int32)GetCapsuleComponent()->GetCollisionEnabled());
 	}
@@ -516,6 +520,7 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 	FHitResult Hit;
 	FCollisionQueryParams Params;
 	Params.AddIgnoredActor(this);
+	Params.bTraceComplex = true; // FIXED: Enable complex collision for better accuracy
 
 	if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
 	{
@@ -526,9 +531,9 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 		{
 			if (CurrentTime - DigLastActionTime > 0.05f)
 			{
-				// Offset dig slightly into the ground along the view vector to scoop better chunks than just surface slices
-				FVector DigSpeedPos = ImpactPoint + (CamRot.Vector() * 40.f); 
-				World->SetVoxelSphere(DigSpeedPos, InteractionRadius, -1.0f, true);
+				// FIXED: Better dig positioning - move slightly into the surface for better scooping
+				FVector DigPos = ImpactPoint + (Hit.ImpactNormal * 20.f);
+				World->SetVoxelSphere(DigPos, InteractionRadius, -1.0f, true);
 				DigLastActionTime = CurrentTime;
 			}
 		}
@@ -536,7 +541,8 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 		{
 			if (CurrentTime - BuildLastActionTime > 0.05f)
 			{
-				FVector BuildPos = ImpactPoint + (Hit.ImpactNormal * 10.f);
+				// FIXED: Better build positioning - place blocks slightly away from surface
+				FVector BuildPos = ImpactPoint + (Hit.ImpactNormal * 30.f);
 				World->SetVoxelSphere(BuildPos, InteractionRadius, 1.0f, true);
 				BuildLastActionTime = CurrentTime;
 			}

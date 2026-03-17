@@ -104,39 +104,25 @@ float FVoxelBiomeManager::GetSurfaceHeightStatic(float X, float Y, const FVoxelB
 {
     float Height = 0.f;
 
-    const float wForest  = Weights.GetWeight(EVoxelBiome::Forest);
-    const float wPeaks   = Weights.GetWeight(EVoxelBiome::Peaks);
-    const float wCliffs  = Weights.GetWeight(EVoxelBiome::Cliffs);
-    const float wMesa    = Weights.GetWeight(EVoxelBiome::Mesa);
-    const float wCraters = Weights.GetWeight(EVoxelBiome::Craters);
-    const float wDesert  = Weights.GetWeight(EVoxelBiome::Desert);
+    if (Weights.GetWeight(EVoxelBiome::Forest) > 0.01f)
+        Height += FVoxelBiomeGenerators::GetForestHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Forest);
 
-    if (wForest  > 0.f) Height += FVoxelBiomeGenerators::GetForestHeight (X, Y, Config) * wForest;
-    if (wPeaks   > 0.f) Height += FVoxelBiomeGenerators::GetPeaksHeight  (X, Y, Config) * wPeaks;
-    if (wCliffs  > 0.f) Height += FVoxelBiomeGenerators::GetCliffsHeight (X, Y, Config) * wCliffs;
-    if (wMesa    > 0.f) Height += FVoxelBiomeGenerators::GetMesaHeight   (X, Y, Config) * wMesa;
-    if (wCraters > 0.f) Height += FVoxelBiomeGenerators::GetCraterHeight (X, Y, Config) * wCraters;
-    if (wDesert  > 0.f) Height += FVoxelBiomeGenerators::GetDesertHeight (X, Y, Config) * wDesert;
+    if (Weights.GetWeight(EVoxelBiome::Desert) > 0.01f)
+        Height += FVoxelBiomeGenerators::GetDesertHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Desert);
+
+    if (Weights.GetWeight(EVoxelBiome::Peaks) > 0.01f)
+        Height += FVoxelBiomeGenerators::GetPeaksHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Peaks);
+
+    if (Weights.GetWeight(EVoxelBiome::Cliffs) > 0.01f)
+        Height += FVoxelBiomeGenerators::GetCliffsHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Cliffs);
+
+    if (Weights.GetWeight(EVoxelBiome::Mesa) > 0.01f)
+        Height += FVoxelBiomeGenerators::GetMesaHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Mesa);
+
+    if (Weights.GetWeight(EVoxelBiome::Craters) > 0.01f)
+        Height += FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Craters);
 
     return Height;
-}
-
-// ============================================================
-//  GetBaseSurfaceDensity
-//  Simple signed-distance ramp relative to the surface.
-//  +1 at surface, decreasing above and increasing below.
-// ============================================================
-float FVoxelBiomeManager::GetBaseSurfaceDensity(float Z, float SurfaceHeight, const FVoxelGenerationConfig& Config)
-{
-    return (SurfaceHeight - Z) / FMath::Max(1.f, Config.SurfaceGradientScale);
-}
-
-// ============================================================
-//  PRIVATE — noise fields
-// ============================================================
-float FVoxelBiomeManager::GetTemperature(float X, float Y, const FVoxelGenerationConfig& Config)
-{
-    return GetTemperatureWithSeed(X, Y, Config, Config.GetSeedOffset());
 }
 
 float FVoxelBiomeManager::GetErosion(float X, float Y, const FVoxelGenerationConfig& Config)

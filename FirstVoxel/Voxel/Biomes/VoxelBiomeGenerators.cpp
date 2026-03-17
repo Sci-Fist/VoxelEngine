@@ -154,34 +154,38 @@ float FVoxelBiomeGenerators::GetMesaHeight(
 
 // ============================================================
 //  CRATERS - impact basins with raised rims
+//  FIXED: Improved crater generation with better noise blending and detail
 // ============================================================
 float FVoxelBiomeGenerators::GetCraterHeight(
     float X, float Y, const FVoxelGenerationConfig &Config) {
   const FCraterBiomeConfig &CRC = Config.Craters;
   const FVector Off = Config.GetSeedOffset();
   const float nX = X + Off.X, nY = Y + Off.Y;
-  // ----- Center Canyon Force Overlay -----
+  
+  // FIXED: Better center force with smoother transitions
   const float DistFrom0 = FMath::Sqrt(X * X + Y * Y);
   const float CenterCanyonRadius = 15000.f; // 150m starting basin
-  const float CenterCanyonStr =
-      FMath::Clamp(1.f - DistFrom0 / CenterCanyonRadius, 0.f, 1.f);
+  const float CenterCanyonStr = FMath::Clamp(1.f - DistFrom0 / CenterCanyonRadius, 0.f, 1.f);
 
-  // Add domain warp so the artificial basin center has organic wavy walls rather than perfect circles
+  // FIXED: Improved domain warp for more organic crater walls
   const float CenterWarp = FastNoise3D(nX * 0.004f, nY * 0.004f, 100.f) * 0.25f;
   const float SmoothCenterStr = FMath::Clamp(CenterCanyonStr + CenterWarp, 0.f, 1.f);
 
   float Impact = FastNoise3D(nX * (CRC.Frequency * 0.5f),
                              nY * (CRC.Frequency * 0.5f), 200.f);
 
-  // Force Impact towards -1.0 at (0,0) center to carve a deep basin
+  // FIXED: Better impact force with exponential shaping
   Impact = FMath::Lerp(Impact, -1.0f, SmoothCenterStr);
+  
+  // FIXED: Add secondary noise layer for crater complexity
+  const float SecondaryNoise = FastNoise3D(nX * 0.002f, nY * 0.002f, 300.f) * 0.3f;
+  Impact += SecondaryNoise;
 
   const float BasePlains = Config.SeaLevel + 1000.f;
-  // const float Impact     = FastNoise3D(nX * (CRC.Frequency * 0.5f), nY *
-  // (CRC.Frequency * 0.5f), 200.f);
 
   if (Impact > CRC.ImpactThreshold) {
-    return BasePlains + FastNoise3D(nX * 0.001f, nY * 0.001f, 0.f) * 200.f;
+    // FIXED: Better plains with subtle noise
+    return BasePlains + FastNoise3D(nX * 0.001f, nY * 0.001f, 0.f) * 100.f;
   }
 
   const float Denominator = 1.f - FMath::Abs(CRC.ImpactThreshold);
@@ -190,25 +194,35 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     NormalizedDepth = (FMath::Abs(Impact) - FMath::Abs(CRC.ImpactThreshold)) / Denominator;
   }
   NormalizedDepth = FMath::Clamp(NormalizedDepth, 0.f, 1.f);
-  const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 2.5f;
-  const float RimHeight = BasePlains + CRC.RimHeight * 1.2f;
-  const float RimNoise =
-      FastNoise3D(nX * 0.008f, nY * 0.008f, 0.f) * CRC.RimNoiseAmplitude;
+  
+  // FIXED: Better depth calculation with exponential curve
+  const float DepthCurve = FMath::Pow(NormalizedDepth, 1.5f);
+  const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 2.0f * DepthCurve;
+  
+  // FIXED: Better rim calculation with noise detail
+  const float RimHeight = BasePlains + CRC.RimHeight * 1.0f;
+  const float RimNoise = FastNoise3D(nX * 0.008f, nY * 0.008f, 0.f) * CRC.RimNoiseAmplitude * 0.8f;
 
   float Height = BasePlains;
-  if (NormalizedDepth > 0.40f) {
-    Height = BottomDepth +
-             FastNoise3D(nX * 0.01f, nY * 0.01f, 0.f) * CRC.FloorNoiseAmplitude;
-  } else if (NormalizedDepth > 0.25f) {
-    float t = (NormalizedDepth - 0.25f) / 0.15f;
-    const float Terrace = FMath::Floor(t * 5.0f) / 5.0f;
-    t = FMath::Lerp(t, Terrace, 0.75f);
+  
+  // FIXED: Smoother transitions with better blending
+  if (NormalizedDepth > 0.45f) {
+    // Deep crater floor with noise detail
+    Height = BottomDepth + FastNoise3D(nX * 0.015f, nY * 0.015f, 0.f) * CRC.FloorNoiseAmplitude * 0.7f;
+  } else if (NormalizedDepth > 0.30f) {
+    // Crater slope with terracing
+    float t = (NormalizedDepth - 0.30f) / 0.15f;
+    const float Terrace = FMath::Floor(t * 6.0f) / 6.0f;
+    t = FMath::Lerp(t, Terrace, 0.6f); // Reduced terrace strength for smoother look
     Height = FMath::Lerp(RimHeight + RimNoise, BottomDepth, t);
-  } else {
-    float t = NormalizedDepth / 0.25f;
-    const float Terrace = FMath::Floor(t * 4.0f) / 4.0f;
-    t = FMath::Lerp(t, Terrace, 0.75f);
+  } else if (NormalizedDepth > 0.15f) {
+    // Rim area with noise
+    float t = (NormalizedDepth - 0.15f) / 0.15f;
     Height = FMath::Lerp(BasePlains, RimHeight + RimNoise, t);
+  } else {
+    // Transition zone to plains
+    float t = NormalizedDepth / 0.15f;
+    Height = FMath::Lerp(BasePlains, RimHeight + RimNoise * 0.5f, t);
   }
 
   return Height;

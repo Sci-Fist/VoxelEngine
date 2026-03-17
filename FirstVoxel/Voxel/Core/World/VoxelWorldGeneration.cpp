@@ -415,6 +415,7 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 // ============================================================
 //  ProcessInitialPlayerSpawn
 //  Validates crater/skyland height bounds and shifts player position.
+//  FIXED: Proper player positioning and hover-lock logic
 // ============================================================
 void AVoxelWorld::ProcessInitialPlayerSpawn()
 {
@@ -424,72 +425,89 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	const FVoxelGenerationConfig& Config = GetEffectiveConfig();
 	FVector Pos = Player->GetActorLocation();
 	Pos = SnapToVoxelGrid(Pos);
+	
+	// FIXED: Always center spawn at world origin (0,0) when bForceCraterSpawn is enabled
 	if (bForceCraterSpawn)
 	{
-		Pos = FindCraterSpawnLocation(Pos, Config);
+		Pos.X = 0.f;
+		Pos.Y = 0.f;
+		// Move PlayerStart to match so Play mode spawns correctly
+		TArray<AActor*> PlayerStarts;
+		UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
+		if (PlayerStarts.Num() > 0 && PlayerStarts[0])
+		{
+			if (PlayerStarts[0]->GetRootComponent()) {
+				PlayerStarts[0]->GetRootComponent()->SetMobility(EComponentMobility::Movable);
+			}
+			FVector StartPos = PlayerStarts[0]->GetActorLocation();
+			StartPos.X = 0.f;
+			StartPos.Y = 0.f;
+			PlayerStarts[0]->SetActorLocation(StartPos, false, nullptr, ETeleportType::TeleportPhysics);
+		}
 	}
-	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
-	const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
-
+	
+	// FIXED: Calculate proper spawn height based on terrain
 	const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Config);
 	const FVoxelBiomeWeightMap& Weights = Wh.Weights;
 	const float Surface = Wh.SurfaceHeight;
 
-	// --- TERRAIN-DRIVEN SKYLAND SPAWN FINDER ---
+	// Calculate safe spawn height with proper offset
+	const float SafeOffset = GetSafeSpawnHeightOffset();
+	float TargetZ = Surface + SafeOffset;
+	
+	// FIXED: Better crater handling - if we're in a crater, spawn at rim height
+	const float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
+	if (CraterWeight > 0.3f)
+	{
+		// Spawn at crater rim height for better visibility
+		TargetZ = Surface + 2000.f;
+	}
+	
+	// FIXED: Check for skylands and adjust if needed
+	const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
 	const float HeightNorm    = FMath::Clamp(Surface / SC.MaxTerrainReference, 0.f, 1.f);
 	const float RoughnessNorm = FMath::Clamp(Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
 	const float TerrainStr    = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
 	const float AltBase       = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStr);
-	const float SkyAlt        = Surface
-		+ AltBase
-		+ HeightNorm    * SC.HeightAltitudeBonus
-		+ RoughnessNorm * SC.RoughnessAltitudeBonus;
-	const float IslandHalfThick = (SC.BaseIslandSize
-		+ HeightNorm    * SC.HeightSizeBonus
-		+ RoughnessNorm * SC.RoughnessSizeBonus) * SC.ThicknessRatio;
+	const float SkyAlt        = Surface + AltBase + HeightNorm * SC.HeightAltitudeBonus + RoughnessNorm * SC.RoughnessAltitudeBonus;
+	const float IslandHalfThick = (SC.BaseIslandSize + HeightNorm * SC.HeightSizeBonus + RoughnessNorm * SC.RoughnessSizeBonus) * SC.ThicknessRatio;
 
 	const float SearchTop = SkyAlt + IslandHalfThick;
 	const float SearchBot = FMath::Max(SkyAlt - IslandHalfThick, Surface + 500.f);
 
-	const float SafeOffset = GetSafeSpawnHeightOffset();
-	float TargetZ = Surface + SafeOffset; 
-	
-	const float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
-	if (CraterWeight > 0.3f)
-	{
-		TargetZ = Surface + 3000.f;
-	}
-	
-	bool bFoundSkyland = false;
-
 	static FVoxelDensityGenerator SpawnProbe;
-	for (float z = SearchTop; z >= SearchBot; z -= 200.f)
+	bool bFoundSkyland = false;
+	
+	// FIXED: Only check for skylands if they're significantly higher than surface
+	if (SkyAlt > Surface + 5000.f)
 	{
-		if (SpawnProbe.GetDensity(Pos.X, Pos.Y, z, Config) > 0.f)
+		for (float z = SearchTop; z >= SearchBot; z -= 200.f)
 		{
-			TargetZ = z + SafeOffset;
-			bFoundSkyland = true;
-			break;
+			if (SpawnProbe.GetDensity(Pos.X, Pos.Y, z, Config) > 0.f)
+			{
+				TargetZ = z + SafeOffset;
+				bFoundSkyland = true;
+				break;
+			}
 		}
 	}
 
+	// FIXED: Set final player position immediately with proper teleport
+	Pos.Z = TargetZ;
+	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
+	
+	// FIXED: Initialize spawn tracking
 	InitialSpawnCoords.Empty();
 	bWaitingForInitialSpawn = true;
 	TargetCoordsZ = TargetZ;
 	CachedSurfaceHeight = Surface;
 
-	// Immediately suspend player high up to prevent falling into the void before async Tick cooks
-	if (Player)
-	{
-		FVector HighPos = Player->GetActorLocation();
-		HighPos.Z = TargetCoordsZ; // Match TargetCoordsZ exactly for continuous hover lock
-		Player->SetActorLocation(HighPos, false, nullptr, ETeleportType::TeleportPhysics);
-	}
-
+	// FIXED: Spawn chunks around the player position
 	const FIntVector LandCoord = WorldToChunkCoord(Pos);
 	const float ChunkHeight = ChunkSize * VoxelSize;
 	const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
 
+	// Spawn ground chunks
 	for (int32 x = -1; x <= 1; ++x)
 	{
 		for (int32 y = -1; y <= 1; ++y)
@@ -497,17 +515,23 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 			FIntVector NeighborCoord = LandCoord + FIntVector(x, y, 0);
 			SpawnChunk(NeighborCoord);
 			InitialSpawnCoords.Add(NeighborCoord);
-			// Left async cooking enabled to avoid synchronous GameThread stall (startup hang).
+		}
+	}
 
-			if (SpawnChunkZ != 0)
+	// Spawn skyland chunks if needed
+	if (bFoundSkyland && SpawnChunkZ != 0)
+	{
+		for (int32 x = -1; x <= 1; ++x)
+		{
+			for (int32 y = -1; y <= 1; ++y)
 			{
 				FIntVector SkyCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ);
 				if (!LoadedChunks.Contains(SkyCoord))
 				{
 					SpawnChunk(SkyCoord);
 					InitialSpawnCoords.Add(SkyCoord);
-					if (AVoxelChunk** Ptr = LoadedChunks.Find(SkyCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
 				}
+				
 				if (SpawnChunkZ > 0)
 				{
 					FIntVector BelowCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ - 1);
@@ -515,7 +539,6 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 					{
 						SpawnChunk(BelowCoord);
 						InitialSpawnCoords.Add(BelowCoord);
-						if (AVoxelChunk** Ptr = LoadedChunks.Find(BelowCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
 					}
 				}
 			}
