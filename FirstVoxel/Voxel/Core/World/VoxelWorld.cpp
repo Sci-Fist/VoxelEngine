@@ -85,6 +85,14 @@ void AVoxelWorld::BeginPlay()
 	// ---- Water subsystem component ----
 	if (WaterSystemComponent)
 	{
+		const FVoxelGenerationConfig& Config = GetEffectiveConfig();
+		if (WaterComponent)
+		{
+			// Disable static mesh ocean if using voxel ocean for seamless integration
+			WaterComponent->bEnableOcean = !Config.Water.bUseVoxelOcean && Config.Water.bEnableOcean;
+			WaterComponent->SeaLevel     = Config.SeaLevel;
+		}
+		
 		WaterSystemComponent->Initialize(MakeUnique<FVoxelWaterSimulator>(ChunkSize, VoxelSize), WaterComponent);
 	}
 

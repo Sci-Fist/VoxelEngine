@@ -401,6 +401,7 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		WaterData.Init(ChunkSize);
 		const TArray<float>& Dens = CompletedTask->GetDensities();
 		const int32 S = (ChunkSize / GetStepSize()) + 3; // density array stride with padding
+		const FVector ChunkOrigin = GetActorLocation();
 		
 		// Map density data to water solid cell data
 		for (int32 lz = 0; lz < ChunkSize; ++lz)
@@ -411,7 +412,20 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 			const int32 DIdx = (lx + 1) + (ly + 1) * S + (lz + 1) * S * S;
 			const int32 WIdx = lx + ly * ChunkSize + lz * ChunkSize * ChunkSize;
 			if (Dens.IsValidIndex(DIdx))
-				WaterData.SolidCells[WIdx] = (Dens[DIdx] > 0.f);
+			{
+				const bool bSolid = (Dens[DIdx] > 0.f);
+				WaterData.SolidCells[WIdx] = bSolid;
+
+				// ---- 🌊 VOXEL OCEAN FILL ----
+				if (GenerationConfig.Water.bUseVoxelOcean && !bSolid)
+				{
+					const float WorldZ = ChunkOrigin.Z + lz * VoxelSize;
+					if (WorldZ <= GenerationConfig.SeaLevel)
+					{
+						WaterData.Cells[WIdx] = WATER_SOURCE;
+					}
+				}
+			}
 		}
 	}
 

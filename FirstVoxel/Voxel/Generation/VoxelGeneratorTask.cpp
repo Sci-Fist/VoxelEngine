@@ -499,7 +499,7 @@ void FVoxelGeneratorTask::PlaceWaterSources()
 
         // Skip cells that are at or below sea level — ocean handles those
         const float WorldZ = WorldOrigin.Z + lz * VoxelSize;
-        if (Config.Water.bEnableOcean && WorldZ <= Config.SeaLevel + VoxelSize) continue;
+        if (!Config.Water.bUseVoxelOcean && Config.Water.bEnableOcean && WorldZ <= Config.SeaLevel + VoxelSize) continue;
 
         // Counts solid cardinal horizontal neighbours to gauge enclosure
         int32 SolidNeighbours = 0;

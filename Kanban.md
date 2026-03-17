@@ -2,39 +2,39 @@
 
 ## 🐛 Bugs (High Priority)
 
-- [ ] **Fix include path errors across voxel engine implementation files**
-  - Multiple implementation files have missing or incorrect include paths causing compilation errors
-  - Need to resolve dependency resolution issues with Unreal Engine headers
-  - Ensure cross-platform compatibility
+### B-001: Fix include path errors across voxel engine implementation files
+- **Description**: Multiple implementation files have missing or incorrect include paths causing compilation errors
+- **Location**: FirstVoxel/Voxel/Generation/VoxelMeshGenerator.cpp, FirstVoxel/Voxel/Core/VoxelChunk.cpp, FirstVoxel/Voxel/Core/World/VoxelWorld.cpp
+- **Technical Details**: Missing includes for FVoxelBiomeWeightMap, FVoxelBiomeManager, and other core types
+- **Expected Behavior**: All files should compile without missing header errors
+- **Suggested Fix**: Add proper include statements for all required types and forward declarations
+- **Priority**: High
+- **Tags**: compilation, build, includes
 
-## 📋 To-Do (Medium/Low Priority)
+### B-002: Fix potential memory leaks in chunk streaming and water simulation
+- **Description**: Memory leaks detected in chunk streaming and water simulation systems
+- **Location**: FirstVoxel/Voxel/Core/VoxelChunkPool.cpp, FirstVoxel/Voxel/Water/WaterVoxelSimulator.cpp
+- **Technical Details**: Pool cleanup not properly destroying chunks, water simulator not releasing resources
+- **Expected Behavior**: All allocated memory should be properly freed when no longer needed
+- **Suggested Fix**: Ensure proper cleanup in destructors and shutdown methods
+- **Priority**: High
+- **Tags**: memory-leak, performance, cleanup
 
-### Medium Priority
-- [ ] **Review and optimize memory management in chunk streaming and water simulation**
-  - Potential memory leaks in chunk streaming and water simulation
-  - Weak pointer usage patterns could lead to dangling references
-  - Object pool cleanup verification needed
+### B-003: Fix thread safety issues in water simulation
+- **Description**: Water simulation lacks proper thread synchronization for concurrent access
+- **Location**: FirstVoxel/Voxel/Water/WaterVoxelSimulator.cpp
+- **Technical Details**: ChunkMap access and water level updates not thread-safe
+- **Expected Behavior**: Water simulation should be safe for concurrent access from multiple threads
+- **Suggested Fix**: Add proper mutex protection for shared data structures
+- **Priority**: High
+- **Tags**: thread-safety, concurrency, water
 
-- [ ] **Implement additional performance optimizations for chunk streaming and generation**
-  - Further optimization opportunities in biome weight calculations
-  - LOD transition performance improvements needed
-  - Review chunk queue management for additional improvements
-
-- [ ] **Verify and improve thread safety in water simulation and chunk pooling**
-  - Water simulation thread safety needs verification
-  - Chunk pool operations should be thread-safe for concurrent access
-  - Generation task coordination review needed
-
-### Low Priority
-- [ ] **Standardize error handling patterns across voxel engine components**
-  - Inconsistent error handling patterns across the codebase
-  - Missing validation for configuration parameters
-  - Better error reporting for generation failures needed
-
-- [ ] **Refactor VoxelWorld.cpp for better code organization and maintainability**
-  - VoxelWorld.cpp could benefit from further modularization
-  - Some utility functions could be moved to dedicated helper classes
-  - Configuration validation could be centralized
+### B-004: Fix potential deadlock in FVoxelDataMap::CopyFrom()
+- **Description**: Deadlock risk when copying between FVoxelDataMap instances due to lock ordering
+- **Location**: FirstVoxel/Voxel/Core/VoxelDataMap.cpp
+- **Technical Details**: CopyFrom() acquires locks in arbitrary order which can cause deadlocks
+- **Expected Behavior**: Safe copying without deadlocks
+- **Suggested Fix**: Implement consistent lock ordering or use lock-free copying
 
 - [ ] **Enhance configuration validation and error reporting**
   - Runtime validation of configuration parameters

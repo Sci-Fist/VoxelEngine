@@ -182,6 +182,10 @@ struct FVoxelGlobalWaterConfig
     bool bEnableOcean = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Water|Ocean",
+        meta=(ToolTip="Use voxel-based ocean instead of flat static mesh. Seamless with terrain but may impact horizon visuals."))
+    bool bUseVoxelOcean = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Water|Ocean",
         meta=(ToolTip="Water material used for the ocean surface. Assign a translucent water material here."))
     TObjectPtr<UMaterialInterface> OceanMaterial = nullptr;
 
