@@ -187,7 +187,7 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 	// still reads hardware state. Skipping the Tick body prevents movement,
 	// digging, and look from firing while the menu is visible.
 	if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
-		if (HUD->IsPaused()) return;
+		if (HUD->IsPaused() || HUD->bShowTitleScreen) return;
 
 	// ── Input Device Detection ────────────────────────────────────────────
 	const float GPLx = PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftX);

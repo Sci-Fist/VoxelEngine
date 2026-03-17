@@ -209,7 +209,7 @@ private:
 public:
 
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Generation")
-  bool bAutoGenerateOnBeginPlay = true;
+  bool bAutoGenerateOnBeginPlay = false;
 
   /** If true, searches for a crater biome region near the PlayerStart and
    * places the player inside the crater basin on spawn.
@@ -487,6 +487,7 @@ private:
   float TargetCoordsZ = 0.f;
   bool bSkylandFoundBackup = false;
   float CachedSurfaceHeight = 0.f;
+  FVector SpawnTargetPos = FVector::ZeroVector;
   // FIX: Replaces static-local SpawnWaitTime in Tick() to avoid MSVC C2181
   // and to reset properly between PIE sessions.
   float SpawnWaitAccum = 0.f;
@@ -502,6 +503,12 @@ private:
 
 public:
   void GenerateWorldDeferred();
+
+  UFUNCTION(BlueprintPure, Category = "Voxel")
+  bool IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
+
+  UFUNCTION(BlueprintPure, Category = "Voxel")
+  float GetGenerationProgress() const;
 private:
   void SpawnChunk(const FIntVector &Coord);
   void DestroyChunk(const FIntVector &Coord);

@@ -19,6 +19,13 @@ public:
 	UPROPERTY(Transient, BlueprintReadWrite, Category = "Voxel")
 	bool bShowTitleScreen = false;
 
+	UPROPERTY(Transient)
+	bool bShowLoadingScreen = false;
+
+	/** Current selected item in the title screen menu. */
+	UPROPERTY(Transient)
+	int32 TitleSelection = 0;
+
 	/**
 	 * Toggle the pause menu open/closed.
 	 * Called by AFirstVoxelCharacter when P is pressed or gamepad Start fires.

@@ -131,6 +131,7 @@ void AVoxelWorld::GenerateWorldDeferred()
 		SetActorLocation(CandidatePos);
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Relocated to suitable area at %s"), *CandidatePos.ToString());
 	}
+	SpawnTargetPos = CandidatePos;
 
 	// 3. Ensure DataMap is initialized (critical for editor calls)
 	if (!bInitialized)
@@ -309,19 +310,24 @@ void AVoxelWorld::GenerateWorldDeferred()
 	// 5. If at runtime, snap the player
 	if (GetWorld()->IsGameWorld())
 	{
-		FTimerHandle TempHandle;
-		TWeakObjectPtr<AVoxelWorld> WeakThis(this);
-		// 2.5s gives the initial nearby chunks time to fully generate before
-		// snapping the player. With MaxConcurrentGenerations=12 and drain=8,
-		// the spawn-area chunks (3x3x3 = 27) finish well within this window.
-		GetWorldTimerManager().SetTimer(TempHandle, [WeakThis]()
+		// ── Activate Hover Lock ──────────────────────────────────────────
+		bWaitingForInitialSpawn = true;
+		SpawnWaitAccum = 0.f;
+		TargetCoordsZ  = 100000.f; // Lock far in the sky
+
+		InitialSpawnCoords.Empty();
+		FIntVector CenterChunk = WorldToChunkCoord(CandidatePos);
+		for (int32 x = -1; x <= 1; ++x)
 		{
-			if (AVoxelWorld* StrongThis = WeakThis.Get())
+			for (int32 y = -1; y <= 1; ++y)
 			{
-				if (StrongThis->bShutdown) return;
-				StrongThis->ProcessInitialPlayerSpawn();
+				for (int32 z = -1; z <= 1; ++z)
+				{
+					InitialSpawnCoords.Add(FIntVector(CenterChunk.X + x, CenterChunk.Y + y, CenterChunk.Z + z));
+				}
 			}
-		}, 2.5f, false);
+		}
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Hover-lock activated for %d coordinates around spawn (%s)"), InitialSpawnCoords.Num(), *CandidatePos.ToString());
 	}
 }
 
@@ -524,12 +530,15 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	// to the best crater position for this seed, so we just use that directly.
 	// Do NOT re-run FindCraterSpawnLocation here; it would search again from
 	// the PlayerStart's new position and potentially drift to a different crater.
-	FVector Pos = FVector::ZeroVector;
-	TArray<AActor*> PlayerStarts;
-	UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
-	if (PlayerStarts.Num() > 0 && PlayerStarts[0])
+	FVector Pos = SpawnTargetPos;
+	if (Pos.IsZero())
 	{
-		Pos = PlayerStarts[0]->GetActorLocation();
+		TArray<AActor*> PlayerStarts;
+		UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
+		if (PlayerStarts.Num() > 0 && PlayerStarts[0])
+		{
+			Pos = PlayerStarts[0]->GetActorLocation();
+		}
 	}
 	Pos.Z = 0.f; // Z will be determined from surface height below
 	Pos = SnapToVoxelGrid(Pos);

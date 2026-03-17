@@ -71,12 +71,52 @@ void AFirstVoxelHUD::DrawHUD()
     // Cache the font pointer once per frame rather than calling GetSmallFont() on every DrawRow.
     // GEngine->GetSmallFont() allocates a new descriptor each call which adds up at 60 fps.
     UFont* const SmallFont = GEngine ? GEngine->GetSmallFont() : nullptr;
-    if (!SmallFont) return;
+    AVoxelWorld* TitleWorld = nullptr;
+    {
+        TArray<AActor*> WA;
+        UGameplayStatics::GetAllActorsOfClass(this, AVoxelWorld::StaticClass(), WA);
+        if (WA.Num() > 0) TitleWorld = Cast<AVoxelWorld>(WA[0]);
+    }
+
+    if (bShowLoadingScreen && TitleWorld)
+    {
+        DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.5f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
+
+        const float CX2 = Canvas->SizeX * 0.5f;
+        const float CY2 = Canvas->SizeY * 0.5f;
+
+        float TextW, TextH;
+        GetTextSize(TEXT("G E N E R A T I N G   W O R L D . . ."), TextW, TextH, SmallFont, 1.5f);
+        DrawText(TEXT("G E N E R A T I N G   W O R L D . . ."),
+                 FLinearColor(1.f, 1.f, 1.f, 1.f),
+                 CX2 - TextW * 0.5f, CY2 - 40.f, SmallFont, 1.5f);
+
+        float Progress = TitleWorld->GetGenerationProgress();
+        float BarWidth = 400.f;
+        float BarHeight = 20.f;
+        float BarX = CX2 - BarWidth * 0.5f;
+        float BarY = CY2 + 10.f;
+
+        DrawRect(FLinearColor(0.1f, 0.1f, 0.1f, 0.8f), BarX - 2.f, BarY - 2.f, BarWidth + 4.f, BarHeight + 4.f);
+        DrawRect(FLinearColor(0.15f, 0.18f, 0.22f, 1.0f), BarX, BarY, BarWidth, BarHeight);
+        DrawRect(FLinearColor(0.25f, 0.85f, 0.35f, 1.0f), BarX, BarY, BarWidth * Progress, BarHeight);
+
+        if (!TitleWorld->IsWaitingForInitialSpawn())
+        {
+            bShowLoadingScreen = false;
+            if (APlayerController* PC = GetOwningPlayerController())
+            {
+                PC->SetShowMouseCursor(false);
+                FInputModeGameOnly GM; PC->SetInputMode(GM);
+            }
+        }
+        return; 
+    }
 
     if (bShowTitleScreen)
     {
-        // ── Full-screen dark background ───────────────────────────────────────
-        DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.90f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
+        // ── Full-screen slightly dark background for debugging see-through ───
+        DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.35f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
 
         const float CX2 = Canvas->SizeX * 0.5f;
         const float CY2 = Canvas->SizeY * 0.5f;
@@ -92,16 +132,7 @@ void AFirstVoxelHUD::DrawHUD()
         DrawRect(FLinearColor(0.35f, 0.35f, 0.45f, 0.7f), CX2 - 220.f, CY2 - 85.f, 440.f, 1.f);
 
         // ── Menu options ─────────────────────────────────────────────
-        // Check which save slots have data so we can show live labels.
-        // We look for the first AVoxelWorld in the level to build the path.
-        AVoxelWorld* TitleWorld = nullptr;
-        {
-            TArray<AActor*> WA;
-            UGameplayStatics::GetAllActorsOfClass(this, AVoxelWorld::StaticClass(), WA);
-            if (WA.Num() > 0) TitleWorld = Cast<AVoxelWorld>(WA[0]);
-        }
 
-        // Build per-slot existence flags (up to MaxSaveSlots)
         bool bSlotExists[5] = {};
         if (TitleWorld)
         {
@@ -115,68 +146,105 @@ void AFirstVoxelHUD::DrawHUD()
             }
         }
 
-        // Any saved world available?
         const bool bAnySaved = bSlotExists[0] || bSlotExists[1] || bSlotExists[2] ||
                                bSlotExists[3] || bSlotExists[4];
 
-        struct TitleItem { FString Label; FColor Col; FKey HotKey; };
+        struct TitleItem { FString Label; FColor Col; };
         const TitleItem Items[] = {
-            { TEXT("[G]  Generate New World"),     FColor(220,220,220), EKeys::G },
+            { TEXT("Generate New World"),     FColor(220,220,220) },
             { bAnySaved
-                ? TEXT("[L]  Load World (Slot 1)")  // quick-load first occupied slot
-                : TEXT("[L]  Load World  (no saves)"),
-              bAnySaved ? FColor(220,220,220) : FColor(100,100,100), EKeys::L },
+                ? TEXT("Load World (Slot 1)")
+                : TEXT("Load World  (no saves)"),
+              bAnySaved ? FColor(220,220,220) : FColor(100,100,100) },
         };
 
-        float ItemY = CY2 - 60.f;
-        for (const TitleItem& Item : Items)
+        // ── Input polling & Mouse Hover setup ─────────────────────────────
+        APlayerController* PC = GetOwningPlayerController();
+        if (PC)
         {
-            DrawText(Item.Label, FLinearColor(Item.Col), CX2 - 160.f, ItemY, SmallFont, 1.4f);
+            if (!PC->bShowMouseCursor)
+            {
+                PC->SetShowMouseCursor(true);
+            }
+
+            // Arrow / DPad Navigation
+            if (PC->WasInputKeyJustPressed(EKeys::Up) || PC->WasInputKeyJustPressed(EKeys::Gamepad_DPad_Up))
+                TitleSelection = (TitleSelection - 1 + 2) % 2;
+            if (PC->WasInputKeyJustPressed(EKeys::Down) || PC->WasInputKeyJustPressed(EKeys::Gamepad_DPad_Down))
+                TitleSelection = (TitleSelection + 1) % 2;
+
+            // Mouse Coordinates Hover
+            float MouseX, MouseY;
+            if (PC->GetMousePosition(MouseX, MouseY))
+            {
+                float BaseY = CY2 - 64.f;
+                for (int32 i = 0; i < 2; ++i)
+                {
+                    if (MouseY >= BaseY && MouseY <= BaseY + 35.f && MouseX >= CX2 - 180.f && MouseX <= CX2 + 180.f)
+                    {
+                        if (i == 0 || bAnySaved) // prevent hovering Load if empty
+                            TitleSelection = i;
+                    }
+                    BaseY += 50.f;
+                }
+            }
+        }
+
+        // ── Render Items with Selection Backdrops ───────────────────────
+        float ItemY = CY2 - 60.f;
+        for (int32 i = 0; i < 2; ++i)
+        {
+            const bool bSel = (i == TitleSelection);
+            if (bSel)
+            {
+                // Highlight backing box
+                DrawRect(FLinearColor(0.15f, 0.65f, 0.25f, 0.35f), CX2 - 180.f, ItemY - 4.f, 360.f, 35.f);
+            }
+
+            FLinearColor TextCol = bSel ? FLinearColor::Green : FLinearColor(Items[i].Col);
+            DrawText(Items[i].Label, TextCol, CX2 - 160.f, ItemY, SmallFont, 1.4f);
             ItemY += 50.f;
         }
 
         DrawRect(FLinearColor(0.35f, 0.35f, 0.45f, 0.7f), CX2 - 220.f, ItemY + 4.f, 440.f, 1.f);
-        DrawText(TEXT("[P] or [Start]  Pause / Settings"),
+        DrawText(TEXT("[P] / [Start] Settings   [Arrows/DPad] Select"),
                  FLinearColor(0.55f, 0.8f, 1.f, 1.f), CX2 - 160.f, ItemY + 18.f, SmallFont, 1.0f);
 
-        // ── Input polling ─────────────────────────────────────────────
-        APlayerController* PC = GetOwningPlayerController();
         if (PC)
         {
-            // [G] or gamepad A — generate new world
-            const bool bGenerate = PC->WasInputKeyJustPressed(EKeys::G) ||
-                                   PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Bottom);
-            if (bGenerate)
-            {
-                if (TitleWorld)
-                {
-                    TitleWorld->GenerateWorld();   // randomises seed + generates
-                    bShowTitleScreen = false;
-                    PC->SetShowMouseCursor(false);
-                    FInputModeGameOnly GM; PC->SetInputMode(GM);
-                }
-            }
-            // [L] or gamepad X — load first occupied slot
-            else if ((PC->WasInputKeyJustPressed(EKeys::L) ||
-                      PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Left))
-                     && bAnySaved)
-            {
-                if (TitleWorld)
-                {
-                    // Find the first occupied slot
-                    int32 FirstSlot = 0;
-                    for (int32 s = 0; s < 5; ++s) { if (bSlotExists[s]) { FirstSlot = s; break; } }
+            bool bConfirm = PC->WasInputKeyJustPressed(EKeys::Enter) ||
+                            PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Bottom) ||
+                            PC->WasInputKeyJustPressed(EKeys::LeftMouseButton);
 
-                    TitleWorld->ClearWorld();
-                    TitleWorld->LoadFromFile(DefaultSlotNames[FirstSlot]);
-                    TitleWorld->GenerateWorldDeferred();
-                    bShowTitleScreen = false;
-                    PC->SetShowMouseCursor(false);
-                    FInputModeGameOnly GM; PC->SetInputMode(GM);
+            if (bConfirm)
+            {
+                if (TitleSelection == 0) // Generate
+                {
+                    if (TitleWorld)
+                    {
+                        TitleWorld->GenerateWorld();
+                        bShowTitleScreen = false;
+                        bShowLoadingScreen = true;
+                    }
+                }
+                else if (TitleSelection == 1 && bAnySaved) // Load
+                {
+                    if (TitleWorld)
+                    {
+                        int32 FirstSlot = 0;
+                        for (int32 s = 0; s < 5; ++s) { if (bSlotExists[s]) { FirstSlot = s; break; } }
+
+                        TitleWorld->ClearWorld();
+                        TitleWorld->LoadFromFile(DefaultSlotNames[FirstSlot]);
+                        TitleWorld->GenerateWorldDeferred();
+                        bShowTitleScreen = false;
+                        PC->SetShowMouseCursor(false);
+                        FInputModeGameOnly GM; PC->SetInputMode(GM);
+                    }
                 }
             }
         }
-        return; // Don't draw the normal gameplay HUD
+        return;
     }
 
     // ── Crosshair ──────────────────────────────────────────────────────────

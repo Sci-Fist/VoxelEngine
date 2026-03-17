@@ -139,6 +139,8 @@ void AVoxelWorld::BeginPlay()
 	}
 	else
 	{
+		DiscoverExistingChunks(); // Find editor-placed chunks
+		ClearWorld();            // Wipe any prior Editor generated chunks
 		// Notify HUD to show Title Screen
 		if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
 		{
@@ -186,6 +188,17 @@ void AVoxelWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void AVoxelWorld::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	// Guard against background generation while on Title Screen Menu
+	bool bTitleScreenActive = false;
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		if (class AFirstVoxelHUD* HUD = Cast<class AFirstVoxelHUD>(PC->GetHUD()))
+		{
+			bTitleScreenActive = HUD->bShowTitleScreen;
+		}
+	}
+	if (bTitleScreenActive) return;
 
 	if (GetWorld()->IsGameWorld())
 		UpdateChunkStreaming();
@@ -244,6 +257,7 @@ void AVoxelWorld::Tick(float DeltaTime)
 				bWaitingForInitialSpawn = false;
 				SpawnWaitAccum = 0.f;
 				InitialSpawnCoords.Empty();
+				ProcessInitialPlayerSpawn();
 			}
 		}
 	}
@@ -438,3 +452,9 @@ void AVoxelWorld::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedE
 	// Future: trigger selective rebuild when specific properties change.
 }
 #endif
+
+float AVoxelWorld::GetGenerationProgress() const
+{
+	if (GenerationQueue.Num() == 0) return 1.0f;
+	return (float)QueueHead / (float)GenerationQueue.Num();
+}
