@@ -244,7 +244,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   // FIXED: Smoother transitions with better blending and building-friendly noise
   if (NormalizedDepth > 0.45f) {
     // Deep crater floor with organic building-friendly noise
-    const float BuildingNoise = FastNoise3D(nX * CRC.BuildingNoiseFrequency, nY * CRC.BuildingNoiseFrequency, 0.f) * CRC.BuildingNoiseAmplitude;
+    const float BuildingNoise = FBM(nX * CRC.BuildingNoiseFrequency, nY * CRC.BuildingNoiseFrequency, 0.f, 3, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves) * CRC.BuildingNoiseAmplitude;
     Height = BottomDepth + BuildingNoise;
   } else if (NormalizedDepth > 0.30f) {
     // Crater slope with gentler terracing for building
@@ -435,7 +435,12 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         //  High island ThicknessRatio: SC.ThicknessRatio (0.48 default)
         // -------------------------------------------------------------------
         const float EffThickness = FMath::Lerp(0.10f, SC.ThicknessRatio, CellShardT);
-        const float HalfThick    = IslandSize * EffThickness;
+        float HalfThick    = IslandSize * EffThickness;
+
+        // --- 🛡️ CLEARANCE PROTECTION: Prevent spikes bridging to ground ---
+        const float Clearance = 800.f; // 8 meters above terrain minimum clearance
+        const float MaxAllow  = FMath::Max(200.f, AltitudeBase - Clearance);
+        HalfThick = FMath::Min(HalfThick, MaxAllow);
 
         // Shape noise threshold: shards use a higher threshold so only the
         // core of the noise field is solid — making them jagged and irregular.

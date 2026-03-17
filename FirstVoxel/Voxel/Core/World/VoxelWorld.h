@@ -167,10 +167,28 @@ public:
       // Merge: start with preset, override seed from our runtime GenerationConfig
       // so every RandomizeSeed() call actually changes the world.
       MergedConfig         = BiomePreset->Config;
-      MergedConfig.Seed    = GenerationConfig.Seed;
-      return MergedConfig;
     }
-    return GenerationConfig;
+    else
+    {
+      MergedConfig               = GenerationConfig;
+      MergedConfig.ForestRender  = ForestRender;
+      MergedConfig.PeaksRender   = PeaksRender;
+      MergedConfig.CliffsRender  = CliffsRender;
+      MergedConfig.MesaRender    = MesaRender;
+      MergedConfig.CratersRender = CratersRender;
+      MergedConfig.DesertRender  = DesertRender;
+      MergedConfig.SkylandsRender = SkylandsRender;
+      
+      MergedConfig.ForestWater   = ForestWater;
+      MergedConfig.PeaksWater    = PeaksWater;
+      MergedConfig.CliffsWater   = CliffsWater;
+      MergedConfig.MesaWater     = MesaWater;
+      MergedConfig.CratersWater  = CratersWater;
+      MergedConfig.DesertWater   = DesertWater;
+      MergedConfig.SkylandsWater = SkylandsWater;
+    }
+    MergedConfig.Seed = GenerationConfig.Seed;
+    return MergedConfig;
   }
 
 private:
