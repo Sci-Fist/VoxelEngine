@@ -230,7 +230,7 @@ private:
 	static constexpr float TransitionDuration = 0.2f;
 
 	void ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask);
-	void UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat);
+	void UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName = FString());
 
 	/** Build water surface mesh from WaterData. Internal — call RebuildWaterMesh() instead. */
 	void BuildWaterMeshInternal();

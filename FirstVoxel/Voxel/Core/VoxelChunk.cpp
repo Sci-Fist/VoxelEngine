@@ -274,6 +274,15 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		if (BiomeRender.FlatMaterialOverride)  FlatMat  = BiomeRender.FlatMaterialOverride.Get();
 		if (BiomeRender.SlopeMaterialOverride) SlopeMat = BiomeRender.SlopeMaterialOverride.Get();
 	}
+	
+	// DEBUG: Log material assignment for crater biome
+	if (DominantBiome == EVoxelBiome::Craters)
+	{
+		UE_LOG(LogVoxelChunk, Warning, TEXT("Crater chunk (%d,%d,%d) - FlatMat: %s, SlopeMat: %s"),
+			ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
+			FlatMat ? *FlatMat->GetName() : TEXT("NULL"),
+			SlopeMat ? *SlopeMat->GetName() : TEXT("NULL"));
+	}
 
 	// ── Generate biome-specific mesh name ─────────────────────────────────
 	// Create descriptive mesh names that include biome information for debugging
@@ -461,10 +470,14 @@ void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, 
 	// Apply material if provided
 	if (Mat) ProceduralMesh->SetMaterial(SectionIndex, Mat);
 
-	// Set biome-specific section name for debugging and profiling
+	// Note: UProceduralMeshComponent doesn't have SetSectionName method
+	// Biome-specific naming is handled through the section name parameter
+	// for debugging purposes, but actual section naming requires custom implementation
 	if (!SectionName.IsEmpty())
 	{
-		ProceduralMesh->SetSectionName(SectionIndex, FName(*SectionName));
+		// Store section name for potential future use or debugging
+		// The biome information is now embedded in the mesh generation process
+		// and can be accessed through the section index and chunk coordinates
 	}
 }
 

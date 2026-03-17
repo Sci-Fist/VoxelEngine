@@ -191,12 +191,23 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   const FVector Off = Config.GetSeedOffset();
   const float nX = X + Off.X, nY = Y + Off.Y;
   
-  // Domain warp for organic crater walls
+  // Domain warp for organic crater walls with shape distortion
   const float CenterWarp = FastNoise3D(nX * 0.004f, nY * 0.004f, 100.f) * 0.25f;
+  
+  // Shape distortion for irregular crater borders
+  const float ShapeDistortion = FastNoise3D(nX * 0.006f, nY * 0.006f, 400.f) * CRC.ShapeDistortion;
+  
+  // Border irregularity for non-perfect circular craters
+  const float BorderNoise = FastNoise3D(nX * 0.003f, nY * 0.003f, 500.f) * CRC.BorderIrregularity;
 
-  float Impact = FastNoise3D(nX * (CRC.Frequency * 0.5f),
-                             nY * (CRC.Frequency * 0.5f), 200.f);
+  // Crater size multiplier for larger craters
+  const float ModifiedFrequency = CRC.Frequency * CRC.CraterSizeMultiplier;
+
+  float Impact = FastNoise3D(nX * (ModifiedFrequency * 0.5f),
+                             nY * (ModifiedFrequency * 0.5f), 200.f);
   Impact += CenterWarp;
+  Impact += ShapeDistortion;
+  Impact += BorderNoise;
 
   // Secondary noise layer for crater complexity
   const float SecondaryNoise = FastNoise3D(nX * 0.002f, nY * 0.002f, 300.f) * 0.3f;
@@ -220,9 +231,9 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   }
   NormalizedDepth = FMath::Clamp(NormalizedDepth, 0.f, 1.f);
   
-  // FIXED: Better depth calculation with exponential curve and increased multiplier for deeper craters
-  const float DepthCurve = FMath::Pow(NormalizedDepth, 1.5f);
-  const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 3.5f * DepthCurve;
+    // FIXED: Better depth calculation with exponential curve and increased multiplier for deeper craters
+    const float DepthCurve = FMath::Pow(NormalizedDepth, 1.5f);
+    const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 4.5f * DepthCurve;
   
   // FIXED: Better rim calculation with noise detail
   const float RimHeight = BasePlains + CRC.RimHeight * 1.0f;
@@ -230,24 +241,25 @@ float FVoxelBiomeGenerators::GetCraterHeight(
 
   float Height = BasePlains;
   
-  // FIXED: Smoother transitions with better blending
+  // FIXED: Smoother transitions with better blending and building-friendly noise
   if (NormalizedDepth > 0.45f) {
-    // Deep crater floor with noise detail
-    Height = BottomDepth + FastNoise3D(nX * 0.015f, nY * 0.015f, 0.f) * CRC.FloorNoiseAmplitude * 0.7f;
+    // Deep crater floor with organic building-friendly noise
+    const float BuildingNoise = FastNoise3D(nX * CRC.BuildingNoiseFrequency, nY * CRC.BuildingNoiseFrequency, 0.f) * CRC.BuildingNoiseAmplitude;
+    Height = BottomDepth + BuildingNoise;
   } else if (NormalizedDepth > 0.30f) {
-    // Crater slope with terracing
+    // Crater slope with gentler terracing for building
     float t = (NormalizedDepth - 0.30f) / 0.15f;
-    const float Terrace = FMath::Floor(t * 6.0f) / 6.0f;
-    t = FMath::Lerp(t, Terrace, 0.6f); // Reduced terrace strength for smoother look
+    const float Terrace = FMath::Floor(t * 4.0f) / 4.0f; // Reduced terrace steps for gentler slopes
+    t = FMath::Lerp(t, Terrace, 0.4f); // Reduced terrace strength for smoother building surfaces
     Height = FMath::Lerp(RimHeight + RimNoise, BottomDepth, t);
   } else if (NormalizedDepth > 0.15f) {
-    // Rim area with noise
+    // Rim area with noise for organic look
     float t = (NormalizedDepth - 0.15f) / 0.15f;
     Height = FMath::Lerp(BasePlains, RimHeight + RimNoise, t);
   } else {
-    // Transition zone to plains
+    // Transition zone to plains with gentle slope
     float t = NormalizedDepth / 0.15f;
-    Height = FMath::Lerp(BasePlains, RimHeight + RimNoise * 0.5f, t);
+    Height = FMath::Lerp(BasePlains, RimHeight + RimNoise * 0.3f, t);
   }
 
   return Height;

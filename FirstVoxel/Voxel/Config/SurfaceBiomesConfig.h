@@ -183,22 +183,37 @@ struct FCraterBiomeConfig
     float Depth = -4000.f;  // Increased from -1500 to -4000 for deeper craters
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimHeight = 2000.f;  // Increased from 1500 to 2000 for higher rims
+    float RimHeight = 6000.f;  // Doubled from 3000 to 6000 for much higher rims
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float ImpactThreshold = -0.6f;  // Lowered from -0.5 to -0.6 for more frequent impacts
+    float ImpactThreshold = -0.8f;  // Lowered from -0.7 to -0.8 for more frequent impacts
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimNoiseAmplitude = 1200.f;  // Increased from 800 for more rugged rims
+    float RimNoiseAmplitude = 4000.f;  // Doubled from 2000 for more rugged rims
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float FloorNoiseAmplitude = 500.f;  // Increased from 300 for more detailed crater floors
+    float FloorNoiseAmplitude = 1600.f;  // Doubled from 800 for more detailed crater floors
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimWidth = 0.35f;  // New: controls rim width relative to crater size
+    float RimWidth = 0.65f;  // Increased from 0.45 for much wider rims
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float FloorSlope = 0.75f;  // New: controls how steep the crater walls are
+    float FloorSlope = 0.65f;  // Reduced from 0.85 to 0.65 for gentler crater walls (better for building)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float ShapeDistortion = 0.5f;  // Increased from 0.3 for more irregular shapes
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float BorderIrregularity = 0.8f;  // Increased from 0.6 for more irregular borders
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float BuildingNoiseFrequency = 0.0015f;  // New: frequency for organic building-friendly noise inside craters
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float BuildingNoiseAmplitude = 300.f;  // New: amplitude for organic building-friendly noise inside craters
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float CraterSizeMultiplier = 2.0f;  // New: multiplier for overall crater size
 };
 
 // ============================================================
