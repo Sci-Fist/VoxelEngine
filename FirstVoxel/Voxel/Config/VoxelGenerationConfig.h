@@ -1,24 +1,69 @@
+// =============================================================================
 // VoxelGenerationConfig.h
-// 
-// Master configuration hierarchy for the 3-layer voxel world generator.
-// This is the central configuration struct that drives all world generation parameters.
+// =============================================================================
 //
-// LAYER ARCHITECTURE:
-//   Surface Layer  — height-field terrain blending multiple biomes (Forest/Peaks/Cliffs/Mesa/Craters)
-//   Skylands Layer — floating islands driven by the terrain height and roughness BELOW them
-//   Cave Layer     — worm tunnels + crystal cavern chambers carved below the surface
+// ROOT CONFIGURATION for the FirstVoxel 3-layer procedural world generator.
+// Everything that controls how the world looks lives here or in one of the
+// sub-config headers this file includes.
 //
-// CONFIGURATION PHILOSOPHY:
-// - All parameters are exposed to the Details Panel for easy tweaking
-// - Create UVoxelBiomeDataAsset presets in Content Browser for different world types
-// - Runtime swapping of presets allows dynamic world generation changes
-// - Modular design allows individual layer configuration without affecting others
+// ── FILE LAYOUT ──────────────────────────────────────────────────────────────
+//  Included sub-headers (edit those files for layer-specific tweaks):
+//    Config/SurfaceBiomesConfig.h  — per-biome height-field parameters
+//    Config/SkylandsLayerConfig.h  — floating island system
+//    Config/CaveLayerConfig.h      — worm tunnels + crystal caverns
 //
-// PERFORMANCE CONSIDERATIONS:
-// - Noise octave limits prevent excessive generation time
-// - Optional features (overhangs, 3D skylands) can be disabled for performance
-// - Biome blending uses efficient smoothstep functions
-// - Seed offset caching reduces redundant hash calculations
+//  Types defined in THIS file (VoxelGenerationConfig.h):
+//    FVoxelPerformanceConfig     — octave caps, optional feature toggles
+//    FVoxelFoliageEntry          — one instanced-mesh scatter slot
+//    FVoxelBiomeRenderConfig     — material overrides + foliage list per biome
+//    FVoxelGlobalWaterConfig     — ocean, rivers, swimming (world-wide)
+//    FVoxelBiomeWaterConfig      — per-biome water tuning
+//    FVoxelGenerationConfig      — MASTER struct (contains all of the above)
+//
+// ── THREE-LAYER ARCHITECTURE ─────────────────────────────────────────────────
+//
+//  ┌─ SURFACE LAYER ───────────────────────────────────────────────────────┐
+//  │  2D height-field blending six biomes (Forest/Peaks/Cliffs/Mesa/       │
+//  │  Craters/Desert) weighted by temperature × erosion noise.             │
+//  │  Evaluated once per XY column. Driven by SurfaceBiomesConfig.h.       │
+//  └───────────────────────────────────────────────────────────────────────┘
+//  ┌─ SKYLANDS LAYER ──────────────────────────────────────────────────────┐
+//  │  Floating islands whose altitude, size and probability scale with     │
+//  │  the terrain height and roughness directly below them.                │
+//  │  Driven by SkylandsLayerConfig.h.                                     │
+//  └───────────────────────────────────────────────────────────────────────┘
+//  ┌─ CAVE LAYER ──────────────────────────────────────────────────────────┐
+//  │  Two-tunnel worm noise carves passages below the surface.             │
+//  │  Crystal cavern chambers open up at greater depth.                    │
+//  │  Protected by a bedrock floor. Driven by CaveLayerConfig.h.           │
+//  └───────────────────────────────────────────────────────────────────────┘
+//
+// ── HOW TO TWEAK THE WORLD ───────────────────────────────────────────────────
+//  1. Select the AVoxelWorld actor in the Level Editor.
+//  2. Expand the "Voxel|Generation" section in the Details panel.
+//  3. Edit parameters directly, or assign a UVoxelBiomeDataAsset preset.
+//  4. Click "Generate World" (Details panel → Voxel category) to preview.
+//
+//  To create a new world preset:
+//    Content Browser → Right-click → Miscellaneous → Data Asset
+//    → pick UVoxelBiomeDataAsset → configure → assign to BiomePreset.
+//
+// ── PERFORMANCE QUICK-REFERENCE ──────────────────────────────────────────────
+//  Halve generation time  : Performance.MaxNoiseOctaves = 2
+//  Disable overhangs      : Performance.bEnableOverhangs = false
+//  Cheaper skylands       : Performance.bEnable3DSkylandNoise = false
+//  Reduce streaming load  : AVoxelWorld.RenderDistanceXY (lower = faster)
+//  Limit GPU triangles    : FVoxelGeneratorTask::MaxMeshesPerChunk (15000)
+//
+// ── SEED SYSTEM ──────────────────────────────────────────────────────────────
+//  GenerationConfig.Seed   drives GetSeedOffset() → a 3D float offset that
+//  is added to every Perlin noise call. Changing the seed shifts all noise
+//  fields simultaneously, producing a completely different world layout.
+//  GetSeedOffset() uses three independent LCG hashes (one per axis) to
+//  spread seeds uniformly across a ±131 071 cm range — enough for ~13 full
+//  noise periods at typical biome frequency (0.0001), so every integer seed
+//  produces a visually distinct world.
+// =============================================================================
 
 #pragma once
 #include "CoreMinimal.h"
@@ -71,55 +116,55 @@ struct FVoxelFoliageEntry
     GENERATED_BODY()
 
     /** Mesh to scatter. Leave null to disable this slot. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="General")
     TObjectPtr<UStaticMesh> Mesh = nullptr;
 
     /** Per-triangle spawn probability [0..1].  0.03 = sparse  |  0.2 = lush. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="General", meta=(ClampMin="0.0", ClampMax="1.0"))
     float SpawnChance = 0.05f;
 
     /** Spawn attempts per triangle (1 = normal, 2-8 = dense cluster). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="1", ClampMax="8"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="General", meta=(ClampMin="1", ClampMax="8"))
     int32 SpawnAttemptsPerTriangle = 1;
 
     /** Min biome weight [0-1] required at spawn point (0 = always, 0.5 = dominant biome only). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Filter", meta=(ClampMin="0.0", ClampMax="1.0"))
     float MinBiomeWeight = 0.2f;
 
     /** Min surface flatness (Normal.Z): 1.0 = flat only | 0.7 = up to 45 deg | 0.0 = any slope. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Filter", meta=(ClampMin="0.0", ClampMax="1.0"))
     float MinSlopeAlignment = 0.7f;
 
     /** Min world Z (cm) for spawning. Set to SeaLevel to block underwater spawns. (-9999999 = no limit) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Bounds")
     float MinWorldZ = -9999999.f;
 
     /** Max world Z (cm) for spawning. Use to cap high-altitude vegetation. (9999999 = no limit) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Bounds")
     float MaxWorldZ = 9999999.f;
 
     /** Min random scale multiplier. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.01"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Transform", meta=(ClampMin="0.01"))
     float ScaleMin = 0.8f;
 
     /** Max random scale multiplier. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.01"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Transform", meta=(ClampMin="0.01"))
     float ScaleMax = 1.2f;
 
     /** Randomise yaw per instance. Disable for directional props (signs, fences). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Transform")
     bool bRandomYaw = true;
 
     /** Fixed yaw in degrees when bRandomYaw = false. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(EditCondition="!bRandomYaw", ClampMin="0.0", ClampMax="360.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Transform", meta=(EditCondition="!bRandomYaw", ClampMin="0.0", ClampMax="360.0"))
     float FixedYaw = 0.f;
 
     /** Align instance up-axis to the surface normal (good for cliff plants / mushrooms). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Transform")
     bool bAlignToSurface = false;
 
     /** Z offset after placement (cm). Negative = sink into terrain. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Transform")
     float HeightOffset = 0.f;
 };
 
@@ -162,7 +207,7 @@ struct FVoxelBiomeRenderConfig
      * with its own spawn probability, scale, slope filter, and height range.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite,
-        meta=(EditCondition="bEnableFoliage"))
+        meta=(EditCondition="bEnableFoliage", TitleProperty="Mesh"))
     TArray<FVoxelFoliageEntry> FoliageTypes;
 };
 

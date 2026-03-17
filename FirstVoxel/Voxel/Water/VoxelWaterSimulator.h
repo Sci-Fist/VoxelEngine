@@ -1,41 +1,51 @@
-// VoxelWaterSimulator.h  [canonical location: Voxel/Water/]
-// 
-// Cellular-automata voxel water simulation system.
-// 
-// ARCHITECTURE OVERVIEW:
-// This class implements a physics-based water simulation system using cellular
-// automata principles to create realistic water flow and pooling behavior.
-// 
-// SIMULATION PRINCIPLES:
-// The system operates on a voxel grid where each cell can hold water at different
-// levels (0-255). Water follows basic physics rules to create emergent flow patterns.
-// 
-// SIMULATION RULES (run by Step() on a fixed timer from AVoxelWorld)
-//   1. **Source Management**: Source cells are forced to WATER_FULL at the start
-//      of every step, maintaining constant water sources like springs or rain
-//   2. **Gravity (FALL)**: If the cell below is air and not full, water falls
-//      into it due to gravity
-//   3. **Flow (SPREAD)**: When blocked below, water flows laterally to lower
-//      neighboring cells, creating natural spreading and pooling
-//   4. **Boundary Handling**: Water leaving a loaded chunk boundary is discarded
-//      to prevent memory leaks and maintain simulation integrity
-// 
-// PERFORMANCE CHARACTERISTICS:
-// - Fixed-step simulation for deterministic behavior
-// - Chunk-based registration for memory efficiency
-// - Dirty chunk tracking to minimize mesh rebuild overhead
-// - Thread-safe design with GameThread-only access
-// 
-// INTEGRATION:
-// - Works with AVoxelChunk's water mesh system for rendering
-// - Integrates with FVoxelWaterData for per-chunk state management
-// - Provides callbacks for mesh updates when water changes occur
-// 
-// THREAD SAFETY
-//   All public methods must be called from the GameThread.
-//   The simulator holds raw pointers into FVoxelWaterData structs owned by
-//   AVoxelChunk; those structs must outlive their registration to prevent
-//   dangling pointer issues.
+// =============================================================================
+// VoxelWaterSimulator.h  [canonical: Voxel/Water/]
+// =============================================================================
+//
+// Cellular-automata water simulation operating on FVoxelWaterData stored
+// inside AVoxelChunk actors. Driven by UVoxelWorldWaterComponent at a
+// configurable tick interval (Water.SimStepInterval).
+//
+// -- SIMULATION RULES (one Step() call) ---------------------------------------
+//
+//   For every registered chunk, for every voxel with water:
+//
+//   1. SOURCE REFRESH
+//      Cells with WATER_SOURCE are set to WATER_FULL before any flow runs.
+//      Sources are permanent and never drained.
+//
+//   2. GRAVITY (FALL)
+//      If the voxel directly below is air (not solid, not already full),
+//      transfer all water downward. Fast path for vertical columns.
+//
+//   3. SPREAD
+//      When blocked below, test four cardinal horizontal neighbours.
+//      Flow to any neighbour that has room (fill < current - 1).
+//      Equalises levels over multiple steps, creating natural pooling.
+//
+//   4. BOUNDARY
+//      Water flowing out of a loaded chunk's boundary is discarded.
+//      Cross-chunk propagation requires both chunks to be registered.
+//
+// -- CHUNK REGISTRATION -------------------------------------------------------
+//
+//   RegisterChunk(Coord, WaterData*)    call after AVoxelChunk::ApplyMesh()
+//   UnregisterChunk(Coord)              call before ReturnChunk() / pool reuse
+//
+//   The simulator holds RAW POINTERS into FVoxelWaterData owned by AVoxelChunk.
+//   The chunk MUST outlive its registration. AVoxelWorld ensures this by
+//   calling UnregisterChunk before ReturnChunk.
+//
+// -- RETURN VALUE OF Step() ---------------------------------------------------
+//
+//   Returns TArray<FIntVector> of chunk coords whose Cells[] changed.
+//   UVoxelWorldWaterComponent calls AVoxelChunk::RebuildWaterMesh() on each.
+//
+// -- THREAD SAFETY ------------------------------------------------------------
+//
+//   ALL public methods must be called from the GAME THREAD.
+//   No locking is used; the game-thread-only contract is enforced by design.
+// =============================================================================
 #pragma once
 
 #include "CoreMinimal.h"

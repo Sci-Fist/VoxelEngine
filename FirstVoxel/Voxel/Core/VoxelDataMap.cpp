@@ -11,48 +11,55 @@ void FVoxelDataMap::Init(int32 InChunkSize)
 
 void FVoxelDataMap::SetSphere(const FVector& WorldPos, float Radius, float Density, float VoxelSize)
 {
-	FScopeLock ScopeLock(&MapLock);
-
-	FIntVector Center = FIntVector(
+	const FIntVector Center = FIntVector(
 		FMath::RoundToInt(WorldPos.X / VoxelSize),
 		FMath::RoundToInt(WorldPos.Y / VoxelSize),
 		FMath::RoundToInt(WorldPos.Z / VoxelSize)
 	);
 
-	int32 RVox = FMath::CeilToInt(Radius / VoxelSize);
+	const int32 RVox = FMath::CeilToInt(Radius / VoxelSize);
 
-	// [Expert Optimization] Cache last used chunk to batched edits without repeated hashed lookups
-	FIntVector CurrentChunkCoord(999999, 999999, 999999);
-	struct FChunkData* CurrentChunk = nullptr;
+	// Build a local batch without holding the lock during the (potentially long)
+	// nested loop.  This keeps GetChunkData() calls on background threads
+	// unblocked while a player is digging.
+	TMap<FIntVector, FChunkData> Batch;
+
+	// Cache last-used chunk in the batch to avoid repeated TMap lookups for
+	// the common case where many consecutive voxels belong to the same chunk.
+	FIntVector CurrentChunkCoord(INT32_MAX, INT32_MAX, INT32_MAX);
+	FChunkData* CurrentChunk = nullptr;
 
 	for (int32 z = -RVox; z <= RVox; ++z)
 	for (int32 y = -RVox; y <= RVox; ++y)
 	for (int32 x = -RVox; x <= RVox; ++x)
 	{
-		FIntVector Coord = Center + FIntVector(x, y, z);
-		FVector Pos = FVector(Coord.X, Coord.Y, Coord.Z) * VoxelSize;
-		float Dist = FVector::Dist(WorldPos, Pos);
-		if (Dist <= Radius)
+		const FIntVector Coord = Center + FIntVector(x, y, z);
+		const FVector Pos = FVector(Coord.X, Coord.Y, Coord.Z) * VoxelSize;
+		const float Dist = FVector::Dist(WorldPos, Pos);
+		if (Dist > Radius) continue;
+
+		// Smooth SDF gradient: full density at centre, tapering to near-zero at edge.
+		const float NormDist     = FMath::Clamp(Dist / Radius, 0.f, 1.f);
+		float TargetDensity = Density * (1.f - NormDist);
+		if (FMath::IsNearlyZero(TargetDensity))
+			TargetDensity = (Density > 0.f) ? 0.001f : -0.001f;
+
+		const FIntVector CC = GetChunkCoord(Coord);
+		if (CC != CurrentChunkCoord || !CurrentChunk)
 		{
-			// Calculate smooth SDF gradient
-			float NormDist = FMath::Clamp(Dist / Radius, 0.f, 1.f);
-			float TargetDensity = Density * (1.f - NormDist);
-
-			if (FMath::IsNearlyZero(TargetDensity))
-			{
-				TargetDensity = (Density > 0.f) ? 0.001f : -0.001f;
-			}
-
-			const FIntVector ChunkCoord = GetChunkCoord(Coord);
-			if (ChunkCoord != CurrentChunkCoord || !CurrentChunk)
-			{
-				CurrentChunk = &Chunks.FindOrAdd(ChunkCoord);
-				CurrentChunkCoord = ChunkCoord;
-			}
-
-			const int32 LocalIdx = GetLocalIndex(GetLocalCoord(Coord));
-			CurrentChunk->ModifiedVoxels.Add(LocalIdx, TargetDensity);
+			CurrentChunk      = &Batch.FindOrAdd(CC);
+			CurrentChunkCoord = CC;
 		}
+		CurrentChunk->ModifiedVoxels.Add(GetLocalIndex(GetLocalCoord(Coord)), TargetDensity);
+	}
+
+	// Merge batch into the shared map under a single brief lock.
+	FScopeLock ScopeLock(&MapLock);
+	for (auto& Pair : Batch)
+	{
+		FChunkData& Dest = Chunks.FindOrAdd(Pair.Key);
+		for (auto& VoxPair : Pair.Value.ModifiedVoxels)
+			Dest.ModifiedVoxels.Add(VoxPair.Key, VoxPair.Value);
 	}
 }
 

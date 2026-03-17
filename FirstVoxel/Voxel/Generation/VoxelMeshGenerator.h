@@ -1,8 +1,53 @@
+// =============================================================================
 // VoxelMeshGenerator.h
-// Surface Nets implementation — produces two separate mesh sections per chunk:
-//   Section 0 (FlatMesh)  — near-horizontal faces → grass / dirt material
-//   Section 1 (SlopeMesh) — steep faces           → rock / cliff material
-// The split is driven by the face's averaged Normal.Z vs SlopeThreshold.
+// =============================================================================
+//
+// Stateless, thread-safe Surface Nets mesh builder.
+// Converts a 3D density field into a ProceduralMesh-ready dataset.
+//
+// -- ALGORITHM OVERVIEW -------------------------------------------------------
+//
+//  Surface Nets (Gibson 1998) is a dual-contouring variant that produces
+//  smooth meshes with correct topology:
+//
+//   PASS 1 -- Vertex placement
+//     For every voxel cell that straddles the density isosurface (sign change
+//     among 8 corners), compute one vertex at the average of all edge
+//     intersection points. Runs via ParallelFor over the Z dimension.
+//
+//   PASS 2 -- Quad emission
+//     For every axis-aligned grid edge that crosses the surface, emit a quad
+//     connecting the vertices of the four sharing cells. Three loops handle
+//     X-axis, Y-axis, and Z-axis edges respectively.
+//
+// -- WINDING ORDER & NORMALS --------------------------------------------------
+//
+//  Quads are single-sided. Winding is determined by the density sign of the
+//  D0 voxel on each edge (bD0Solid parameter). This ensures normals always
+//  point outward (into air), halving triangle count vs the old double-emit
+//  approach which emitted both windings regardless of orientation.
+//
+//  Normals are computed by central differences on the density field, giving
+//  smooth gradient-based normals that blend naturally across biome boundaries.
+//
+// -- VERTEX COLOR ENCODING ----------------------------------------------------
+//
+//  ColumnColors[] (one entry per XY column) is precomputed once in O(n^2)
+//  and sampled per quad in O(1). Colors encode biome weights for material
+//  blending in the terrain material graph:
+//    R = Forest weight     G = Desert weight
+//    B = Peaks + Cliffs    A = Craters + Mesa
+//
+// -- OUTPUT -------------------------------------------------------------------
+//
+//  FVoxelMeshOutput.FlatMesh  -- all quads in a single continuous section.
+//  Uploaded to ProceduralMeshComponent section 0 in AVoxelChunk::UploadSection.
+//
+// -- THREAD SAFETY ------------------------------------------------------------
+//
+//  GenerateMesh() has no mutable state. Safe to call from multiple background
+//  threads simultaneously (as during ParallelFor in BuildDensityField).
+// =============================================================================
 #pragma once
 
 #include "CoreMinimal.h"
@@ -48,16 +93,12 @@ struct FVoxelMeshData
 // ---------------------------------------------------------------------------
 struct FVoxelMeshOutput
 {
-	/** Section 0 — flat / near-horizontal faces (grass, dirt, snow) */
+	/** Section 0 — continuous mesh section containing all quads */
 	FVoxelMeshData FlatMesh;
-
-	/** Section 1 — steep / cliff faces (rock, shale) */
-	FVoxelMeshData SlopeMesh;
 
 	void Reset()
 	{
 		FlatMesh.Reset();
-		SlopeMesh.Reset();
 	}
 };
 
@@ -74,10 +115,7 @@ struct FVoxelMeshGenerator
 	 * @param ChunkSize       Voxels per axis (e.g. 32)
 	 * @param VoxelSize       World-space size of one voxel in cm (e.g. 100)
 	 * @param ChunkOrigin     World position of voxel [0,0,0] in this chunk
-	 * @param OutMesh         Output — FlatMesh (sec0) + SlopeMesh (sec1)
-	 * @param SlopeThreshold  Normal.Z threshold. Faces with |Normal.Z| >= this
-	 *                        value go into FlatMesh; steeper faces go into SlopeMesh.
-	 *                        0.7 ≈ 45°  0.5 ≈ 60°  (default 0.7)
+	 * @param OutMesh         Output — FlatMesh containing all vertices
 	 */
 	static void GenerateMesh(
 		const TArray<float>& Densities,
@@ -86,7 +124,6 @@ struct FVoxelMeshGenerator
 		const FVector&       ChunkOrigin,
 		FVoxelMeshOutput&    OutMesh,
 		const struct FVoxelGenerationConfig& Config,
-		float                SlopeThreshold = 0.7f,
 		int32                InStepSize = 1);
 
 private:

@@ -172,14 +172,14 @@ void AVoxelWorld::LoadFromFile(const FString& SlotName)
 
 void AVoxelWorld::SaveDefaultSlot()
 {
-	// Save modifications to the default slot for quick save/load operations
-	SaveToFile(TEXT("DefaultSlot"));
+	// Save modifications to the currently configured slot
+	SaveToFile(SaveSlotName);
 }
 
 void AVoxelWorld::LoadDefaultSlot()
 {
-	// Load modifications from the default slot
-	LoadFromFile(TEXT("DefaultSlot"));
+	// Load modifications from the currently configured slot
+	LoadFromFile(SaveSlotName);
 }
 
 // ============================================================

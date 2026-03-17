@@ -89,16 +89,21 @@ protected:
 		meta=(ToolTip="Input Action for toggling the world map. Assign IA_Map here or let BeginPlay auto-load it."))
 	UInputAction* MapAction;
 
+	/** Pause Toggle Input Action (P / Start) — open/close the pause menu. */
+	UPROPERTY(EditAnywhere, Category="Input|Voxel",
+		meta=(ToolTip="Input Action for toggling the pause menu. Assign IA_Pause here or leave null to use key polling."))
+	UInputAction* PauseAction;
+
 	/** Fly Down Input Action (Ctrl) */
 	UPROPERTY(EditAnywhere, Category="Input|Voxel")
 	UInputAction* FlyDownAction;
 
 	/** Input Mapping Context */
 	UPROPERTY(EditAnywhere, Category="Input")
-	class UInputMappingContext* DefaultMappingContext;
+	class UInputMappingContext* MappingContext;
 
 private:
-	/** Track whether EnhancedInput supplied looking vectors this frame */
+	/** Track whether Input supplied looking vectors this frame */
 	bool bLookedThisFrame = false;
 
 public:
@@ -171,6 +176,9 @@ public:
 	/** Toggle world map */
 	void ToggleMap();
 
+	/** Toggle pause menu (P keyboard / Start gamepad). */
+	void TogglePauseMenu();
+
 	/**
 	 * Toggle auto-walk on/off.
 	 * While active the character walks forward at current speed every frame.
@@ -183,7 +191,7 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Input")
 	bool bAutoWalk = false;
 
-	/** Fly Downward – called by EnhancedInput FlyDown action and by Tick gamepad polling */
+	/** Fly Downward – called by Input FlyDown action and by Tick gamepad polling */
 	void FlyDown();
 
 	/** Kept for backward-compat with any existing Blueprint bindings; calls FlyDown() */

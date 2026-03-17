@@ -125,16 +125,12 @@ void FVoxelMeshGenerator::GenerateMesh(
 	const FVector&       ChunkOrigin,
 	FVoxelMeshOutput&    OutMesh,
 	const FVoxelGenerationConfig& Config,
-	float                SlopeThreshold,
 	int32                InStepSize)
 {
 	OutMesh.Reset();
-
-	const int32 Reserve = 2048;
-	OutMesh.FlatMesh.ReserveInitial(Reserve);
-	OutMesh.SlopeMesh.ReserveInitial(Reserve);
-
 	const int32 EffectiveSize = InChunkSize / InStepSize;
+	const int32 Reserve = EffectiveSize * EffectiveSize * 3;
+	OutMesh.FlatMesh.ReserveInitial(Reserve);
 	const float EffectiveVoxelSize = InVoxelSize * InStepSize;
 
 	// Correct S for indexing.
@@ -285,14 +281,13 @@ void FVoxelMeshGenerator::GenerateMesh(
 
 			// Blend one recognisable base colour per biome for visual debugging.
 			// These colours show through wherever the material uses vertex colour.
+			// Discrete Channel Masks for safe shader-based blending multipliers
 			FLinearColor C(0.f, 0.f, 0.f, 1.f);
-			C += FLinearColor(0.10f, 0.45f, 0.08f) * W.Forest;   // Forest  — green
-			C += FLinearColor(0.85f, 0.75f, 0.35f) * W.Desert;   // Desert  — sand
-			C += FLinearColor(0.40f, 0.40f, 0.45f) * W.Peaks;    // Peaks   — grey
-			C += FLinearColor(0.40f, 0.40f, 0.45f) * W.Cliffs;   // Cliffs  — grey
-			C += FLinearColor(0.10f, 0.05f, 0.15f) * W.Craters;  // Craters — dark
-			C += FLinearColor(0.50f, 0.10f, 0.90f) * W.Mesa;     // Mesa    — purple
-			ColumnColors[CX + CY * S] = C.ToFColor(/*bSRGB=*/true);
+			C.R = W.Forest;                 // Red   = Forest
+			C.G = W.Desert;                 // Green = Desert
+			C.B = W.Peaks + W.Cliffs;       // Blue  = Rocky Peaks/Cliffs
+			C.A = W.Craters + W.Mesa;       // Alpha = Crater/Mesa levels
+			ColumnColors[CX + CY * S] = C.ToFColor(/*bSRGB=*/false);
 		}
 	}
 
@@ -304,29 +299,15 @@ void FVoxelMeshGenerator::GenerateMesh(
 		return ColumnColors[CX + CY * S];
 	};
 
-	// World-space UV: true triplanar blend — no hard axis switch, no seams.
-	// Each of the three planar projections is weighted by pow(|N|, sharpness)
-	// so the blend is smooth across the entire flat-to-slope transition range.
+	// World-space UV: Standard un-blended continuous grid projection.
+	// Delegates continuous Triplanar blending entirely to the Unreal Material 
+	// using WorldAlignedTexture nodes to eliminate coordinate smearing.
 	auto MakeUV = [&](const FVector& VLocal, const FVector& Norm) -> FVector2D
 	{
 		const FVector VWorld = ChunkOrigin + VLocal;
 		const float s = InVoxelSize * 4.f;
 
-		// Blend weights: raise abs(normal component) to a power for sharper blending.
-		// Power 4 gives a clean blend that still transitions smoothly at 45-degree slopes.
-		const float BlendSharpness = 4.f;
-		float wX = FMath::Pow(FMath::Abs(Norm.X), BlendSharpness);
-		float wY = FMath::Pow(FMath::Abs(Norm.Y), BlendSharpness);
-		float wZ = FMath::Pow(FMath::Abs(Norm.Z), BlendSharpness);
-		const float wSum = wX + wY + wZ + 1e-6f;
-		wX /= wSum;  wY /= wSum;  wZ /= wSum;
-
-		// Three planar UVs (scaled the same as before)
-		const FVector2D uvX(VWorld.Y / s, VWorld.Z / s); // projected along X
-		const FVector2D uvY(VWorld.X / s, VWorld.Z / s); // projected along Y
-		const FVector2D uvZ(VWorld.X / s, VWorld.Y / s); // projected along Z (top-down)
-
-		return uvX * wX + uvY * wY + uvZ * wZ;
+		return FVector2D(VWorld.X / s, VWorld.Y / s);
 	};
 
 	// Emit one triangle into the correct mesh section.
@@ -367,8 +348,11 @@ void FVoxelMeshGenerator::GenerateMesh(
 	// Shared quad-emission helper — resolves the four quad vertices, picks the
 	// right mesh section, fetches the cached biome colour, and emits two triangles.
 	// FIXED: Standardized triangle winding order to ensure consistent face orientation
+	// bD0Solid: true when the voxel on the D0 side is solid.
+	// Determines correct CCW winding so normals always point into air,
+	// halving GPU triangle count vs the old double-emit approach.
 	auto EmitQuad = [&](int32 i0, int32 i1, int32 i2, int32 i3,
-	                    int32 ColX, int32 ColY)
+	                    int32 ColX, int32 ColY, bool bD0Solid)
 	{
 		if (VertexIndices[i0] < 0 || VertexIndices[i1] < 0 ||
 		    VertexIndices[i2] < 0 || VertexIndices[i3] < 0) return;
@@ -378,20 +362,23 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const FVector& n0 = CellNormals[i0];  const FVector& n1 = CellNormals[i1];
 		const FVector& n2 = CellNormals[i2];  const FVector& n3 = CellNormals[i3];
 
-		// Route flat vs slope using averaged density-gradient normal.
-		const FVector AvgN = (n0 + n1 + n2 + n3) * 0.25f;
-		FVoxelMeshData& Dest = (FMath::Abs(AvgN.Z) < SlopeThreshold)
-			? OutMesh.SlopeMesh : OutMesh.FlatMesh;
+		// Unified mesh buffer — continuous vertex blending
+		FVoxelMeshData& Dest = OutMesh.FlatMesh;
 
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
-		// Emit both windings so every face is visible from outside regardless
-		// of which direction the density edge crosses. This is the correct
-		// approach for Surface Nets where per-axis winding analysis is unreliable.
-		EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, VC);
-		EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, VC);
-		EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, VC);
-		EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, VC);
+		// Emit single-sided quad. Winding flips with density sign so the normal
+		// always points outward (into air). Halves triangle count vs double-emit.
+		if (bD0Solid)
+		{
+			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, VC);
+			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, VC);
+		}
+		else
+		{
+			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, VC);
+			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, VC);
+		}
 	};
 
 	// 1. X-Axis edges: surface between (X, Y, Z) and (X+1, Y, Z).
@@ -406,7 +393,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 		{
 			EmitQuad(Idx(X, Y,   Z,   S), Idx(X, Y,   Z-1, S),
 			         Idx(X, Y-1, Z-1, S), Idx(X, Y-1, Z,   S),
-			         X, Y);
+			         X, Y, D0 > 0.f);
 		}
 	}
 
@@ -421,22 +408,22 @@ void FVoxelMeshGenerator::GenerateMesh(
 		{
 			EmitQuad(Idx(X,   Y, Z,   S), Idx(X,   Y, Z-1, S),
 			         Idx(X-1, Y, Z-1, S), Idx(X-1, Y, Z,   S),
-			         X, Y);
+			         X, Y, D0 > 0.f);
 		}
 	}
 
-// 3. Z-Axis edges: surface between (X, Y, Z) and (X, Y, Z+1).
-for (int32 Z = 1; Z <= EffectiveSize; ++Z)
-for (int32 Y = 1; Y <= EffectiveSize; ++Y)
-for (int32 X = 1; X <= EffectiveSize; ++X)
-{
-		const float D0 = Densities[Idx(X, Y,   Z, S)];
+	// 3. Z-Axis edges: surface between (X, Y, Z) and (X, Y, Z+1).
+	for (int32 Z = 1; Z <= EffectiveSize; ++Z)
+	for (int32 Y = 1; Y <= EffectiveSize; ++Y)
+	for (int32 X = 1; X <= EffectiveSize; ++X)
+	{
+		const float D0 = Densities[Idx(X, Y, Z,   S)];
 		const float D1 = Densities[Idx(X, Y, Z+1, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
 			EmitQuad(Idx(X,   Y,   Z, S), Idx(X,   Y-1, Z, S),
 			         Idx(X-1, Y-1, Z, S), Idx(X-1, Y,   Z, S),
-			         X, Y);
+			         X, Y, D0 > 0.f);
 		}
 	}
 }

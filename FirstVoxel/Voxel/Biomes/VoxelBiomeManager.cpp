@@ -94,31 +94,11 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
         Config.Craters.ImpactThreshold,
         CraterNoise) * 0.45f;
 
-    // ── FORCE CRATER BIOME AT ORIGIN (0,0) ────────────────────────────────
-    // This ensures the player always spawns in a crater biome, solving the
-    // spawn positioning issue. The crater will blend naturally with the
-    // surrounding procedurally generated terrain.
-    const float OriginDistance = FVector2D(X, Y).Size();
-    const float SpawnCraterRadius = 3000.0f; // 30 meters radius around origin - doubled size
-    const float SpawnCraterFalloff = 1000.0f; // 10 meter transition zone - doubled smoothness
-
-    if (OriginDistance < SpawnCraterRadius + SpawnCraterFalloff)
-    {
-        // Calculate smooth falloff from center to edge
-        float CraterBoost = FMath::Clamp(
-            (SpawnCraterRadius + SpawnCraterFalloff - OriginDistance) / SpawnCraterFalloff, 
-            0.0f, 1.0f);
-        
-        // Boost crater weight near origin - more aggressive to ensure crater dominance
-        CratersW += CraterBoost * 1.2f;
-        
-        // Suppress other biomes proportionally to maintain weight balance
-        ForestW *= (1.0f - CraterBoost * 0.8f);
-        DesertW *= (1.0f - CraterBoost * 0.8f);
-        PeaksW  *= (1.0f - CraterBoost * 0.8f);
-        CliffsW *= (1.0f - CraterBoost * 0.8f);
-        MesaW   *= (1.0f - CraterBoost * 0.8f);
-    }
+    // NOTE: The old hard-coded origin crater boost was removed.
+    // AVoxelWorld::GenerateWorldDeferred() uses FindCraterSpawnLocation() to
+    // search the noise field for a real crater and centres the entire world
+    // generation on that XY — so the player always spawns inside a genuine
+    // crater without any biome map corruption at world origin.
 
     Map.SetWeight(EVoxelBiome::Forest,  ForestW);
     Map.SetWeight(EVoxelBiome::Peaks,   PeaksW);
@@ -168,11 +148,6 @@ float FVoxelBiomeManager::GetSurfaceHeightStatic(float X, float Y, const FVoxelB
         Height += FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Craters);
 
     return Height;
-}
-
-float FVoxelBiomeManager::GetErosion(float X, float Y, const FVoxelGenerationConfig& Config)
-{
-    return GetErosionWithSeed(X, Y, Config, Config.GetSeedOffset());
 }
 
 float FVoxelBiomeManager::GetTemperatureWithSeed(float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff)

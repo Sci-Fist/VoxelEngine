@@ -1,31 +1,38 @@
+// =============================================================================
 // VoxelBiomeManager.h
-// 
-// Core biome distribution system for 2D surface terrain generation.
-// 
-// ARCHITECTURE OVERVIEW:
-// This class manages the procedural distribution of surface biomes across the
-// 2D world plane using orthogonal noise fields. It computes biome weights and
-// blended terrain heights for the surface layer only.
-// 
-// DESIGN PHILOSOPHY:
-// - Surface-only focus: Skylands and Crystal Caverns are handled separately
-//   in FVoxelDensityGenerator to maintain clear layer separation
-// - Noise-driven distribution: Uses temperature and erosion noise fields
-//   for natural biome transitions
-// - Weight-based blending: Biome weights sum to 1.0 for smooth transitions
-// - Performance optimized: Caches seed offsets and avoids redundant calculations
-// 
-// BIOME SYSTEM:
-// The system uses two primary noise dimensions to create natural biome
-// distributions:
-// - Temperature axis: Controls climate-based biomes (cold to hot)
-// - Erosion axis: Controls terrain roughness (flat to rugged)
-// 
-// INTEGRATION:
-// - Works with FVoxelDensityGenerator for complete terrain generation
-// - Provides biome weights for material assignment and foliage placement
-// - Supports per-biome configuration overrides and water settings
-// - Integrates with spawn system for biome-specific player placement
+// =============================================================================
+//
+// Static utility class for 2D surface biome distribution.
+// Evaluates temperature/erosion noise to produce FVoxelBiomeWeightMap values
+// and blended surface heights. All methods are stateless and thread-safe.
+//
+// -- RESPONSIBILITY BOUNDARY --------------------------------------------------
+//
+//  FVoxelBiomeManager handles the SURFACE layer ONLY:
+//    - Biome weight calculation from 2D noise
+//    - Blended surface height from per-biome height functions
+//    - Basic signed-distance surface density (GetBaseSurfaceDensity)
+//
+//  It does NOT handle:
+//    - Skylands density  (FVoxelBiomeGenerators::GetSkylandDensity)
+//    - Cave carving      (FVoxelDensityGenerator::SampleCaveNoise)
+//    - 3D density composition (FVoxelDensityGenerator::GetDensityFull)
+//
+// -- CALL FREQUENCY -----------------------------------------------------------
+//
+//  GetBiomeWeightsStatic() is called O(n^2) times per chunk (once per XY
+//  column) in FVoxelGeneratorTask::BuildDensityField. The results are cached
+//  in ColumnWeights[] and reused for every Z in the column, and again for
+//  the foliage pass. FVoxelBiomeGenerators::GetSkylandColumnCache() also
+//  calls it for each of 9 neighbouring cells -- see notes there.
+//
+// -- NOISE STRUCTURE ----------------------------------------------------------
+//
+//  Two PerlinNoise2D calls per column (Temperature + Erosion), each seeded by
+//  Config.GetSeedOffset() to ensure different worlds per seed. The WithSeed
+//  variants accept a pre-computed offset to avoid calling GetSeedOffset()
+//  twice per column.
+// =============================================================================
 #pragma once
 
 #include "CoreMinimal.h"
@@ -60,9 +67,7 @@ public:
 
 private:
     // Two orthogonal 2D noise fields that drive biome distribution.
-    // WithSeed variants avoid redundant GetSeedOffset() when caller already has it.
-    static float GetTemperature(float X, float Y, const FVoxelGenerationConfig& Config);
-    static float GetErosion    (float X, float Y, const FVoxelGenerationConfig& Config);
+    // Both accept a pre-computed SeedOff to avoid redundant GetSeedOffset() calls.
     static float GetTemperatureWithSeed(float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff);
     static float GetErosionWithSeed    (float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff);
 };

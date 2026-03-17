@@ -21,39 +21,63 @@ class FVoxelGeneratorTask;
 
 class AVoxelChunk;
 
-/**
- * AVoxelChunk represents a single cubic segment of the procedural world.
- * 
- * ARCHITECTURE OVERVIEW:
- * This class is the core building block of the voxel engine, responsible for:
- * 
- * 1. **Terrain Generation**: Dispatches background tasks to calculate density fields
- *    using the configured density generator (surface + skylands + caves)
- * 
- * 2. **Mesh Construction**: Converts density data into renderable ProceduralMeshComponent
- *    using Marching Cubes algorithm with material blending
- * 
- * 3. **LOD Management**: Supports multiple detail levels for performance optimization
- *    with smooth transitions between LOD levels
- * 
- * 4. **Foliage System**: Spawns trees, grass, and other vegetation based on biome
- *    configuration and terrain properties
- * 
- * 5. **Water Simulation**: Manages voxel water data and renders translucent water surfaces
- * 
- * 6. **Memory Management**: Implements chunk pooling for efficient memory usage
- * 
- * THREADING MODEL:
- * - Generation tasks run on background threads via FVoxelGeneratorTask
- * - Mesh upload and foliage spawning occur on GameThread
- * - Thread-safe state management prevents race conditions
- * 
- * PERFORMANCE FEATURES:
- * - Configurable chunk size and voxel resolution
- * - Multi-level LOD with smooth transitions
- * - Instanced Static Mesh Components for efficient foliage rendering
- * - Water mesh separation for optimal material blending
- */
+// =============================================================================
+// AVoxelChunk
+// =============================================================================
+//
+// One cubic section of the procedural world. Owned by AVoxelWorld via the
+// chunk pool (FVoxelChunkPool). Created once and reused across the session.
+//
+// -- RESPONSIBILITIES ---------------------------------------------------------
+//
+//  Generation    Fire FVoxelGeneratorTask on a background thread to build
+//                density field, mesh, foliage, and water sources.
+//
+//  Mesh upload   ApplyMesh() runs on the game thread after the task finishes:
+//                uploads geometry to ProceduralMeshComponent, creates or
+//                refreshes BiomeFoliageHISMs, builds FVoxelWaterData.
+//
+//  LOD           Tick() calls UpdateMeshState() each frame while transitioning.
+//                TransitionToLOD() stores current mesh as PreviousMesh and
+//                fires GenerateAsync() for the new step size.
+//
+//  Water surface RebuildWaterMesh() rebuilds WaterMesh from FVoxelWaterData.
+//                Called by UVoxelWorldWaterComponent when the simulator marks
+//                this chunk dirty.
+//
+// -- STATE MACHINE (EChunkMeshState) ------------------------------------------
+//
+//   Empty  -->  Generating  -->  Ready  -->  Transitioning
+//          GenerateAsync()    ApplyMesh()   TransitionToLOD()
+//                                              |          |
+//                                         Generating   Ready
+//
+// -- CALLBACK PROTOCOL --------------------------------------------------------
+//
+//  OnGenerationComplete  -- fired by ApplyMesh() AND CancelGeneration().
+//                           Always called exactly once per GenerateAsync().
+//                           AVoxelWorld uses this to decrement ActiveGenerations.
+//                           Uses MoveTemp+null-before-call to prevent double-fire.
+//
+//  OnChunkWaterReady     -- fired once by ApplyMesh() with the water source
+//                           world-voxel list. AVoxelWorld registers sources
+//                           with FVoxelWaterSimulator.
+//
+// -- GENERATION ID GUARD ------------------------------------------------------
+//
+//  GenerationId (TAtomic<uint32>) is incremented each time GenerateAsync() is
+//  called. The background task captures its ID at launch; the game-thread
+//  callback discards the result if the ID has changed (chunk was cancelled and
+//  restarted). This prevents stale mesh uploads from recycled chunks.
+//
+// -- FOLIAGE COMPONENTS -------------------------------------------------------
+//
+//  Per-biome foliage uses BiomeFoliageHISMs[], a dynamically grown pool of
+//  UInstancedStaticMeshComponent. On ClearMesh() instances are cleared but
+//  components are kept alive (ReturnChunk pool reuse pattern).
+//  Legacy TreeHISM / GrassHISM are populated only when no per-biome foliage
+//  entries are configured.
+// =============================================================================
 UCLASS()
 class FIRSTVOXEL_API AVoxelChunk : public AActor
 {
@@ -78,8 +102,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
 	UMaterialInterface* MasterSlopeMaterial = nullptr;
 
-	/** Threshold for swapping between flat and slope mesh sections. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials", meta=(ClampMin="0.0", ClampMax="1.0"))
+	/** Threshold (dot product) at which flat material blends into slope cliff material. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
 	float SlopeThreshold = 0.7f;
 
 	FVoxelDataMap* DataMap = nullptr;
@@ -171,6 +195,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaTime) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 #if WITH_EDITOR
@@ -192,11 +217,8 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	UInstancedStaticMeshComponent* GrassHISM;
 
-	/**
-	 * Dynamically created HISM components, one per active foliage slot.
-	 */
+	/** Dynamically grown HISM pool — one component per active per-biome foliage entry. */
 	UPROPERTY()
-	/** Dynamically grown HISM pool — one slot per active per-biome foliage entry. */
 	TArray<UInstancedStaticMeshComponent*> BiomeFoliageHISMs;
 
 	/** The running background task. Kept alive so we can cancel it on demand. */

@@ -1,5 +1,47 @@
+// =============================================================================
 // SkylandsLayerConfig.h
-// Configuration for floating islands layer.
+// =============================================================================
+//
+// Configuration for the SKYLANDS LAYER of the voxel world generator.
+//
+// ── TYPES DEFINED HERE ───────────────────────────────────────────────────────
+//   FSkylandsLayerConfig  — all floating island parameters
+//
+// ── OVERVIEW ─────────────────────────────────────────────────────────────────
+//  Skylands use a cellular grid approach: the world is divided into grid cells
+//  whose size scales with terrain strength (high terrain → large grid → fewer,
+//  bigger islands; flat terrain → small grid → many tiny shards).
+//
+//  For each cell, a hash determines whether an island spawns (vs BaseProbability
+//  + HeightProbabilityBonus), and the island's altitude / size / shape.
+//  The 9 nearest cells are blended by distance-squared weights so transitions
+//  between islands are smooth rather than hard-edged.
+//
+//  ISLAND vs SHARD
+//    ShardTransitionStrength is the upper TerrainStrength boundary for "shard"
+//    behaviour. Below that threshold islands are tiny (ShardMinScale),
+//    very numerous, and use high-frequency jagged noise.
+//    Above it they grow into large smooth islands with organic overhangs and
+//    optionally hanging roots.
+//
+//  ALTITUDE CALCULATION (per island cell)
+//    SkyAlt = TerrainHeight + AltitudeBase
+//           + CurvedHeight * HeightAltitudeBonus
+//           + CurvedRoughness * RoughnessAltitudeBonus
+//           + (1 - ShardT) * LowTerrainAltitudeBoost
+//
+//    where AltitudeBase = Lerp(MinAltitudeAboveTerrain,
+//                              BaseAltitudeAboveTerrain, TerrainStrength)
+//
+// ── DESIGN RULES ──────────────────────────────────────────────────────────────
+//  • Altitude is CONSTANT per island (no per-voxel AltBoost). This prevents
+//    shard artifacts where altitude varies within a chunk, creating vertical
+//    black slabs.
+//  • Shape test is primarily 2D (XY) so island interiors are always solid.
+//  • Z-frequency of shape noise is intentionally very low (0.05× horizontal)
+//    to prevent vertical holes through islands.
+//  • Island size is capped at GridSize * 0.48 to prevent overlapping.
+// =============================================================================
 
 #pragma once
 

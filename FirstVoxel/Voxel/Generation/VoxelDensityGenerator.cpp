@@ -40,7 +40,16 @@ float FVoxelDensityGenerator::GetDensity(float X, float Y, float Z, const FVoxel
 {
     const FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(X, Y, Config);
     const float SurfH                  = FVoxelBiomeManager::GetSurfaceHeightStatic(X, Y, Weights, Config);
-    return GetDensityFull(FVector(X, Y, Z), Weights, SurfH, Config);
+
+    FVoxelBiomeWeightMap NeutralWeights = Weights;
+    NeutralWeights.SetWeight(EVoxelBiome::Craters, 0.f);
+    NeutralWeights.Normalize();
+    const float NeutralSurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(X, Y, NeutralWeights, Config);
+
+    // Compute continuous cache for Central Difference neighbor lookup coherence
+    const FSkylandColumnCache ColumnCache = FVoxelBiomeGenerators::GetSkylandColumnCache(X, Y, SurfH, Weights, Config);
+
+    return GetDensityFull(FVector(X, Y, Z), Weights, SurfH, NeutralSurfH, Config, 1, &ColumnCache);
 }
 
 float FVoxelDensityGenerator::GetSurfaceHeight(float X, float Y, const FVoxelGenerationConfig& Config)
@@ -69,6 +78,7 @@ float FVoxelDensityGenerator::GetDensityFull(
     const FVector&              WorldPos,
     const FVoxelBiomeWeightMap& Weights,
     float                       SurfaceHeight,
+    float                       NeutralSurfaceHeight,
     const FVoxelGenerationConfig& Config,
     int32 StepSize,
     const FSkylandColumnCache* SkylandCache)
@@ -153,7 +163,7 @@ float FVoxelDensityGenerator::GetDensityFull(
 
         // Crystal caverns: large carved chambers deep underground.
         const float CavernDelta = FVoxelBiomeGenerators::GetCrystalCavernDelta(
-            X, Y, Z, SurfaceHeight, Config);
+            X, Y, Z, NeutralSurfaceHeight, Config);
         // Limit cavern carve so chambers cannot turn a whole chunk into one void.
         const float MaxCavernCarve = 0.6f;
         SurfD += FMath::Clamp(CavernDelta, -MaxCavernCarve, MaxCavernCarve);

@@ -1,5 +1,54 @@
+// =============================================================================
 // SurfaceBiomesConfig.h
-// Configuration for 2D height-field blended surface biomes.
+// =============================================================================
+//
+// Configuration for all 2D height-field SURFACE BIOMES.
+//
+// ── TYPES DEFINED HERE ───────────────────────────────────────────────────────
+//   FBiomeBlendConfig    — temperature / erosion noise frequencies + strengths
+//   FForestBiomeConfig   — rolling plains and forested hills
+//   FDesertBiomeConfig   — sand dunes and arid flats
+//   FPeaksBiomeConfig    — dramatic alpine mountains
+//   FCliffsBiomeConfig   — ridged, terraced canyon walls
+//   FMesaBiomeConfig     — flat-top sandstone plateaus
+//   FCraterBiomeConfig   — impact basins with raised rims
+//   FOverhangConfig      — cliff-face ledge parameters
+//
+// ── BIOME DISTRIBUTION OVERVIEW ──────────────────────────────────────────
+//  Two orthogonal 2D Perlin fields drive biome placement:
+//
+//    Temperature (X axis)── cold ──────────────────────────────── hot →
+//    Erosion     (Y axis)── flat ───────────────────────────── rugged →
+//
+//    ┌──────────────────────────────────────────────────────────┐
+//    │            Temperature axis →                       │
+//    │  cool           |           warm    hot              │
+//    │  ___________________________________________          │
+//    │ |                         |            |   │         │
+//    │ |  Forest (flat/temp)     | Desert     |   │ flat    │
+//  E │ |_________________________|____________|___│         │
+//  r │ |                         |                │         │
+//  o │ |  Peaks (rough/cool)     | Cliffs         │ rugged  │
+//  s │ |_________________________|________________│         │
+//  i │ |                         | Mesa           │         │
+//  o │ |                         |________________│         │
+//  n │ |  (Craters override any zone via separate  │         │
+//    │ |   low-freq noise field)                  │         │
+//    │ |__________________________________________│         │
+//    └──────────────────────────────────────────────────────────┘
+//
+//  Weights are smoothstepped so boundaries blend smoothly. Craters use a
+//  separate low-frequency noise field and override any blended biome locally.
+//  All weights are normalized to sum to 1.0 (FVoxelBiomeWeightMap::Normalize).
+//
+// ── ADDING A NEW BIOME ─────────────────────────────────────────────────────
+//  1. Add a config struct here (e.g. FSwampBiomeConfig).
+//  2. Add entry to EVoxelBiome enum (VoxelBiome.h) and update MaxBiomes.
+//  3. Update GBiomeOrder[] in VoxelGeneratorTask.cpp (compile-time assert enforces this).
+//  4. Add GetSwampHeight() to FVoxelBiomeGenerators.
+//  5. Wire weight calculation into FVoxelBiomeManager::GetBiomeWeightsStatic.
+//  6. Add render + water config fields to AVoxelWorld and FVoxelGenerationConfig.
+// =============================================================================
 
 #pragma once
 

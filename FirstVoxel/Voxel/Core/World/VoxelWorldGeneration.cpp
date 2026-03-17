@@ -194,6 +194,73 @@ void AVoxelWorld::GenerateWorldDeferred()
 			GenerationQueue.Add(P.Value);
 		}
 	}
+	
+#if WITH_EDITOR
+	if (!GetWorld()->IsGameWorld())
+	{
+		const FVoxelGenerationConfig& Cfg = GetEffectiveConfig();
+		FVector Pos = Anchor; 
+		Pos.Z = 0.f; 
+		Pos = SnapToVoxelGrid(Pos);
+		
+		const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Cfg);
+		const float Surface = Wh.SurfaceHeight;
+		const float SafeOffset = GetSafeSpawnHeightOffset();
+		
+		float TargetZ = Surface + SafeOffset;
+		if (Wh.Weights.GetWeight(EVoxelBiome::Craters) > 0.3f)
+		{
+			TargetZ = Surface + SafeOffset;
+		}
+
+		const FSkylandsLayerConfig& SC = Cfg.SkylandsLayer;
+		const float HeightNorm    = FMath::Clamp(Surface / SC.MaxTerrainReference, 0.f, 1.f);
+		const float RoughnessNorm = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
+		const float TerrainStr    = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
+		const float AltBase       = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStr);
+		const float SkyAlt        = Surface + AltBase + HeightNorm * SC.HeightAltitudeBonus + RoughnessNorm * SC.RoughnessAltitudeBonus;
+		const float IslandHalfThick = (SC.BaseIslandSize + HeightNorm * SC.HeightSizeBonus + RoughnessNorm * SC.RoughnessSizeBonus) * SC.ThicknessRatio;
+
+		static FVoxelDensityGenerator EditorSpawnProbe;
+		bool bFoundSkyland = false;
+		
+		if (SkyAlt > Surface + 5000.f)
+		{
+			for (float z = SkyAlt + IslandHalfThick; z >= FMath::Max(SkyAlt - IslandHalfThick, Surface + 500.f); z -= 200.f)
+			{
+				if (EditorSpawnProbe.GetDensity(Pos.X, Pos.Y, z, Cfg) > 0.f)
+				{
+					TargetZ = z + SafeOffset;
+					bFoundSkyland = true;
+					break;
+				}
+			}
+		}
+
+		const float ChunkHeight = ChunkSize * VoxelSize;
+		const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
+		const FIntVector SpawnCoord = WorldToChunkCoord(Anchor); 
+
+		for (int32 x = -1; x <= 1; ++x)
+		{
+			for (int32 y = -1; y <= 1; ++y)
+			{
+				if (bFoundSkyland && SpawnChunkZ != 0)
+				{
+					FIntVector SkyCoord(SpawnCoord.X + x, SpawnCoord.Y + y, SpawnChunkZ);
+					if (!QueueSet.Contains(SkyCoord)) { QueueSet.Add(SkyCoord); GenerationQueue.Add(SkyCoord); }
+					
+					if (SpawnChunkZ > 0)
+					{
+						FIntVector BelowCoord(SpawnCoord.X + x, SpawnCoord.Y + y, SpawnChunkZ - 1);
+						if (!QueueSet.Contains(BelowCoord)) { QueueSet.Add(BelowCoord); GenerationQueue.Add(BelowCoord); }
+					}
+				}
+			}
+		}
+	}
+#endif
+
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d new chunks to extend the world."), GenerationQueue.Num());
 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Queued %d chunks."), GenerationQueue.Num()));
 
@@ -369,8 +436,9 @@ void AVoxelWorld::DrainGenerationQueue()
 		ProcessedThisTick++;
 	}
 
-	// Compact the queue periodically to reclaim memory
-	if (QueueHead > 100)
+	// Compact the queue periodically to reclaim memory.
+	// Threshold lowered to 50 to keep the compaction cost small per-tick.
+	if (QueueHead > 50)
 	{
 		GenerationQueue.RemoveAt(0, QueueHead);
 		QueueHead = 0;
@@ -387,11 +455,6 @@ void AVoxelWorld::RebuildChunk(const FIntVector& Coord)
 				Chunk->GenerateAsync();
 		}
 	}
-}
-
-void AVoxelWorld::OnChunkGenerationComplete()
-{
-	ActiveGenerations = FMath::Max(0, ActiveGenerations - 1);
 }
 
 void AVoxelWorld::DiscoverExistingChunks()
@@ -421,10 +484,10 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 
 	Chunk->ChunkSize          = ChunkSize;
 	Chunk->VoxelSize          = VoxelSize;
-	Chunk->MasterFlatMaterial = MasterFlatMaterial;
-	Chunk->MasterSlopeMaterial= MasterSlopeMaterial;
-	Chunk->SlopeThreshold     = SlopeThreshold;
-	Chunk->GenerationConfig   = EffectiveConfig;
+	Chunk->MasterFlatMaterial  = MasterFlatMaterial;
+	Chunk->MasterSlopeMaterial = MasterSlopeMaterial;
+	Chunk->SlopeThreshold      = SlopeThreshold;
+	Chunk->GenerationConfig    = EffectiveConfig;
 	Chunk->TreeMesh           = TreeMesh;
 	Chunk->GrassMesh          = GrassMesh;
 	Chunk->FoliageDensity     = FoliageDensity;

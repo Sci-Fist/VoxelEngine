@@ -28,8 +28,8 @@ void AFirstVoxelPlayerController::BeginPlay()
         if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
             ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(LP))
         {
-            if (DefaultMappingContext)
-                Subsystem->AddMappingContext(DefaultMappingContext, 0);
+            if (MappingContext)
+                Subsystem->AddMappingContext(MappingContext, 0);
         }
 
         FInputModeGameOnly InputMode;

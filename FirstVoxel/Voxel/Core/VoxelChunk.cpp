@@ -44,6 +44,10 @@ DEFINE_LOG_CATEGORY(LogVoxelChunk);
 
 AVoxelChunk::AVoxelChunk()
 {
+	// Enable Tick so UpdateMeshState() can drive LOD transitions each frame.
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.TickGroup     = TG_PrePhysics;
+
 	// Initialize procedural mesh component for terrain geometry
 	// This component handles dynamic mesh generation and rendering
 	ProceduralMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("ProceduralMesh"));
@@ -87,10 +91,18 @@ AVoxelChunk::AVoxelChunk()
 void AVoxelChunk::BeginPlay()
 {
 	Super::BeginPlay();
-	
-	// Log chunk initialization for debugging purposes
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: BeginPlay (%d,%d,%d)"), 
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: BeginPlay (%d,%d,%d)"),
 		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
+}
+
+void AVoxelChunk::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+	// Drive smooth LOD transitions each frame.
+	if (MeshState == EChunkMeshState::Transitioning)
+	{
+		UpdateMeshState();
+	}
 }
 
 void AVoxelChunk::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -120,19 +132,19 @@ void AVoxelChunk::CancelGeneration()
 		CurrentTask->Cancel();
 	}
 
-	// Invalidate any queued completion callbacks for this generation
-	// This prevents stale callbacks from executing after cancellation
+	// Invalidate any queued completion callbacks BEFORE calling the callback
+	// so a re-entrant SpawnChunk call (bMeshDirty path) doesn't see bGenerating=true.
 	++GenerationId;
-	
-	// Ensure we don't report as generating once cancellation is requested
 	bGenerating = false;
 
-	// Notify the world that generation was cancelled so it can decrement ActiveGenerations
-	// This is important for maintaining accurate generation state tracking
+	// Notify the world so it can decrement ActiveGenerations.
+	// Must happen AFTER bGenerating is cleared so the world's dirty-rebuild
+	// guard (`!Chunk->IsGenerating()`) works correctly on re-entry.
 	if (OnGenerationComplete)
 	{
-		OnGenerationComplete();
-		OnGenerationComplete = nullptr;
+		auto Callback = MoveTemp(OnGenerationComplete);
+		OnGenerationComplete = nullptr; // clear before calling to prevent double-fire
+		Callback();
 	}
 }
 
@@ -166,7 +178,14 @@ void AVoxelChunk::GenerateAsync()
 	TMap<int32, float> LocalMap;
 	if (DataMap)
 	{
-		DataMap->GetChunkData(ChunkCoord, LocalMap);
+		const FVector Pos = GetActorLocation();
+		const float Size = ChunkSize * VoxelSize;
+		const FIntVector GlobalChunkCoord(
+			FMath::FloorToInt(Pos.X / Size),
+			FMath::FloorToInt(Pos.Y / Size),
+			FMath::FloorToInt(Pos.Z / Size));
+
+		DataMap->GetChunkData(GlobalChunkCoord, LocalMap);
 	}
 
 	// Create generation task with all necessary parameters
@@ -218,7 +237,14 @@ void AVoxelChunk::GenerateSync()
 	TMap<int32, float> LocalMap;
 	if (DataMap)
 	{
-		DataMap->GetChunkData(ChunkCoord, LocalMap);
+		const FVector Pos = GetActorLocation();
+		const float Size = ChunkSize * VoxelSize;
+		const FIntVector GlobalChunkCoord(
+			FMath::FloorToInt(Pos.X / Size),
+			FMath::FloorToInt(Pos.Y / Size),
+			FMath::FloorToInt(Pos.Z / Size));
+
+		DataMap->GetChunkData(GlobalChunkCoord, LocalMap);
 	}
 
 	// Create generation task with synchronous execution parameters
@@ -275,14 +301,6 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		if (BiomeRender.SlopeMaterialOverride) SlopeMat = BiomeRender.SlopeMaterialOverride.Get();
 	}
 	
-	// DEBUG: Log material assignment for crater biome
-	if (DominantBiome == EVoxelBiome::Craters)
-	{
-		UE_LOG(LogVoxelChunk, Warning, TEXT("Crater chunk (%d,%d,%d) - FlatMat: %s, SlopeMat: %s"),
-			ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
-			FlatMat ? *FlatMat->GetName() : TEXT("NULL"),
-			SlopeMat ? *SlopeMat->GetName() : TEXT("NULL"));
-	}
 
 	// ── Generate biome-specific mesh name ─────────────────────────────────
 	// Create descriptive mesh names that include biome information for debugging
@@ -303,13 +321,10 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	
 	// Set biome-specific mesh section names for debugging and profiling
 	FString FlatMeshName = FString::Printf(TEXT("FlatMesh_%s_%s"), *BiomeName, *ChunkCoordStr);
-	FString SlopeMeshName = FString::Printf(TEXT("SlopeMesh_%s_%s"), *BiomeName, *ChunkCoordStr);
-
 	// ── Upload terrain mesh sections ──────────────────────────────────────
 	// Clear existing mesh sections and upload new geometry
 	ProceduralMesh->ClearAllMeshSections();
 	UploadSection(0, Out.FlatMesh,  FlatMat, FlatMeshName);
-	UploadSection(1, Out.SlopeMesh, SlopeMat, SlopeMeshName);
 
 	// ── Per-biome foliage system (Recycled / Pooled) ──────────────────────
 	// Handle biome-specific foliage placement with efficient component reuse
@@ -453,11 +468,12 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	bGenerating  = false;
 
 	// Notify AVoxelWorld that this chunk finished so it can decrement ActiveGenerations.
-	// This is crucial for the world's generation state management.
+	// Use MoveTemp to prevent double-fire if the callback re-enters this chunk.
 	if (OnGenerationComplete)
 	{
-		OnGenerationComplete();
+		auto Callback = MoveTemp(OnGenerationComplete);
 		OnGenerationComplete = nullptr;
+		Callback();
 	}
 }
 

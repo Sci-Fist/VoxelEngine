@@ -1,14 +1,15 @@
 // FirstVoxelHUD.cpp
-// Draws crosshair + context-aware control labels.
+// Draws crosshair + context-aware control labels + pause menu.
 // Automatically switches between Keyboard/Mouse and Gamepad hints
 // based on AFirstVoxelCharacter::bLastInputWasGamepad.
 #include "FirstVoxelHUD.h"
+#include "UI/VoxelPauseMenu.h"   // includes DefaultSlotNames, MaxSaveSlots
 #include "Engine/Canvas.h"
 #include "FirstVoxelCharacter.h"
-// #include "Variant_Combat/CombatCharacter.h"
-// #include "Variant_SideScrolling/SideScrollingCharacter.h"
-// #include "Variant_Platforming/PlatformingCharacter.h"
-
+#include "Voxel/Core/World/VoxelWorld.h"
+#include "Kismet/GameplayStatics.h"
+#include "Misc/Paths.h"
+#include "HAL/PlatformFileManager.h"
 
 // ---------------------------------------------------------------------------
 // Small helper: draw a label + value pair with a coloured key/button badge
@@ -31,15 +32,152 @@ namespace
     }
 }
 
+// ============================================================
+//  BeginPlay — create pause menu
+// ============================================================
+void AFirstVoxelHUD::BeginPlay()
+{
+    Super::BeginPlay();
+    PauseMenu = NewObject<UVoxelPauseMenu>(this);
+    PauseMenu->Init(this);
+}
+
+bool AFirstVoxelHUD::IsPaused() const
+{
+    return PauseMenu && PauseMenu->IsOpen();
+}
+
+void AFirstVoxelHUD::TogglePause()
+{
+    if (!PauseMenu) return;
+    if (PauseMenu->IsOpen())
+        PauseMenu->Close();
+    else
+        PauseMenu->Open();
+}
+
 void AFirstVoxelHUD::DrawHUD()
 {
     Super::DrawHUD();
     if (!Canvas) return;
 
+    // ── Pause menu takes full priority when open ──────────────────────────
+    if (PauseMenu && PauseMenu->IsOpen())
+    {
+        PauseMenu->Draw();
+        return;
+    }
+
     // Cache the font pointer once per frame rather than calling GetSmallFont() on every DrawRow.
     // GEngine->GetSmallFont() allocates a new descriptor each call which adds up at 60 fps.
     UFont* const SmallFont = GEngine ? GEngine->GetSmallFont() : nullptr;
     if (!SmallFont) return;
+
+    if (bShowTitleScreen)
+    {
+        // ── Full-screen dark background ───────────────────────────────────────
+        DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.90f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
+
+        const float CX2 = Canvas->SizeX * 0.5f;
+        const float CY2 = Canvas->SizeY * 0.5f;
+
+        // ── Title ──────────────────────────────────────────────────────
+        float TitleW, TitleH;
+        GetTextSize(TEXT("V O X E L   E N G I N E"), TitleW, TitleH, SmallFont, 2.f);
+        DrawText(TEXT("V O X E L   E N G I N E"),
+                 FLinearColor(1.f, 0.85f, 0.2f, 1.f),
+                 CX2 - TitleW * 0.5f, CY2 - 130.f, SmallFont, 2.f);
+
+        // Divider
+        DrawRect(FLinearColor(0.35f, 0.35f, 0.45f, 0.7f), CX2 - 220.f, CY2 - 85.f, 440.f, 1.f);
+
+        // ── Menu options ─────────────────────────────────────────────
+        // Check which save slots have data so we can show live labels.
+        // We look for the first AVoxelWorld in the level to build the path.
+        AVoxelWorld* TitleWorld = nullptr;
+        {
+            TArray<AActor*> WA;
+            UGameplayStatics::GetAllActorsOfClass(this, AVoxelWorld::StaticClass(), WA);
+            if (WA.Num() > 0) TitleWorld = Cast<AVoxelWorld>(WA[0]);
+        }
+
+        // Build per-slot existence flags (up to MaxSaveSlots)
+        bool bSlotExists[5] = {};
+        if (TitleWorld)
+        {
+            for (int32 s = 0; s < 5; ++s)
+            {
+                FString SlotName = DefaultSlotNames[s];
+                FString Path = FPaths::Combine(
+                    FPaths::ProjectSavedDir(), TEXT("VoxelSaves"),
+                    FString::Printf(TEXT("%s_%s.sav"), *TitleWorld->GetName(), *SlotName));
+                bSlotExists[s] = FPaths::FileExists(Path);
+            }
+        }
+
+        // Any saved world available?
+        const bool bAnySaved = bSlotExists[0] || bSlotExists[1] || bSlotExists[2] ||
+                               bSlotExists[3] || bSlotExists[4];
+
+        struct TitleItem { FString Label; FColor Col; FKey HotKey; };
+        const TitleItem Items[] = {
+            { TEXT("[G]  Generate New World"),     FColor(220,220,220), EKeys::G },
+            { bAnySaved
+                ? TEXT("[L]  Load World (Slot 1)")  // quick-load first occupied slot
+                : TEXT("[L]  Load World  (no saves)"),
+              bAnySaved ? FColor(220,220,220) : FColor(100,100,100), EKeys::L },
+        };
+
+        float ItemY = CY2 - 60.f;
+        for (const TitleItem& Item : Items)
+        {
+            DrawText(Item.Label, FLinearColor(Item.Col), CX2 - 160.f, ItemY, SmallFont, 1.4f);
+            ItemY += 50.f;
+        }
+
+        DrawRect(FLinearColor(0.35f, 0.35f, 0.45f, 0.7f), CX2 - 220.f, ItemY + 4.f, 440.f, 1.f);
+        DrawText(TEXT("[P] or [Start]  Pause / Settings"),
+                 FLinearColor(0.55f, 0.8f, 1.f, 1.f), CX2 - 160.f, ItemY + 18.f, SmallFont, 1.0f);
+
+        // ── Input polling ─────────────────────────────────────────────
+        APlayerController* PC = GetOwningPlayerController();
+        if (PC)
+        {
+            // [G] or gamepad A — generate new world
+            const bool bGenerate = PC->WasInputKeyJustPressed(EKeys::G) ||
+                                   PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Bottom);
+            if (bGenerate)
+            {
+                if (TitleWorld)
+                {
+                    TitleWorld->GenerateWorld();   // randomises seed + generates
+                    bShowTitleScreen = false;
+                    PC->SetShowMouseCursor(false);
+                    FInputModeGameOnly GM; PC->SetInputMode(GM);
+                }
+            }
+            // [L] or gamepad X — load first occupied slot
+            else if ((PC->WasInputKeyJustPressed(EKeys::L) ||
+                      PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Left))
+                     && bAnySaved)
+            {
+                if (TitleWorld)
+                {
+                    // Find the first occupied slot
+                    int32 FirstSlot = 0;
+                    for (int32 s = 0; s < 5; ++s) { if (bSlotExists[s]) { FirstSlot = s; break; } }
+
+                    TitleWorld->ClearWorld();
+                    TitleWorld->LoadFromFile(DefaultSlotNames[FirstSlot]);
+                    TitleWorld->GenerateWorldDeferred();
+                    bShowTitleScreen = false;
+                    PC->SetShowMouseCursor(false);
+                    FInputModeGameOnly GM; PC->SetInputMode(GM);
+                }
+            }
+        }
+        return; // Don't draw the normal gameplay HUD
+    }
 
     // ── Crosshair ──────────────────────────────────────────────────────────
     const float CX = Canvas->SizeX * 0.5f;
@@ -91,7 +229,8 @@ void AFirstVoxelHUD::DrawHUD()
         DrawRow(this, X, Y, LineH, TEXT("[A]"),            BC, TEXT(": Jump / Fly Up"),    ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[X]"),            BC, TEXT(": Fly Down"),         ColAction, SmallFont);
 
-        DrawRow(this, X, Y, LineH, TEXT("[Y] / Start"),    BC, TEXT(": Map"),              ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[Y]"),             BC, TEXT(": Map"),              ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[Start]"),          BC, TEXT(": Pause"),            ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[Left Stick]"),   BC, TEXT(": Move"),             ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[Right Stick]"),  BC, TEXT(": Look"),             ColAction, SmallFont);
     }
@@ -107,6 +246,7 @@ void AFirstVoxelHUD::DrawHUD()
         DrawRow(this, X, Y, LineH, TEXT("[Ctrl]"),         BC, TEXT(": Fly Down"),         ColAction, SmallFont);
 
         DrawRow(this, X, Y, LineH, TEXT("[M]"),            BC, TEXT(": Map"),              ColAction, SmallFont);
+        DrawRow(this, X, Y, LineH, TEXT("[P]"),            BC, TEXT(": Pause"),            ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[WASD]"),         BC, TEXT(": Move"),             ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[Mouse]"),        BC, TEXT(": Look"),             ColAction, SmallFont);
     }

@@ -19,52 +19,67 @@ class UMaterialInterface;
 class UStaticMesh;
 class USceneComponent;
 
-/**
- * AVoxelWorld is the central manager for the procedural voxel engine.
- * 
- * ARCHITECTURE OVERVIEW:
- * This class serves as the orchestrator for the entire voxel generation system,
- * responsible for:
- * 
- * 1. **World Management**: Coordinates chunk generation, streaming, and cleanup
- *    based on player position and render distance settings
- * 
- * 2. **Generation Pipeline**: Manages the asynchronous generation queue with
- *    configurable concurrency limits to balance performance and responsiveness
- * 
- * 3. **Biome System**: Handles multi-biome terrain blending with per-biome
- *    material overrides and foliage configuration
- * 
- * 4. **LOD System**: Implements Level-of-Detail transitions for performance
- *    optimization with smooth mesh blending
- * 
- * 5. **Water Simulation**: Integrates with FVoxelWaterSimulator for dynamic
- *    water flow and pool formation
- * 
- * 6. **Persistence**: Provides save/load functionality for world modifications
- *    and terrain edits
- * 
- * 7. **Editor Integration**: Extensive editor support with real-time preview,
- *    preset management, and debugging tools
- * 
- * STREAMING MODEL:
- * - Chunks are generated in a radius around the player based on RenderDistanceXY/Z
- * - Skylands use separate distance settings for performance optimization
- * - Chunks are pooled and reused to minimize memory allocation overhead
- * - Background generation tasks are throttled to prevent frame rate drops
- * 
- * PERFORMANCE FEATURES:
- * - Configurable LOD distances with smooth transitions
- * - Async generation with progress tracking
- * - Chunk pooling for memory efficiency
- * - Editor-specific optimizations to prevent viewport freezing
- * 
- * BIOME SYSTEM:
- * - Temperature/Erosion based biome distribution
- * - Per-biome material overrides and foliage configuration
- * - Weight-based blending for natural biome transitions
- * - Special handling for spawn area biome forcing
- */
+// =============================================================================
+// AVoxelWorld
+// =============================================================================
+//
+// Central manager for the FirstVoxel procedural world engine.
+// Place one instance in the level. Drives all chunk generation, streaming,
+// LOD transitions, water simulation, player spawn, and persistence.
+//
+// -- IMPLEMENTATION FILES -----------------------------------------------------
+//
+//   VoxelWorld.cpp               Constructor, BeginPlay, Tick, ClearWorld,
+//                                SnapPlayerToGround, preset helpers, utils
+//   VoxelWorldGeneration.cpp     GenerateWorldDeferred, SpawnChunk,
+//                                DestroyChunk, DrainQueue, ConfigureChunk,
+//                                ProcessInitialPlayerSpawn
+//   VoxelWorldModification.cpp   SetVoxelSphere, Save/Load, FindCraterSpawn,
+//                                RunVoxelTests
+//   VoxelWorld_Streaming.cpp     UpdateChunkStreaming, LOD hysteresis
+//   Water/VoxelWorldWater.cpp    UVoxelWorldWaterComponent tick
+//
+// -- TICK RESPONSIBILITIES ----------------------------------------------------
+//
+//   UpdateChunkStreaming()    Every StreamingInterval (0.25 s) in game world.
+//                            Computes desired chunk set, destroys out-of-range
+//                            chunks, queues new ones sorted nearest-first.
+//
+//   DrainGenerationQueue()   Every tick. Spawns up to Limit chunks per tick
+//                            (2 in editor, 8 in game) while ActiveGenerations
+//                            < MaxConcurrentGenerations.
+//
+//   Hover-lock logic         After ProcessInitialPlayerSpawn() sets
+//                            bWaitingForInitialSpawn, Tick holds the player
+//                            at TargetCoordsZ until InitialSpawnCoords[] are
+//                            all Ready, then releases movement.
+//
+//   Dirty-chunk rebuild      Any chunk with bMeshDirty=true is re-queued for
+//                            GenerateAsync() once a concurrency slot opens.
+//
+// -- ACTIVE GENERATIONS COUNTER -----------------------------------------------
+//
+//   ActiveGenerations tracks in-flight background tasks. Incremented in
+//   SpawnChunk BEFORE GenerateAsync(); decremented in the OnGenerationComplete
+//   lambda. CancelGeneration() also fires OnGenerationComplete exactly once
+//   (MoveTemp pattern) to keep the counter balanced.
+//   MaxConcurrentGenerations (default 12) caps the thread-pool pressure.
+//
+// -- GENERATION CONFIG MERGE --------------------------------------------------
+//
+//   GetEffectiveConfig() returns a reference to MergedConfig (mutable member).
+//   When BiomePreset is assigned, preset values win EXCEPT Seed, which always
+//   comes from GenerationConfig.Seed so RandomizeSeed() takes effect.
+//   Per-biome render/water configs from the Details panel properties are
+//   injected into MergedConfig only when no preset is active.
+//
+// -- EDITOR SPAWN SIMULATION --------------------------------------------------
+//
+//   When Generate World is pressed in the editor (not PIE), GenerateWorldDeferred
+//   runs the same crater-search and spawn-chunk prioritisation as runtime,
+//   wrapped in #if WITH_EDITOR. The viewport therefore shows the actual spawn
+//   area the player sees on first load.
+// =============================================================================
 UCLASS()
 class FIRSTVOXEL_API AVoxelWorld : public AActor {
   GENERATED_BODY()
@@ -120,11 +135,9 @@ public:
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Materials")
   UMaterialInterface *MasterSlopeMaterial = nullptr;
 
-  /** Cosine of the slope angle. 1.0 = Up, 0.0 = Horizontal. Surfaces steeper
-   * than this will use the Slope Material. */
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Materials",
-            meta = (ClampMin = "0.0", ClampMax = "1.0"))
-  float SlopeThreshold = 0.8f;
+  /** Threshold (dot product) at which flat material blends into slope cliff material. */
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Materials")
+  float SlopeThreshold = 0.7f;
 
   /** The primary world generation configuration. Used if BiomePreset is not
    * set. */
@@ -229,14 +242,19 @@ public:
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn")
   float SafeSpawnHeightOffset = 1500.f;
 
-  UFUNCTION(CallInEditor, Category = "Voxel")
+  /**
+   * Randomizes the seed and regenerates the world from scratch.
+   * Also simulates the player spawn sequence (finds crater, places spawn
+   * chunk) so the editor viewport shows exactly what PIE will look like.
+   */
+  UFUNCTION(CallInEditor, Category = "Voxel",
+            meta = (ToolTip = "Pick a new random seed and regenerate the world. Simulates player spawn so the viewport shows the actual spawn area."))
   void GenerateWorld();
 
-  UFUNCTION(CallInEditor, Category = "Voxel")
+  /** Destroy all chunks without generating new ones. */
+  UFUNCTION(CallInEditor, Category = "Voxel",
+            meta = (ToolTip = "Destroy all chunks without generating new ones."))
   void ClearWorld();
-
-  UFUNCTION(CallInEditor, Category = "Voxel")
-  void RandomizeSeed();
 
   UFUNCTION(CallInEditor, Category = "Voxel")
   void SnapPlayerToGround();
@@ -268,6 +286,10 @@ public:
   virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
   virtual void Tick(float DeltaTime) override;
 
+  /** Name of the file slot used for Editor Saving or Loading. */
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Persistence")
+  FString SaveSlotName = TEXT("DefaultSlot");
+
   UFUNCTION(BlueprintCallable, Category = "Voxel|Persistence")
   void SaveToFile(const FString &SlotName);
 
@@ -279,9 +301,9 @@ public:
 
   // --- Editor Actions ---
 
-  /** Wipe all spawned mesh actors and trigger a fresh procedural loop from
-   * config. */
-  UFUNCTION(CallInEditor, Category = "Voxel|Actions")
+  /** Regenerate with the CURRENT seed — useful for testing config changes without changing the world layout. */
+  UFUNCTION(CallInEditor, Category = "Voxel|Actions",
+            meta = (ToolTip = "Regenerate the world with the current seed. Use Generate World (above) to get a new random seed instead."))
   void RebuildWorld();
 
   /** Clears in-memory voxel edits node buckets quickly. */
@@ -289,12 +311,12 @@ public:
   UFUNCTION(CallInEditor, Category = "Voxel|Actions")
   void ClearModifications();
 
-  /** Saves state using preset 'DefaultSlot' naming schemes. */
-  UFUNCTION(CallInEditor, Category = "Voxel|Actions")
+  /** Saves in-memory voxel edits node buckets quickly. */
+  UFUNCTION(CallInEditor, Category = "Voxel|Persistence", meta=(DisplayName="Save Slot"))
   void SaveDefaultSlot();
 
-  /** Loads state using preset 'DefaultSlot' naming schemes. */
-  UFUNCTION(CallInEditor, Category = "Voxel|Actions")
+  /** Loads state from target SaveSlotName. */
+  UFUNCTION(CallInEditor, Category = "Voxel|Persistence", meta=(DisplayName="Load Slot"))
   void LoadDefaultSlot();
 
   /** Triggers system verification tests from the Editor Details Panel. */
@@ -475,13 +497,17 @@ private:
                                   const FVoxelGenerationConfig &Config) const;
   float GetSafeSpawnHeightOffset() const;
 
+  /** Internal helper — picks a new random seed. Called by GenerateWorld() and BeginPlay(). Not exposed to the editor panel. */
+  void RandomizeSeed();
+
+public:
   void GenerateWorldDeferred();
+private:
   void SpawnChunk(const FIntVector &Coord);
   void DestroyChunk(const FIntVector &Coord);
   void RebuildChunk(const FIntVector &Coord);
   void UpdateChunkStreaming();
   void DrainGenerationQueue();
-  void OnChunkGenerationComplete();
   void DiscoverExistingChunks();
 
 

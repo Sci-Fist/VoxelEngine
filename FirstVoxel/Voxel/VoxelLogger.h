@@ -1,4 +1,41 @@
+// =============================================================================
 // VoxelLogger.h
+// =============================================================================
+//
+// Thread-safe session log writer for the voxel engine.
+// Writes timestamped events to a per-session file in Source/Log/ so that
+// detailed generation diagnostics are available without opening the UE
+// output log or attaching a debugger.
+//
+// -- LOG FILE LOCATION --------------------------------------------------------
+//
+//   Source/Log/FirstVoxel_YYYYMMDD_HHMMSS.log
+//   A new file is created per PIE session (InitLogger is called in the
+//   module startup). Each session therefore has an isolated history.
+//
+// -- THREAD SAFETY ------------------------------------------------------------
+//
+//   LogVoxelEvent() acquires LogLock (FCriticalSection) before writing.
+//   Safe to call from background generation threads (FVoxelGeneratorTask).
+//
+// -- USAGE --------------------------------------------------------------------
+//
+//   // From any thread:
+//   UVoxelLogger::LogVoxelEvent(TEXT("MyEvent: some detail"));
+//
+//   // From Blueprint:
+//   // Call the BlueprintCallable LogVoxelEvent node.
+//
+// -- LOG CATEGORIES (UE output log) -------------------------------------------
+//
+//   LogVoxelWorld   AVoxelWorld, streaming, generation, spawn
+//   LogVoxelChunk   AVoxelChunk, mesh upload, LOD transitions
+//   LogVoxelBiome   FVoxelBiomeManager, weight calculation
+//
+//   Use UE_LOG(LogVoxelWorld, Verbose, ...) for high-frequency events that
+//   should not appear in normal runs. Session log always receives all events
+//   regardless of log verbosity settings.
+// =============================================================================
 #pragma once
 
 #include "CoreMinimal.h"

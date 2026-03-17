@@ -136,50 +136,76 @@ void AVoxelWorld::UpdateChunkStreaming()
 			FVector ChunkPos = ChunkCoordToWorld(It.Key) + FVector(ChunkSize * VoxelSize * 0.5f);
 			float DistSq = FVector::DistSquared(PlayerPos, ChunkPos);
 
-			// Determine target LOD based on distance thresholds
-			int32 TargetLOD = 0;
-			if (DistSq > LOD2Distance * LOD2Distance) TargetLOD = 2;
-			else if (DistSq > LOD1Distance * LOD1Distance) TargetLOD = 1;
+			// Determine target LOD based on distance thresholds.
+			// Hysteresis: a chunk must exceed the boundary by 10% before transitioning
+			// to prevent repeated rebuilds when the player walks along an LOD border.
+			static constexpr float HysteresisFactor = 1.10f;
+			const float LOD1Inner = LOD1Distance;
+			const float LOD1Outer = LOD1Distance * HysteresisFactor;
+			const float LOD2Inner = LOD2Distance;
+			const float LOD2Outer = LOD2Distance * HysteresisFactor;
 
-			// Apply LOD transition if needed
-			if (Chunk->LOD != TargetLOD)
+			int32 TargetLOD = Chunk->LOD; // default: keep current
+			if (Chunk->LOD < 2 && DistSq > LOD2Outer * LOD2Outer)       TargetLOD = 2;
+			else if (Chunk->LOD > 1 && DistSq < LOD2Inner * LOD2Inner)   TargetLOD = 1;
+			else if (Chunk->LOD < 1 && DistSq > LOD1Outer * LOD1Outer)   TargetLOD = 1;
+			else if (Chunk->LOD > 0 && DistSq < LOD1Inner * LOD1Inner)   TargetLOD = 0;
+
+			if (TargetLOD != Chunk->LOD)
 			{
-				// Use smooth LOD transition instead of instant rebuild
 				Chunk->TransitionToLOD(TargetLOD);
 			}
 		}
 	}
 
-	// Add new desired chunks to generation queue, sorted by distance
-	TArray<TPair<int32, FIntVector>> NewChunks;
+	// ── Add newly desired chunks to the generation queue ──────────────────
+	//
+	// ── Merge & Re-Sort Generation Queue ──────────────────
+	TSet<FIntVector> UniqueMerged;
+	UniqueMerged.Reserve(Desired.Num() + (GenerationQueue.Num() - QueueHead));
 
-	// OPTIMIZATION: convert queue to set for O(1) lookup to prevent main-thread freeze with large volumes
-	TSet<FIntVector> QueueSet(GenerationQueue);
-
-	// Find chunks that need to be generated
+	// 1. Add newly desired (not yet loaded) chunks
 	for (const FIntVector& C : Desired)
 	{
-		if (!LoadedChunks.Contains(C) && !QueueSet.Contains(C))
+		if (!LoadedChunks.Contains(C))
 		{
-			FIntVector Local = C - PlayerCoord;
-			int32 DistSq = Local.X*Local.X + Local.Y*Local.Y + Local.Z*Local.Z;
-			NewChunks.Add(TPair<int32, FIntVector>(DistSq, C));
+			UniqueMerged.Add(C);
 		}
 	}
-	
-	// PRIORITY SORT: Ensure nearest chunks land at the HEAD of the queue
-	// This ensures the most important chunks are generated first
-	NewChunks.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key < B.Key; });
-	
-	// Add sorted chunks to generation queue
-	const int32 NumNew = NewChunks.Num();
-	if (NumNew > 0)
+
+	// 2. Add remaining items already in the queue from past ticks
+	for (int32 i = QueueHead; i < GenerationQueue.Num(); ++i)
 	{
-		GenerationQueue.Reserve(GenerationQueue.Num() + NumNew);
-		for (int32 i = 0; i < NumNew; ++i)
-		{
-			GenerationQueue.Add(NewChunks[i].Value);
-		}
-		UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Streaming added %d new chunks to queue"), NumNew);
+		UniqueMerged.Add(GenerationQueue[i]);
+	}
+
+	// 3. Compute absolute distances and Sort
+	TArray<TPair<int32, FIntVector>> SortedQueue;
+	SortedQueue.Reserve(UniqueMerged.Num());
+
+	for (const FIntVector& C : UniqueMerged)
+	{
+		FIntVector Local = C - PlayerCoord;
+		const int32 DistSq = Local.X*Local.X + Local.Y*Local.Y + Local.Z*Local.Z;
+		SortedQueue.Add(TPair<int32, FIntVector>(DistSq, C));
+	}
+
+	// Nearest first so absolute priorites override stale positions FIFO
+	SortedQueue.Sort([](const TPair<int32, FIntVector>& A, const TPair<int32, FIntVector>& B) {
+		return A.Key < B.Key;
+	});
+
+	// 4. Rebuild GenerationQueue
+	GenerationQueue.Reset();
+	GenerationQueue.Reserve(SortedQueue.Num());
+	for (const auto& Pair : SortedQueue)
+	{
+		GenerationQueue.Add(Pair.Value);
+	}
+	QueueHead = 0; // Reset queue cursor
+
+	if (SortedQueue.Num() > 0)
+	{
+		UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Streaming re-sorted %d chunks in generation queue"), SortedQueue.Num());
 	}
 }

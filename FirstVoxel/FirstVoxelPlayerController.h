@@ -68,7 +68,7 @@ protected:
 
     /** Input mapping context (assign in BP subclass or leave nullptr for no-context mode). */
     UPROPERTY(EditDefaultsOnly, Category="Input")
-    UInputMappingContext* DefaultMappingContext;
+    UInputMappingContext* MappingContext;
 
 private:
     UPROPERTY()

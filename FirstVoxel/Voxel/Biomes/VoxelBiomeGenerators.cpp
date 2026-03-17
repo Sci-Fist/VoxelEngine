@@ -200,8 +200,8 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   // Border irregularity for non-perfect circular craters
   const float BorderNoise = FastNoise3D(nX * 0.003f, nY * 0.003f, 500.f) * CRC.BorderIrregularity;
 
-  // Crater size multiplier for larger craters
-  const float ModifiedFrequency = CRC.Frequency * CRC.CraterSizeMultiplier;
+  // Crater size multiplier for larger craters (DIVIDE for wider peaks)
+  const float ModifiedFrequency = CRC.CraterSizeMultiplier > 0.f ? CRC.Frequency / CRC.CraterSizeMultiplier : CRC.Frequency;
 
   float Impact = FastNoise3D(nX * (ModifiedFrequency * 0.5f),
                              nY * (ModifiedFrequency * 0.5f), 200.f);
@@ -215,14 +215,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
 
   const float BasePlains = Config.SeaLevel + 1000.f;
 
-  if (Impact > CRC.ImpactThreshold)
-  {
-    // Outside any crater basin: return the flat plains height so the weighted
-    // blend evaluates to plains * CratersW + otherBiome * (1-CratersW).
-    // Returning 0 caused the other biomes' heights to be down-weighted,
-    // creating a subtle depression at crater boundaries that looked like a blob.
-    return BasePlains;
-  }
+  // Abrupt cut-off removed to prevent tall pillars/cones forming due to noise peaks inside the basin.
 
   const float Denominator = 1.f - FMath::Abs(CRC.ImpactThreshold);
   float NormalizedDepth = 0.f;
@@ -233,7 +226,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   
     // FIXED: Better depth calculation with exponential curve and increased multiplier for deeper craters
     const float DepthCurve = FMath::Pow(NormalizedDepth, 1.5f);
-    const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 4.5f * DepthCurve;
+    const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 8.0f * DepthCurve;
   
   // FIXED: Better rim calculation with noise detail
   const float RimHeight = BasePlains + CRC.RimHeight * 1.0f;
@@ -357,7 +350,13 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
         // --- Evaluate cell terrain ---
         const FVoxelBiomeWeightMap CenterWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(CenterX, CenterY, Config);
-        const float CenterHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(CenterX, CenterY, CenterWeights, Config);
+        
+        // Calculate crater-neutral height so islands do not drop into local depressions
+        FVoxelBiomeWeightMap NeutralWeights = CenterWeights;
+        NeutralWeights.SetWeight(EVoxelBiome::Craters, 0.f);
+        NeutralWeights.Normalize();
+        
+        const float CenterHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(CenterX, CenterY, NeutralWeights, Config);
 
         const float HeightNorm    = FMath::Clamp(CenterHeight / SC.MaxTerrainReference, 0.f, 1.f);
         const float RoughnessNorm = FMath::Clamp(CenterWeights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
@@ -390,7 +389,6 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             + CurvedHeight * SC.HeightProbabilityBonus
             + CurvedRough  * SC.RoughnessProbabilityBonus,
             0.02f, 1.f);
-        Prob *= FMath::Lerp(0.35f, 1.0f, ShardFalloff);
         if (HashProb > Prob) continue;
 
         // -------------------------------------------------------------------
@@ -424,10 +422,14 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         //  ALTITUDE: low shards float just above terrain, high islands soar
         // -------------------------------------------------------------------
         const float AltitudeBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStr);
-        const float SkyAlt = CenterHeight + AltitudeBase
+        // Decouple shards from ground to form a separate absolute layer
+        const float AbsoluteSkyAnchor = 15000.f; // 150 meters absolute sky tier
+        const float DecoupledHeight = FMath::Lerp(AbsoluteSkyAnchor, CenterHeight, CellShardT);
+
+        const float SkyAlt = DecoupledHeight + AltitudeBase
             + CurvedHeight * SC.HeightAltitudeBonus
             + CurvedRough  * SC.RoughnessAltitudeBonus
-            + ShardFalloff * SC.LowTerrainAltitudeBoost;
+            + (1.f - CellShardT) * SC.LowTerrainAltitudeBoost;
 
         // -------------------------------------------------------------------
         //  THICKNESS: shards are flat discs, islands are chunky
@@ -438,9 +440,16 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         float HalfThick    = IslandSize * EffThickness;
 
         // --- 🛡️ CLEARANCE PROTECTION: Prevent spikes bridging to ground ---
-        const float Clearance = 800.f; // 8 meters above terrain minimum clearance
-        const float MaxAllow  = FMath::Max(200.f, AltitudeBase - Clearance);
-        HalfThick = FMath::Min(HalfThick, MaxAllow);
+        const float Clearance = 200.f; // 2 meters above terrain minimum clearance
+        const float MaxAllow  = AltitudeBase - Clearance;
+        if (MaxAllow <= 0.f)
+        {
+            HalfThick = 0.01f; // Too close to ground, defuse bottom to air
+        }
+        else
+        {
+            HalfThick = FMath::Min(HalfThick, MaxAllow);
+        }
 
         // Shape noise threshold: shards use a higher threshold so only the
         // core of the noise field is solid — making them jagged and irregular.
@@ -496,8 +505,7 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
     const FVector Off = Config.GetSeedOffset();
 
-    const float MinHalfThick = FMath::Max(200.f, (float)(StepSize * 55.f));
-    const float HalfThick = FMath::Max(MinHalfThick, Cache.HalfThick);
+    const float HalfThick = Cache.HalfThick;
 
     const float Margin = HalfThick * 0.4f;
     if (Z < Cache.SkyAlt - HalfThick - Margin || Z > Cache.SkyAlt + HalfThick + Margin) return -2.f;
@@ -618,8 +626,8 @@ float FVoxelBiomeGenerators::GetCrystalCavernDelta(
       FMath::Max(0.f, Detail - CVC.CrystalThreshold) * CVC.CrystalAmplitude;
 
   // --- 💎 CRYSTAL PLACEMENT FIX ---
-  // Crystals should ONLY spawn inside already hollowed chambers to prevent
-  // canceling out the carver and creating solid wall plates.
-  const float NetDelta = -(CarveFactor * 1.3f); // Scrapped CrystalFill stalagmites
+  // Scale CrystalFill by CarveFactor so geometry only forms inside the chamber 
+  // without exceeding the carved magnitude threshold to seal the wall plates.
+  const float NetDelta = -(CarveFactor * 1.3f) + (CrystalFill * FMath::Clamp(CarveFactor, 0.f, 1.f));
   return NetDelta * Fade;
 }

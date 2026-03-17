@@ -7,6 +7,7 @@ DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 #include "CoreMinimal.h"
 #include "FirstVoxel.h"
 #include "FirstVoxelPlayerController.h"
+#include "FirstVoxelHUD.h"
 #include "Voxel/Core/World/VoxelWorld.h"
 
 #include "Camera/CameraComponent.h"
@@ -59,10 +60,10 @@ void AFirstVoxelCharacter::BeginPlay()
 
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
 	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
+		if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem =
 			ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
 		{
-			Subsystem->AddMappingContext(DefaultMappingContext, 0);
+			InputSubsystem->AddMappingContext(MappingContext, 0);
 		}
 	}
 
@@ -86,48 +87,53 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		LookAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Look.IA_Look"));
 	if (!MouseLookAction)
 		MouseLookAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_MouseLook.IA_MouseLook"));
-	if (!DefaultMappingContext)
-		DefaultMappingContext = LoadObject<UInputMappingContext>(nullptr, TEXT("/Game/Input/IMC_Default.IMC_Default"));
+	if (!MappingContext)
+		MappingContext = LoadObject<UInputMappingContext>(nullptr, TEXT("/Game/Input/IMC_Default.IMC_Default"));
 	if (!ToggleFlyAction)
 		ToggleFlyAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Fly.IA_Fly"));
 	if (!FlyDownAction)
 		FlyDownAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_FlyDown.IA_FlyDown"));
 	if (!MapAction)
 		MapAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Map.IA_Map"));
+	if (!PauseAction)
+		PauseAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Pause.IA_Pause"));
 
-	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
+	if (UEnhancedInputComponent* EnhancedIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		// Jump (keyboard/gamepad A)
-		EIC->BindAction(JumpAction, ETriggerEvent::Started,   this, &ACharacter::Jump);
-		EIC->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
+		EnhancedIC->BindAction(JumpAction, ETriggerEvent::Started,   this, &ACharacter::Jump);
+		EnhancedIC->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 
 		// Look / Move
-		EIC->BindAction(LookAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
-		EIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
-		EIC->BindAction(MoveAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Move);
+		EnhancedIC->BindAction(LookAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
+		EnhancedIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
+		EnhancedIC->BindAction(MoveAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Move);
 
 		// Sprint (keyboard Shift)
-		EIC->BindAction(SprintAction, ETriggerEvent::Started,   this, &AFirstVoxelCharacter::Sprint);
-		EIC->BindAction(SprintAction, ETriggerEvent::Completed, this, &AFirstVoxelCharacter::StopSprinting);
+		EnhancedIC->BindAction(SprintAction, ETriggerEvent::Started,   this, &AFirstVoxelCharacter::Sprint);
+		EnhancedIC->BindAction(SprintAction, ETriggerEvent::Completed, this, &AFirstVoxelCharacter::StopSprinting);
 
 		// Dig / Build — ETriggerEvent::Triggered fires every frame while held
-		EIC->BindAction(DigAction,   ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Dig);
-		EIC->BindAction(BuildAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Build);
+		EnhancedIC->BindAction(DigAction,   ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Dig);
+		EnhancedIC->BindAction(BuildAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Build);
 
 		// Flight toggle / map
 		if (ToggleFlyAction)
-			EIC->BindAction(ToggleFlyAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleFly);
+			EnhancedIC->BindAction(ToggleFlyAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleFly);
 		if (MapAction)
-			EIC->BindAction(MapAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleMap);
+			EnhancedIC->BindAction(MapAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleMap);
+		if (PauseAction)
+			EnhancedIC->BindAction(PauseAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::TogglePauseMenu);
 
 		// Explicit fly-down action (Ctrl)
 		if (FlyDownAction)
-			EIC->BindAction(FlyDownAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::FlyDown);
+			EnhancedIC->BindAction(FlyDownAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::FlyDown);
 	}
 
 	// ── Keyboard/Mouse fallback bindings ────────────────────────────────────
 	PlayerInputComponent->BindKey(EKeys::F,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
 	PlayerInputComponent->BindKey(EKeys::M,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
+	PlayerInputComponent->BindKey(EKeys::P,               IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp,   IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AFirstVoxelCharacter::DecreaseRadius);
 
@@ -152,8 +158,9 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
 	// Y  → Toggle Map
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top,   IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
-	// Start → Toggle Map (alternative)
-	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Right,    IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
+	// Start → Pause menu (Start was previously bound to Map but is more
+	// conventionally used for pause on consoles; Map stays on Y button only)
+	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Right,    IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
 	// RB → Increase Brush Radius
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder,    IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
 	// LB → Decrease Brush Radius
@@ -173,6 +180,14 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	if (!PC) return;
+
+	// ── Pause guard: skip all gameplay input while the pause menu is open ─────
+	// The pause menu uses FInputModeUIOnly which already blocks Enhanced Input
+	// bindings, but the raw key-polling below (IsInputKeyDown / GetInputAnalogKeyState)
+	// still reads hardware state. Skipping the Tick body prevents movement,
+	// digging, and look from firing while the menu is visible.
+	if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+		if (HUD->IsPaused()) return;
 
 	// ── Input Device Detection ────────────────────────────────────────────
 	const float GPLx = PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftX);
@@ -254,7 +269,7 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 	// FIX: Only inject vertical movement when already flying. Space also binds
 	// Jump (ACharacter::Jump) but MOVE_Flying mode ignores the jump impulse, so
 	// polling IsInputKeyDown here is safe — it won't cause a double-jump on land.
-	// LeftControl is polled here as a backup; FlyDown() via EnhancedInput also
+	// LeftControl is polled here as a backup; FlyDown() via Input also
 	// fires for Ctrl — both paths call AddMovementInput so there's no conflict.
 	if (bFlying && !bLastInputWasGamepad)
 	{
@@ -302,7 +317,7 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 	}
 
 	// ── 9. Mouse: LMB → Dig / RMB → Build ───────────────────────────────
-	// EnhancedInput bindings only fire when DigAction/BuildAction assets are assigned
+	// Input bindings only fire when DigAction/BuildAction assets are assigned
 	// in the Blueprint subclass. Polling here guarantees mouse dig/build always works
 	// regardless of whether those assets are set up, matching the gamepad trigger path.
 	if (!bLastInputWasGamepad)
@@ -329,7 +344,7 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 		}
 	}
 
-	// ── 8. Mouse look fallback (when EnhancedInput doesn't supply deltas) ─
+	// ── 8. Mouse look fallback (when Input doesn't supply deltas) ─
 	if (bToolWheelOpen && !bLastInputWasGamepad)
 	{
 		FVector2D ScreenSize;
@@ -402,7 +417,7 @@ void AFirstVoxelCharacter::DoJumpStart()
 
 void AFirstVoxelCharacter::DoJumpEnd() { StopJumping(); }
 
-// FlyDown is the action-bound version (Ctrl key / EnhancedInput FlyDown action)
+// FlyDown is the action-bound version (Ctrl key / Input FlyDown action)
 // It only fires while the button is held (ETriggerEvent::Triggered).
 void AFirstVoxelCharacter::FlyDown()
 {
@@ -592,4 +607,11 @@ void AFirstVoxelCharacter::OpenToolWheel()
 void AFirstVoxelCharacter::CloseToolWheel()
 {
 	bToolWheelOpen = false;
+}
+
+void AFirstVoxelCharacter::TogglePauseMenu()
+{
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+		if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+			HUD->TogglePause();
 }

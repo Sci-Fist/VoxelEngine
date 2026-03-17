@@ -171,6 +171,12 @@ void FVoxelGeneratorTask::BuildDensityField()
         const float               SurfaceHeight  = FVoxelBiomeManager::GetSurfaceHeightStatic(
                                                       WorldX, WorldY, Weights, Config);
 
+        // Neutral layout for Crystal Caverns to prevent breacking into crater floor
+        FVoxelBiomeWeightMap CavernWeights = Weights;
+        CavernWeights.SetWeight(EVoxelBiome::Craters, 0.f);
+        CavernWeights.Normalize();
+        const float NeutralSurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(WorldX, WorldY, CavernWeights, Config);
+
         // Cache Skyland data for the column to avoid running 2D cellular lists for every Z step.
         const FSkylandColumnCache SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(
             WorldX, WorldY, SurfaceHeight, Weights, Config);
@@ -187,7 +193,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             const int32 Idx    = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
 
             float D = Provider->GetDensityFull(
-                FVector(WorldX, WorldY, WorldZ), Weights, SurfaceHeight, Config, StepSize, &SkylandCache);
+                FVector(WorldX, WorldY, WorldZ), Weights, SurfaceHeight, NeutralSurfaceHeight, Config, StepSize, &SkylandCache);
 
             // Apply player edits (constant-time dense array lookup).
             if (bHasEdits)
@@ -204,6 +210,7 @@ void FVoxelGeneratorTask::BuildDensityField()
     });
 
     CountDensityStates(TotalSamples);
+    PostProcessDensities(TotalSamples);
 }
 
 void FVoxelGeneratorTask::PostProcessDensities(int32 TotalSamples)
@@ -260,10 +267,10 @@ void FVoxelGeneratorTask::BuildMesh()
 {
     MeshOutput.Reset();
     FVoxelMeshGenerator::GenerateMesh(
-        Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, 0.7f, StepSize);
+        Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
 
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: Chunk X=%d Y=%d Z=%d FlatVerts=%d SlopeVerts=%d"),
-		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, MeshOutput.FlatMesh.Vertices.Num(), MeshOutput.SlopeMesh.Vertices.Num()));
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: Chunk X=%d Y=%d Z=%d Verts=%d"),
+		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, MeshOutput.FlatMesh.Vertices.Num()));
 }
 
 // ============================================================
@@ -599,7 +606,7 @@ void FVoxelGeneratorTask::TrimFoliageToCap(const int32 MaxMeshesPerChunk)
 
     if (TotalInstances > MaxMeshesPerChunk)
     {
-        UE_LOG(LogTemp, Warning,
+        UE_LOG(LogVoxelChunk, Warning,
             TEXT("Chunk [%d,%d,%d] foliage cap hit: %d > %d — truncating."),
             ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, TotalInstances, MaxMeshesPerChunk);
 

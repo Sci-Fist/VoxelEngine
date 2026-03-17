@@ -1,26 +1,46 @@
+// =============================================================================
 // VoxelDensityGenerator.h
-// The main entry point for per-voxel density calculation.
-// Implements IVoxelDensityProvider so it can be used directly in FVoxelGeneratorTask.
+// =============================================================================
 //
-// THREE-LAYER ARCHITECTURE:
+// Main entry point for per-voxel density evaluation.
+// Implements IVoxelDensityProvider so it plugs directly into FVoxelGeneratorTask.
 //
-//   SURFACE LAYER   (around Z â‰ˆ SurfaceHeight)
-//     Blended height-field terrain driven by biome weights.
-//     Optional overhangs near cliff faces.
+// -- THREE-LAYER COMPOSITION --------------------------------------------------
 //
-//   SKYLANDS LAYER  (Z >> SurfaceHeight)
-//     Floating islands whose altitude, size, and probability all
-//     scale with the terrain height and roughness directly below.
+//  GetDensityFull() composes four layers in priority order:
 //
-//   CAVE LAYER      (Z << SurfaceHeight)
-//     Universal worm tunnels + deep crystal cavern chambers.
-//     Carved out of solid density only where D > 0.
-//     Protected by a hard bedrock floor.
+//    1. SURFACE  (Z around SurfaceHeight)
+//       Signed-distance ramp:  D = (SurfH - Z) / SurfaceGradientScale
+//       + optional overhang noise on steep terrain.
 //
-// The three layers are composed additively / by zone:
-//   â€¢ If Z is in the sky zone â†’ skyland density replaces surface density
-//   â€¢ Surface carving (overhangs, caves) only applies in the surface zone
-//   â€¢ Bedrock is always forced solid regardless of other layers
+//    2. CAVES    (Z << SurfaceHeight, solid only)
+//       Worm tunnels carved by SampleCaveNoise().
+//       Crystal cavern chambers from FVoxelBiomeGenerators.
+//       Only modifies already-solid voxels (D > 0.05).
+//
+//    3. BEDROCK  (Z < BedrockDepth)
+//       Forced to D = 2.0 -- always solid, immune to carving.
+//
+//    4. SKYLANDS (Z > SkyLowerBound)
+//       GetSkylandDensity() returns D > 0 inside floating islands.
+//       final = max(SkyD, SurfD) so islands always override air.
+//
+// -- KEY OPTIMISATIONS --------------------------------------------------------
+//  - GetSeedOffset() is called ONCE per GetDensityFull() call and reused
+//    by every sub-system, eliminating ~3 redundant LCG hashes per voxel.
+//  - GetSkylandDensity() has an early-out when Z is clearly below the lowest
+//    possible island band, saving the most expensive noise call for ground-
+//    level chunks where no skylands exist.
+//  - FSkylandColumnCache is built once per XY column and reused for all Z,
+//    amortising the 9-cell neighbourhood query across the full column.
+//  - SampleCaveNoise() accepts a pre-computed SeedOff to skip another LCG.
+//
+// -- THREAD SAFETY ------------------------------------------------------------
+//  Fully stateless -- safe to call from multiple threads simultaneously.
+//  The static FVoxelDensityGenerator fallback instance in GeneratorTask is
+//  shared across threads; this is safe because the struct has no mutable
+//  state between calls.
+// =============================================================================
 #pragma once
 
 #include "CoreMinimal.h"
@@ -35,28 +55,37 @@ struct FIRSTVOXEL_API FVoxelDensityGenerator : public IVoxelDensityProvider
     virtual float              GetSurfaceHeight(float X, float Y, const FVoxelGenerationConfig& Config) override;
     virtual FVoxelBiomeWeightMap GetBiomeWeights(float X, float Y, const FVoxelGenerationConfig& Config) override;
 
-    // Convenience overload pre-supplying biome weights + surface height (avoids recomputation).
-    // Declared virtual + override so the compiler enforces the IVoxelDensityProvider contract.
+    /**
+     * Full 3-layer density evaluation with pre-supplied biome weights and surface height.
+     * Call this overload (not GetDensity) whenever weights and SurfH are already known
+     * for the column -- it avoids re-running the two O(n^2) Perlin calls per voxel.
+     *
+     * @param NeutralSurfaceHeight  Surface height computed with Craters weight zeroed out.
+     *                              Used by crystal cavern placement to prevent chambers
+     *                              from breaking into the crater floor.
+     * @param SkylandCache          Per-column cache built by GetSkylandColumnCache().
+     *                              Pass nullptr to compute on-the-fly (slower).
+     */
     virtual float GetDensityFull(const FVector& WorldPos,
                                  const FVoxelBiomeWeightMap& Weights,
                                  float SurfaceHeight,
+                                 float NeutralSurfaceHeight,
                                  const FVoxelGenerationConfig& Config,
                                  int32 StepSize = 1,
                                  const struct FSkylandColumnCache* SkylandCache = nullptr) override;
 
-    // ---- World anchor constants ----
-    // TerrainMidZ: Z=0 is sea level and the world origin for chunk coordinate math.
+    // Z=0 is sea level and the world origin for chunk coordinate math.
     static constexpr float TerrainMidZ = 0.f;
 
 private:
     /**
-     * Evaluates the two-tunnel worm noise at WorldPos.
-     * SeedOff must be pre-computed by the caller via Config.GetSeedOffset() --
-     * this avoids the redundant LCG hash that the old internal call caused
-     * for every below-surface solid voxel.
+     * Two-tunnel worm noise evaluation.
+     * Accepts a pre-computed SeedOff (Config.GetSeedOffset()) to avoid a redundant
+     * LCG hash for every below-surface solid voxel.
+     * Returns a carve strength in [0, CVC.Strength]; 0 = no carving.
      */
     static float SampleCaveNoise(
-        const FVector&              WorldPos,
-        const FVector&              SeedOff,
+        const FVector&                WorldPos,
+        const FVector&                SeedOff,
         const FVoxelGenerationConfig& Config);
 };

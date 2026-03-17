@@ -1,5 +1,34 @@
+// =============================================================================
 // CaveLayerConfig.h
-// Configuration for underground worm tunnels and crystal caverns.
+// =============================================================================
+//
+// Configuration for the CAVE LAYER of the voxel world generator.
+//
+// ── TYPES DEFINED HERE ───────────────────────────────────────────────────────
+//   FCaveTunnelsConfig     — worm-noise tunnel parameters
+//   FCrystalCavernsConfig  — large carved chamber parameters
+//
+// ── OVERVIEW ─────────────────────────────────────────────────────────────────
+//  Cave generation runs in two sub-passes, both only carving into already-solid
+//  terrain (density > 0), so they can never break through the surface crust.
+//
+//  WORM TUNNELS
+//    Two offset Perlin tunnel fields are combined (Cave1 + Cave2). Where both
+//    fall below FCaveTunnelsConfig.Threshold a smooth ramp carves a passage.
+//    Tunnels fade in below MinDepthBelowSurface and fade out near BedrockDepth.
+//    WobbleFrequency / WobbleAmplitude make the diameter vary organically.
+//
+//  CRYSTAL CAVERNS
+//    Two FBM fields produce large hollow chambers at depths below DepthStart.
+//    ChamberStrength controls how aggressively each chamber is carved.
+//    ConnectingVeins links chambers with narrow passages.
+//    Crystals are intentionally disabled (NetDelta = -CarveFactor only) to
+//    prevent solid crystal pillars from re-sealing the carved space.
+//
+//  BEDROCK
+//    Always forced solid below FCaveTunnelsConfig.BedrockDepth regardless of
+//    what the tunnel or cavern noise evaluates to.
+// =============================================================================
 
 #pragma once
 

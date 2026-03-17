@@ -1,12 +1,53 @@
+// =============================================================================
 // VoxelGeneratorTask.h
-// Thread-safe task: DensityField -> Mesh -> Per-Biome Foliage
+// =============================================================================
 //
-// Foliage output is now a flat array of transform lists, one entry per foliage
-// slot across all biomes.  Slot ordering matches FVoxelGenerationConfig biome order:
-//   Forest entries first, then Peaks, Cliffs, Mesa, Craters.
+// Self-contained background task that converts a chunk coordinate into a
+// complete mesh, foliage, and water-source dataset ready for upload on the
+// game thread. All work runs on a background thread; no UObject API is touched.
 //
-// The chunk reads GetPerFoliageTransforms() and GetPerFoliageMeshes() to create
-// one HISM component per unique mesh slot.
+// -- PIPELINE (called by Execute() in order) ----------------------------------
+//
+//   BuildDensityField()    Fill Densities[(EffSize+3)^3] via ParallelFor.
+//                          Per-column work (biome weights, surface height,
+//                          skyland cache) is hoisted above the Z loop so it
+//                          runs O(n^2) instead of O(n^3).
+//
+//   PostProcessDensities() Safety-clamp extreme solid/air ratios that can
+//                          cause entirely solid or empty chunks.
+//
+//   BuildMesh()            Run Surface Nets on Densities to produce FlatMesh.
+//
+//   CalculateFoliage()     Scatter instanced meshes on upward-facing triangles.
+//                          Uses ColumnWeights[] built during density pass to
+//                          avoid re-running biome noise per triangle.
+//
+//   PlaceWaterSources()    Scan for enclosed air-on-solid depressions and
+//                          emit world-voxel coordinates for water spawning.
+//
+// -- FOLIAGE SLOT LAYOUT ------------------------------------------------------
+//
+//   FoliageSlots[] is built once in the constructor from the config.
+//   PerFoliageTransforms[s] holds all spawn transforms for slot s.
+//   PerFoliageMeshes[s]     holds the UStaticMesh* for slot s.
+//   Slot order: Forest entries first, then Peaks, Cliffs, Mesa, Craters, Desert.
+//   GBiomeOrder[] in the .cpp enforces this with a compile-time static_assert.
+//
+//   Legacy fallback (no per-biome foliage configured):
+//     LegacyTreeTransforms  / LegacyGrassTransforms are populated instead.
+//
+// -- CANCELLATION -------------------------------------------------------------
+//
+//   Call Cancel() from any thread to set bCancelled. Execute() checks this
+//   flag between sub-passes and returns early. AVoxelChunk::GenerationId
+//   provides a second guard: the game-thread callback discards results from
+//   any task whose ID no longer matches the chunk's current generation.
+//
+// -- THREAD SAFETY ------------------------------------------------------------
+//
+//   No UObject methods are called inside Execute(). All outputs are plain C++
+//   containers. AVoxelChunk::ApplyMesh() uploads them on the game thread.
+// =============================================================================
 #pragma once
 
 #include "CoreMinimal.h"

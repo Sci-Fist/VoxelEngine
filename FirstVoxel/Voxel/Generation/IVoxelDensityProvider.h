@@ -1,7 +1,29 @@
+// =============================================================================
 // IVoxelDensityProvider.h
-// Abstract interface for voxel density evaluation.
-// Implementations can be used directly in FVoxelGeneratorTask
-// to drive mesh generation and foliage placement.
+// =============================================================================
+//
+// Abstract interface that decouples FVoxelGeneratorTask from any specific
+// density implementation. The only production implementation is
+// FVoxelDensityGenerator (Generation/VoxelDensityGenerator.h), but tests or
+// editor tools can supply custom implementations without recompiling the task.
+//
+// ── CALLING CONTRACT ─────────────────────────────────────────────────────────
+//  All methods are called from a background thread inside
+//  FVoxelGeneratorTask::BuildDensityField(). Implementations MUST be
+//  thread-safe (stateless or internally synchronized).
+//
+// ── DENSITY CONVENTION ───────────────────────────────────────────────────────
+//  Positive  → solid terrain  (stone, dirt, rock)
+//  Zero      → surface isosurface
+//  Negative  → air / empty space
+//
+// ── PERFORMANCE NOTES ────────────────────────────────────────────────────────
+//  GetDensityFull() is the hot path — called O(n³) times per chunk.
+//  GetBiomeWeights() and GetSurfaceHeight() are called O(n²) times (once per
+//  XY column) and cached in ColumnWeights[] for the foliage pass.
+//  Prefer GetDensityFull() over GetDensity() when biome weights and surface
+//  height are already available to avoid redundant Perlin evaluations.
+// =============================================================================
 
 #pragma once
 
@@ -30,6 +52,7 @@ public:
     virtual float GetDensityFull(const FVector& WorldPos,
                                 const FVoxelBiomeWeightMap& Weights,
                                 float SurfaceHeight,
+                                float NeutralSurfaceHeight,
                                 const FVoxelGenerationConfig& Config,
                                 int32 StepSize = 1,
                                 const struct FSkylandColumnCache* SkylandCache = nullptr) = 0;

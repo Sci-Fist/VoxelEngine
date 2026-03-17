@@ -1,12 +1,34 @@
+// =============================================================================
 // VoxelBiome.h
-// Core biome definitions: enum, weight map, and biome data asset.
-// This header is included by many other voxel files, so keep it minimal
-// and avoid pulling in heavy engine headers.
-
-// VoxelBiome.h
-// Core biome definitions: EVoxelBiome enum + FVoxelBiomeWeightMap.
-// Deliberately minimal — included by almost every voxel file.
-// Do NOT add heavy engine headers here.
+// =============================================================================
+//
+// Core biome definitions. Included by almost every voxel file, so kept
+// deliberately minimal -- no heavy engine headers, no config dependencies.
+//
+// -- TYPES DEFINED HERE -------------------------------------------------------
+//   EVoxelBiome          -- 6-value enum of surface biome names
+//   FVoxelBiomeWeightMap -- per-biome float weights that always sum to 1.0
+//
+// -- DESIGN NOTES -------------------------------------------------------------
+//
+//  Weights are stored as named float members (Forest, Peaks, ...) rather than
+//  an array. This was a deliberate refactor: the old float Weights[6] array
+//  was a fragile second copy that could silently desync from the named members
+//  if any code bypassed SetWeight(). Named members with switch-based accessors
+//  are safer and the compiler eliminates the switch for constant enum values.
+//
+//  GetRoughness() = Peaks + Cliffs is a frequently needed signal for the
+//  skylands system (high roughness -> bigger, more common islands) and is
+//  inlined here to avoid a GetBiomeWeightsStatic() call at the call sites.
+//
+// -- EXTENDING THIS FILE ------------------------------------------------------
+//  When adding a new biome:
+//    1. Add an entry to EVoxelBiome (before the last value to keep uint8 order).
+//    2. Increment MaxBiomes.
+//    3. Add a named float member.
+//    4. Update SetWeight, GetWeight, GetDominantBiome, Normalize, operator[].
+//    5. Update GBiomeOrder[] in VoxelGeneratorTask.cpp (assert enforces this).
+// =============================================================================
 #pragma once
 
 #include "CoreMinimal.h"

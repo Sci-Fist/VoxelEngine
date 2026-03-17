@@ -18,6 +18,7 @@
 #include "Voxel/Generation/VoxelGeneratorTask.h"
 #include "Voxel/Generation/VoxelDensityGenerator.h"
 #include "Voxel/Biomes/VoxelBiomeManager.h"
+#include "FirstVoxelHUD.h"
 #include "Voxel/Config/VoxelGenerationConfig.h"
 #include "Voxel/VoxelLogger.h"
 #include "Voxel/Water/VoxelWaterSimulator.h"
@@ -48,6 +49,9 @@ AVoxelWorld::AVoxelWorld()
 	WaterComponent = CreateDefaultSubobject<UVoxelWaterComponent>(TEXT("WaterComponent"));
 
 	WaterSystemComponent = CreateDefaultSubobject<UVoxelWorldWaterComponent>(TEXT("WaterSystemComponent"));
+
+	// Default to false so the game shows the Title Screen overlay on startup
+	bAutoGenerateOnBeginPlay = false;
 }
 
 AVoxelWorld::~AVoxelWorld()
@@ -106,38 +110,43 @@ void AVoxelWorld::BeginPlay()
 	// ---- Optional random seed ----
 	// Removed to ensure Editor previews match Gameplay 1:1. Use explicit Editor Button to randomize seed.
 
+// ---- Always Freeze player during initial hold-zone ----
+	APawn* EarlyPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
+	if (EarlyPlayer != nullptr)
+	{
+		// Park far above the world so it can't collide with anything
+		EarlyPlayer->SetActorLocation(FVector(0.f, 0.f, 100000.f),
+			false, nullptr, ETeleportType::TeleportPhysics);
+		EarlyPlayer->SetActorHiddenInGame(true);
+
+		// Disable movement so gravity doesn't pull the pawn down while hidden
+		ACharacter* EarlyChar = Cast<ACharacter>(EarlyPlayer);
+		if (EarlyChar && EarlyChar->GetCharacterMovement())
+		{
+			EarlyChar->GetCharacterMovement()->DisableMovement();
+		}
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Player parked at sky-hold during initial startup."));
+	}
+
 	if (bAutoGenerateOnBeginPlay)
 	{
-		// ---- Freeze player during generation to stop the double-spawn flash ----
-		// UE's GameMode has already spawned the player at the PlayerStart location
-		// by the time BeginPlay runs. Without freezing, the player is briefly
-		// visible at (0,0,Z) before ProcessInitialPlayerSpawn teleports them
-		// 2.5s later — the "spawns at 0,0 then gets ported" bug.
-		// We hide the pawn, disable movement, and park it 100,000 cm above the
-		// world until ProcessInitialPlayerSpawn() restores everything.
-		APawn* EarlyPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
-		if (EarlyPlayer != nullptr)
-		{
-			// Park far above the world so it can't collide with anything
-			EarlyPlayer->SetActorLocation(FVector(0.f, 0.f, 100000.f),
-				false, nullptr, ETeleportType::TeleportPhysics);
-			EarlyPlayer->SetActorHiddenInGame(true);
-
-			// Disable movement so gravity doesn't pull the pawn down while hidden
-			ACharacter* EarlyChar = Cast<ACharacter>(EarlyPlayer);
-			if (EarlyChar && EarlyChar->GetCharacterMovement())
-			{
-				EarlyChar->GetCharacterMovement()->DisableMovement();
-			}
-			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Player parked at sky-hold during generation."));
-		}
-
 		if (bRandomizeSeedOnStartup)
 		{
 			RandomizeSeed();
 		}
 		ClearWorld();
 		GenerateWorldDeferred();
+	}
+	else
+	{
+		// Notify HUD to show Title Screen
+		if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+		{
+			if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+			{
+				HUD->bShowTitleScreen = true;
+			}
+		}
 	}
 }
 
@@ -365,21 +374,32 @@ void AVoxelWorld::LoadFromPreset()
 // ============================================================
 //  Public API stubs
 // ============================================================
-void AVoxelWorld::GenerateWorld()    
-{ 
-	// Always randomize when the Generate World button is pressed.
-	// bRandomizeSeedOnStartup only governs BeginPlay auto-randomization.
+void AVoxelWorld::GenerateWorld()
+{
+	// 1. Pick a fresh seed so every click produces a new world.
 	RandomizeSeed();
-	ClearWorld(); 
-	GenerateWorldDeferred(); 
+
+	// 2. Wipe all existing chunks and reset generation state.
+	ClearWorld();
+
+	// 3. Queue chunks + simulate the player spawn sequence in the editor
+	//    viewport (crater search, spawn chunk prioritisation, etc.).
+	GenerateWorldDeferred();
+
+	// 4. Print the active seed to the screen so it's easy to note down
+	//    or reproduce a world you like.
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1, 8.f, FColor::Cyan,
+			FString::Printf(TEXT("[VoxelWorld] Generating with seed %d"), GenerationConfig.Seed));
+	}
 }
 
 void AVoxelWorld::RandomizeSeed()
 {
-	// Only write to GenerationConfig.Seed. GetEffectiveConfig() now always
-	// injects this seed even when a BiomePreset is active, so writing to
-	// the preset asset (a UDataAsset on disk) is no longer needed and
-	// avoids accidentally dirtying the asset file.
+	// Only write to GenerationConfig.Seed. GetEffectiveConfig() always injects
+	// this seed even when a BiomePreset is active, so we never dirty the asset.
 	GenerationConfig.Seed = FMath::RandRange(1, TNumericLimits<int32>::Max());
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: New seed = %d"), GenerationConfig.Seed);
 }
