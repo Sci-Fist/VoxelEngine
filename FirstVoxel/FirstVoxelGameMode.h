@@ -21,9 +21,9 @@ class FIRSTVOXEL_API AFirstVoxelGameMode : public AGameModeBase
 	GENERATED_BODY()
 
 public:
-	
 	/** Constructor */
 	AFirstVoxelGameMode();
+
 };
 
 
