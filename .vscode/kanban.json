@@ -18,6 +18,22 @@
                 {
                     "text": "Fix include path errors across voxel engine implementation files",
                     "id": "fix-include-paths"
+                },
+                {
+                    "text": "Potential deadlock in FVoxelDataMap::CopyFrom() due to ordered lock acquisition",
+                    "id": "deadlock-copyfrom"
+                },
+                {
+                    "text": "ActiveGenerations counter may saturate and stop async generation permanently",
+                    "id": "activegenerations-saturation"
+                },
+                {
+                    "text": "Water source registration race condition during chunk generation",
+                    "id": "water-source-race"
+                },
+                {
+                    "text": "Missing error handling for null material assignments in chunk ApplyMesh",
+                    "id": "null-material-handling"
                 }
             ],
             "id": "dwqsb1dbngwcgrkvuwkcxswc",
@@ -74,5 +90,5 @@
     ],
     "autosave": true,
     "saveToFile": true,
-    "timestamp": 1773732809794
+    "timestamp": 1773739574685
 }
