@@ -220,9 +220,9 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   }
   NormalizedDepth = FMath::Clamp(NormalizedDepth, 0.f, 1.f);
   
-  // FIXED: Better depth calculation with exponential curve
+  // FIXED: Better depth calculation with exponential curve and increased multiplier for deeper craters
   const float DepthCurve = FMath::Pow(NormalizedDepth, 1.5f);
-  const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 2.0f * DepthCurve;
+  const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 3.5f * DepthCurve;
   
   // FIXED: Better rim calculation with noise detail
   const float RimHeight = BasePlains + CRC.RimHeight * 1.0f;

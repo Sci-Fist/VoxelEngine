@@ -58,31 +58,32 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     FVoxelBiomeWeightMap Map;
 
     // Forest: thrives in low-erosion (flat) areas with temperate temperatures.
-    float ForestW = FMath::Clamp(1.0f - Erosion * 0.40f, 0.f, 1.f)
-                       * FMath::Clamp(1.5f - Temp, 0.f, 1.f); // taper down at high temp
+    // Smooth transitions to prevent hard biome boundaries
+    float ForestW = FMath::SmoothStep(0.0f, 0.6f, 1.0f - Erosion) 
+                       * FMath::SmoothStep(0.0f, 1.0f, 1.5f - Temp); // taper down at high temp
 
     // Desert: thrives in low-erosion + hot temperature.
-    float DesertW = FMath::Clamp(1.0f - Erosion * 0.40f, 0.f, 1.f)
-                       * FMath::Clamp((Temp - 0.70f) * 4.0f, 0.f, 1.f);
+    // Smooth transitions to prevent hard boundaries with Forest
+    float DesertW = FMath::SmoothStep(0.0f, 0.6f, 1.0f - Erosion)
+                       * FMath::SmoothStep(0.0f, 0.25f, Temp - 0.70f);
 
     // Peaks: trigger at high erosion (rarer) and steeper rise
-    float PeaksW = FMath::Clamp((Erosion - 0.68f) * B.PeaksStrength * 2.5f, 0.f, 1.f)
-                       * FMath::Clamp(1.2f - Temp, 0.f, 1.f);
+    // Smooth transitions to prevent hard boundaries with Cliffs
+    float PeaksW = FMath::SmoothStep(0.0f, 0.2f, Erosion - 0.68f) * B.PeaksStrength
+                       * FMath::SmoothStep(0.0f, 0.8f, 1.2f - Temp);
 
     // Cliffs: rough + warm. Ridged terrain in drier, warmer zones.
-    float CliffsW = FMath::Clamp((Erosion - 0.50f) * B.CliffsStrength * 1.6f, 0.f, 1.f)
-                        * FMath::Clamp(Temp * 1.3f - 0.15f, 0.f, 1.f);
+    // Smooth transitions to prevent hard boundaries with Peaks
+    float CliffsW = FMath::SmoothStep(0.0f, 0.2f, Erosion - 0.50f) * B.CliffsStrength
+                        * FMath::SmoothStep(0.0f, 0.6f, Temp * 1.3f - 0.15f);
 
     // Mesa: hot + moderate erosion. The sharp temperature cutoff gives Mesa a distinctive zone.
-    float MesaW = FMath::Clamp((Temp - 0.62f) * 3.5f * B.MesaStrength, 0.f, 1.f)
-                      * FMath::Clamp(1.f - FMath::Abs(Erosion - 0.4f) * 3.5f, 0.f, 1.f);
+    // Smooth transitions to prevent hard boundaries with Desert
+    float MesaW = FMath::SmoothStep(0.0f, 0.2f, Temp - 0.62f) * B.MesaStrength
+                      * FMath::SmoothStep(0.0f, 0.2f, 1.f - FMath::Abs(Erosion - 0.4f));
 
     // Craters: rare, driven by a separate low-frequency noise not related to Temp/Erosion.
     // Uses the Z=200 slice as a pseudo-2D crater placement field.
-    // FIX: Removed CenterBias and the DistFrom0 < 500 hardcoded block.
-    // Those two pieces forced a crater basin (deep hole) directly at world origin (0,0)
-    // every single generation, which was the visible hole at spawn.
-    // Craters now spawn purely based on noise, same as every other biome.
     const float CraterNoise = FMath::PerlinNoise3D(FVector(
         (X + Off.X) * (Config.Craters.Frequency * 0.5f),
         (Y + Off.Y) * (Config.Craters.Frequency * 0.5f),
@@ -92,6 +93,32 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
         Config.Craters.ImpactThreshold + 0.1f,
         Config.Craters.ImpactThreshold,
         CraterNoise) * 0.45f;
+
+    // ── FORCE CRATER BIOME AT ORIGIN (0,0) ────────────────────────────────
+    // This ensures the player always spawns in a crater biome, solving the
+    // spawn positioning issue. The crater will blend naturally with the
+    // surrounding procedurally generated terrain.
+    const float OriginDistance = FVector2D(X, Y).Size();
+    const float SpawnCraterRadius = 3000.0f; // 30 meters radius around origin - doubled size
+    const float SpawnCraterFalloff = 1000.0f; // 10 meter transition zone - doubled smoothness
+
+    if (OriginDistance < SpawnCraterRadius + SpawnCraterFalloff)
+    {
+        // Calculate smooth falloff from center to edge
+        float CraterBoost = FMath::Clamp(
+            (SpawnCraterRadius + SpawnCraterFalloff - OriginDistance) / SpawnCraterFalloff, 
+            0.0f, 1.0f);
+        
+        // Boost crater weight near origin - more aggressive to ensure crater dominance
+        CratersW += CraterBoost * 1.2f;
+        
+        // Suppress other biomes proportionally to maintain weight balance
+        ForestW *= (1.0f - CraterBoost * 0.8f);
+        DesertW *= (1.0f - CraterBoost * 0.8f);
+        PeaksW  *= (1.0f - CraterBoost * 0.8f);
+        CliffsW *= (1.0f - CraterBoost * 0.8f);
+        MesaW   *= (1.0f - CraterBoost * 0.8f);
+    }
 
     Map.SetWeight(EVoxelBiome::Forest,  ForestW);
     Map.SetWeight(EVoxelBiome::Peaks,   PeaksW);

@@ -134,12 +134,12 @@ struct FSkylandsLayerConfig
 
     // --- Shard / Island size scale ---
     // ShardMinScale: size of the tiniest low-altitude shards as a fraction of
-    // BaseIslandSize.  0.08 = 8% = ~200cm radius over flat plains.
-    // Increase toward 0.2 for slightly bigger low-altitude rocks.
+    // BaseIslandSize.  0.25 = 25% = ~625cm radius over flat plains.
+    // Increased from 0.08 to make flatland skyshards more visible.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
         meta=(ClampMin="0.01", ClampMax="0.5",
-              ToolTip="Minimum shard size as fraction of BaseIslandSize (0.08 = 8%)."))
-    float ShardMinScale = 0.08f;
+              ToolTip="Minimum shard size as fraction of BaseIslandSize (0.25 = 25%)."))
+    float ShardMinScale = 0.25f;
 
     // ShardTransitionStrength: upper bound of TerrainStrength that counts as
     // 'low altitude shard'.  Raise toward 0.6 to make the transition smoother.

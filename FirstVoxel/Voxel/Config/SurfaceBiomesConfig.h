@@ -180,19 +180,25 @@ struct FCraterBiomeConfig
     float Frequency = 0.00002f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float Depth = -1500.f;
+    float Depth = -4000.f;  // Increased from -1500 to -4000 for deeper craters
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimHeight = 1500.f;
+    float RimHeight = 2000.f;  // Increased from 1500 to 2000 for higher rims
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float ImpactThreshold = -0.5f;
+    float ImpactThreshold = -0.6f;  // Lowered from -0.5 to -0.6 for more frequent impacts
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimNoiseAmplitude = 800.f;
+    float RimNoiseAmplitude = 1200.f;  // Increased from 800 for more rugged rims
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float FloorNoiseAmplitude = 300.f;
+    float FloorNoiseAmplitude = 500.f;  // Increased from 300 for more detailed crater floors
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float RimWidth = 0.35f;  // New: controls rim width relative to crater size
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float FloorSlope = 0.75f;  // New: controls how steep the crater walls are
 };
 
 // ============================================================
