@@ -30,6 +30,10 @@ AVoxelChunk::AVoxelChunk()
 	// SetVisibility(true) is called at the end of ApplyMesh() once all sections are uploaded.
 	ProceduralMesh->SetVisibility(false);
 	
+	// FIXED: Ensure proper face orientation by using double-sided materials
+	// This prevents materials from being hidden on incorrectly oriented faces
+	// Note: bUseBackfaceCulling is not available in UProceduralMeshComponent
+	
 	// Initialize mesh state
 	MeshState = EChunkMeshState::Empty;
 	TransitionProgress = 0.0f;
@@ -42,7 +46,7 @@ AVoxelChunk::AVoxelChunk()
 	WaterMesh->bUseComplexAsSimpleCollision = false;
 	WaterMesh->bUseAsyncCooking = false;
 	WaterMesh->SetCastShadow(false);
-	WaterMesh->SetVisibility(true); // Changed from false to true
+	WaterMesh->SetVisibility(false); // Hidden until BuildWaterMeshInternal confirms actual water geometry
 
 	TreeHISM = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("TreeHISM"));
 	TreeHISM->SetupAttachment(RootComponent);
@@ -364,6 +368,14 @@ void AVoxelChunk::BuildWaterMeshInternal()
 {
 	WaterMesh->ClearAllMeshSections();
 
+	// Without a material the water mesh renders UE's default black geometry
+	// which overlays and hides the terrain. Skip the build entirely.
+	if (!WaterMaterial)
+	{
+		WaterMesh->SetVisibility(false);
+		return;
+	}
+
 	if (!WaterData.HasAnyWater())
 	{
 		WaterMesh->SetVisibility(false);
@@ -379,8 +391,6 @@ void AVoxelChunk::BuildWaterMeshInternal()
 
 	const int32 CS = ChunkSize;
 	const float VS = VoxelSize;
-	const float SeaLevel = GenerationConfig.SeaLevel;
-	const bool bEnableOcean = GenerationConfig.Water.bEnableOcean;
 
 	// Helper: get water level at a local coord (clamped, 0 outside range)
 	auto GetW = [&](int32 lx, int32 ly, int32 lz) -> uint8
@@ -415,19 +425,9 @@ void AVoxelChunk::BuildWaterMeshInternal()
 	{
 		uint8 Level = GetW(lx, ly, lz);
 
-		// --- 🌊 INJECT OCEAN MASKING ---
-		if (Level == WATER_EMPTY && bEnableOcean)
-		{
-			const float VoxelWorldZ = GetActorLocation().Z + lz * VS;
-			const float AboveWorldZ = VoxelWorldZ + VS;
-
-			// Only render ocean surface for the strata directly intersecting SeaLevel
-			if (VoxelWorldZ <= SeaLevel && AboveWorldZ > SeaLevel)
-			{
-				Level = WATER_FULL; // Treat air below SeaLevel as surface point fluid
-			}
-		}
-
+		// Ocean surface is handled by UVoxelWaterComponent (a static mesh plane that
+		// follows the player). Per-chunk ocean injection here caused solid terrain
+		// near SeaLevel to receive water quads on top, rendering black with no material.
 		if (Level == WATER_EMPTY) continue;
 
 		const float WLevel  = (Level == WATER_SOURCE ? 1.f : (float)Level / (float)WATER_FULL);

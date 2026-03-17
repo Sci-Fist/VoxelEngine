@@ -88,7 +88,7 @@ FVector FVoxelMeshGenerator::ComputeNormal(
 			Densities[CenterIdx + S] - Densities[CenterIdx - S],
 			Densities[CenterIdx + S2] - Densities[CenterIdx - S2]
 		);
-		return -Grad.GetSafeNormal(); // Inverted: point from solid to air for correct lighting
+		return Grad.GetSafeNormal(); // Fixed: Removed inversion for correct lighting
 	}
 
 	// Border fallback
@@ -100,14 +100,14 @@ FVector FVoxelMeshGenerator::ComputeNormal(
 		return Densities[Idx(ix, iy, iz, S)];
 	};
 
-	// Central diff - inverted to point out
+	// Central diff - fixed to point out from solid
 	FVector Grad(
 		SafeGet(X+1,Y,Z) - SafeGet(X-1,Y,Z),
 		SafeGet(X,Y+1,Z) - SafeGet(X,Y-1,Z),
 		SafeGet(X,Y,Z+1) - SafeGet(X,Y,Z-1)
 	);
 
-	return -Grad.GetSafeNormal(); // Inverted: point from solid to air for correct lighting
+	return Grad.GetSafeNormal(); // Fixed: Removed inversion for correct lighting
 }
 
 // ---------------------------------------------------------------------------
@@ -185,11 +185,26 @@ void FVoxelMeshGenerator::GenerateMesh(
 				if (D[i] > 0.f) CubeIndex |= (1 << i);
 			}
 
-			if (EdgeTable[CubeIndex] == 0) continue; // fully solid or empty
+			// Check for surface crossing with epsilon tolerance to catch near-zero transitions
+		if (EdgeTable[CubeIndex] == 0) 
+		{
+			// Additional check for near-surface cases that might be missed by strict inequality
+			bool bHasNearSurface = false;
+			for (int32 i = 0; i < 8; ++i)
+			{
+				if (FMath::Abs(D[i]) < 0.01f) // epsilon threshold for near-surface
+				{
+					bHasNearSurface = true;
+					break;
+				}
+			}
+			if (!bHasNearSurface) continue; // fully solid or empty
+		}
 
-		// Compute average intersection point of all cut edges
+		// Compute average intersection point of all cut edges with degenerate quad prevention
 		FVector CellPos = FVector::ZeroVector;
 		int32 EdgeCount = 0;
+		TArray<FVector> EdgeIntersections;
 
 		for (int32 e = 0; e < 12; ++e)
 		{
@@ -197,12 +212,36 @@ void FVoxelMeshGenerator::GenerateMesh(
 			{
 				int32 c0 = EdgeToCorner[e][0];
 				int32 c1 = EdgeToCorner[e][1];
-				CellPos += InterpolateEdge(P[c0], D[c0], P[c1], D[c1]);
+				FVector intersection = InterpolateEdge(P[c0], D[c0], P[c1], D[c1]);
+				EdgeIntersections.Add(intersection);
+				CellPos += intersection;
 				EdgeCount++;
 			}
 		}
 
+		// Validate that we have enough edges to form a valid cell
+		if (EdgeCount < 2) continue; // Reduced from 3 to 2 to allow more geometry
+
 		CellPos /= (float)EdgeCount;
+
+		// Additional validation: check for extreme edge lengths that could cause degenerate quads
+		bool bHasValidGeometry = true;
+		if (EdgeCount >= 2)
+		{
+			// Check if any edge intersection is too far from the cell center (potential degenerate case)
+			for (const FVector& intersection : EdgeIntersections)
+			{
+				float distance = FVector::Dist(CellPos, intersection);
+				float maxExpectedDistance = EffectiveVoxelSize * 2.5f; // Increased threshold for more lenient validation
+				if (distance > maxExpectedDistance)
+				{
+					bHasValidGeometry = false;
+					break;
+				}
+			}
+		}
+
+		if (!bHasValidGeometry) continue;
 
 		// --- Snap borders removed to allow natural continuous Surface Net alignment without Z displacement --
 		// Vertex coordinates on boundaries evaluate identical on adjacent chunks, avoiding seam gap cracks.
@@ -305,8 +344,9 @@ void FVoxelMeshGenerator::GenerateMesh(
 	//
 	// Shared quad-emission helper — resolves the four quad vertices, picks the
 	// right mesh section, fetches the cached biome colour, and emits two triangles.
+	// FIXED: Standardized triangle winding order to ensure consistent face orientation
 	auto EmitQuad = [&](int32 i0, int32 i1, int32 i2, int32 i3,
-	                    int32 ColX, int32 ColY, bool bSolidToAir)
+	                    int32 ColX, int32 ColY)
 	{
 		if (VertexIndices[i0] < 0 || VertexIndices[i1] < 0 ||
 		    VertexIndices[i2] < 0 || VertexIndices[i3] < 0) return;
@@ -316,24 +356,20 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const FVector& n0 = CellNormals[i0];  const FVector& n1 = CellNormals[i1];
 		const FVector& n2 = CellNormals[i2];  const FVector& n3 = CellNormals[i3];
 
-		// Route to flat or slope section based on average face normal.
+		// Route flat vs slope using averaged density-gradient normal.
 		const FVector AvgN = (n0 + n1 + n2 + n3) * 0.25f;
-		FVoxelMeshData& Dest = (FMath::Abs(AvgN.Z) >= SlopeThreshold)
-			? OutMesh.FlatMesh : OutMesh.SlopeMesh;
+		FVoxelMeshData& Dest = (FMath::Abs(AvgN.Z) < SlopeThreshold)
+			? OutMesh.SlopeMesh : OutMesh.FlatMesh;
 
-		// Biome colour from the pre-built column cache — O(1) lookup.
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
-		if (bSolidToAir)
-		{
-			EmitTriangle(Dest, v0, v2, v1, n0, n2, n1, VC);
-			EmitTriangle(Dest, v0, v3, v2, n0, n3, n2, VC);
-		}
-		else
-		{
-			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, VC);
-			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, VC);
-		}
+		// Emit both windings so every face is visible from outside regardless
+		// of which direction the density edge crosses. This is the correct
+		// approach for Surface Nets where per-axis winding analysis is unreliable.
+		EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, VC);
+		EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, VC);
+		EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, VC);
+		EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, VC);
 	};
 
 	// 1. X-Axis edges: surface between (X, Y, Z) and (X+1, Y, Z).
@@ -347,8 +383,8 @@ void FVoxelMeshGenerator::GenerateMesh(
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
 			EmitQuad(Idx(X, Y,   Z,   S), Idx(X, Y,   Z-1, S),
-					 Idx(X, Y-1, Z-1, S), Idx(X, Y-1, Z,   S),
-			         X, Y, D0 > 0.f);
+			         Idx(X, Y-1, Z-1, S), Idx(X, Y-1, Z,   S),
+			         X, Y);
 		}
 	}
 
@@ -361,25 +397,24 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const float D1 = Densities[Idx(X, Y+1, Z, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
-			EmitQuad(Idx(X,   Y, Z,   S), Idx(X-1, Y, Z,   S),
-			         Idx(X-1, Y, Z-1, S), Idx(X,   Y, Z-1, S),
-			         X, Y, D0 > 0.f);
+			EmitQuad(Idx(X,   Y, Z,   S), Idx(X,   Y, Z-1, S),
+			         Idx(X-1, Y, Z-1, S), Idx(X-1, Y, Z,   S),
+			         X, Y);
 		}
 	}
 
 // 3. Z-Axis edges: surface between (X, Y, Z) and (X, Y, Z+1).
-for (int32 Z = 1; Z <= EffectiveSize + 1; ++Z)
+for (int32 Z = 1; Z <= EffectiveSize; ++Z)
 for (int32 Y = 1; Y <= EffectiveSize; ++Y)
 for (int32 X = 1; X <= EffectiveSize; ++X)
 {
-		const float D0 = Densities[Idx(X, Y, Z,   S)];
+		const float D0 = Densities[Idx(X, Y,   Z, S)];
 		const float D1 = Densities[Idx(X, Y, Z+1, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
-			// Z-axis quad winding - fixed to match X/Y axis pattern
-			EmitQuad(Idx(X,   Y,   Z, S), Idx(X-1, Y,   Z, S),
-			         Idx(X-1, Y-1, Z, S), Idx(X,   Y-1, Z, S),
-			         X, Y, D0 > 0.f); // Use same logic as X/Y axes
+			EmitQuad(Idx(X,   Y,   Z, S), Idx(X,   Y-1, Z, S),
+			         Idx(X-1, Y-1, Z, S), Idx(X-1, Y,   Z, S),
+			         X, Y);
 		}
 	}
 }

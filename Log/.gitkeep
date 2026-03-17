@@ -1,2 +1,0 @@
-# Log files (FirstVoxel_YYYY-MM-DD_HH-MM-SS.log) are written here at runtime.
-# The folder is created by UVoxelLogger::InitLogger() if it does not exist.

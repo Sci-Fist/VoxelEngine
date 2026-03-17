@@ -252,6 +252,14 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     const int32 CellX = FMath::FloorToInt(X / GridSize);
     const int32 CellY = FMath::FloorToInt(Y / GridSize);
 
+    float SumAlt           = 0.f;
+    float SumThick         = 0.f;
+    float SumThresh        = 0.f;
+    float SumHeightNorm    = 0.f;
+    float SumShardFalloff  = 0.f;
+    float SumIslandSize    = 0.f;
+    float SumWeight        = 0.f;
+
     float BestDistSq = 99999999.f;
     FVector2D BestCenter(0.f, 0.f);
 
@@ -269,79 +277,89 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float CenterX = (currentCellX + 0.12f + HashX * 0.76f) * GridSize;
         const float CenterY = (currentCellY + 0.12f + HashY * 0.76f) * GridSize;
 
-        float DistSq = FMath::Square(X - CenterX) + FMath::Square(Y - CenterY);
+        const float DistSq = FMath::Square(X - CenterX) + FMath::Square(Y - CenterY);
+        const float Dist   = FMath::Sqrt(DistSq);
+
         if (DistSq < BestDistSq) {
           BestDistSq = DistSq;
           BestCenter = FVector2D(CenterX, CenterY);
         }
+
+        // --- Evaluate cell parameters continuously ---
+        const FVoxelBiomeWeightMap CenterWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(CenterX, CenterY, Config);
+        const float CenterHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(CenterX, CenterY, CenterWeights, Config);
+
+        const float HeightNorm = FMath::Clamp(CenterHeight / SC.MaxTerrainReference, 0.f, 1.f);
+        const float RoughnessNorm = FMath::Clamp(CenterWeights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
+
+        const float CurvedHeight = FMath::Pow(HeightNorm, 2.5f);
+        const float CurvedRough  = FMath::Pow(RoughnessNorm, 2.0f);
+        const float TerrainStrength = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
+        const float ShardFalloff = FMath::Pow(TerrainStrength, 2.2f);
+
+        // 0.008 threshold: only skip cells with truly zero terrain strength.
+        // The old 0.08 cutoff was killing all skylands over flat/low terrain.
+        if (ShardFalloff < 0.008f) continue;
+
+        const float cnX = CenterX + Off.X;
+        const float cnY = CenterY + Off.Y;
+        const float HashProb = (FastNoise3D(cnX * 0.002f, cnY * 0.002f, 200.f) + 1.f) * 0.5f; 
+
+        float Prob = FMath::Clamp(SC.BaseProbability + CurvedHeight * SC.HeightProbabilityBonus + CurvedRough * SC.RoughnessProbabilityBonus, 0.02f, 1.f);
+        Prob *= FMath::Lerp(0.15f, 1.0f, ShardFalloff);
+        if (HashProb > Prob) continue;
+
+        const float SizeNoise  = FBM(cnX * 0.00008f, cnY * 0.00008f, 50.f, 2, 2.0f, 0.5f, 2);
+        const float SizeFactor = (SizeNoise + 1.f) * 0.5f; 
+
+        float IslandSize = SC.BaseIslandSize + CurvedHeight * SC.HeightSizeBonus + CurvedRough * SC.RoughnessSizeBonus;
+        IslandSize *= (0.5f + 0.5f * SizeFactor);
+        IslandSize *= FMath::Lerp(0.10f, 1.15f, ShardFalloff);
+        IslandSize = FMath::Max(IslandSize, 400.f);
+
+        const float MaxIslandSizeForAltitude = FMath::Lerp(20000.f, 8000.f, HeightNorm);
+        IslandSize = FMath::Min(IslandSize, MaxIslandSizeForAltitude);
+        IslandSize = FMath::Min(IslandSize, GridSize * 0.48f);
+
+        if (Dist > IslandSize) continue;
+
+        // Calculate cell-specific values
+        const float AltitudeBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrength);
+        const float SkyAlt = CenterHeight + AltitudeBase + CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus + ShardFalloff * SC.LowTerrainAltitudeBoost;
+        const float HalfThick = IslandSize * SC.ThicknessRatio;
+        const float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob);
+
+        // Continuous blend weight
+        const float W = FMath::Square(1.f - (Dist / IslandSize));
+        SumAlt          += SkyAlt * W;
+        SumThick        += HalfThick * W;
+        SumThresh       += Threshold * W;
+        SumHeightNorm   += HeightNorm * W;
+        SumShardFalloff += ShardFalloff * W;
+        SumIslandSize   += IslandSize * W;
+        SumWeight       += W;
       }
     }
 
-    const float cnX = BestCenter.X + Off.X;
-    const float cnY = BestCenter.Y + Off.Y;
+    if (SumWeight <= 0.f) return Cache;
 
-    const FVoxelBiomeWeightMap CenterWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(BestCenter.X, BestCenter.Y, Config);
-    const float CenterHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(BestCenter.X, BestCenter.Y, CenterWeights, Config);
+    Cache.SkyAlt       = SumAlt / SumWeight;
+    Cache.HalfThick    = SumThick / SumWeight;
+    Cache.Threshold    = SumThresh / SumWeight;
+    Cache.HeightNorm   = SumHeightNorm / SumWeight;
+    Cache.ShardFalloff = SumShardFalloff / SumWeight;
 
-    Cache.HeightNorm = FMath::Clamp(CenterHeight / SC.MaxTerrainReference, 0.f, 1.f);
-    const float RoughnessNorm = FMath::Clamp(CenterWeights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
-
-    const float CurvedHeight = FMath::Pow(Cache.HeightNorm, 2.5f);
-    const float CurvedRough  = FMath::Pow(RoughnessNorm, 2.0f);
-    const float TerrainStrength = FMath::Clamp(Cache.HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
-    Cache.ShardFalloff = FMath::Pow(TerrainStrength, 2.2f);
-
-    if (Cache.ShardFalloff < 0.08f) return Cache; 
-
-    const float HashProb = (FastNoise3D(cnX * 0.002f, cnY * 0.002f, 200.f) + 1.f) * 0.5f; 
-
-    Cache.Prob = FMath::Clamp(SC.BaseProbability + CurvedHeight * SC.HeightProbabilityBonus + CurvedRough * SC.RoughnessProbabilityBonus, 0.02f, 1.f);
-    Cache.Prob *= FMath::Lerp(0.15f, 1.0f, Cache.ShardFalloff);
-    if (HashProb > Cache.Prob) return Cache; 
-
-    const float SizeNoise  = FBM(cnX * 0.00008f, cnY * 0.00008f, 50.f, 2, 2.0f, 0.5f, 2);
-    const float SizeFactor = (SizeNoise + 1.f) * 0.5f; 
-
-    float IslandSize = SC.BaseIslandSize + CurvedHeight * SC.HeightSizeBonus + CurvedRough * SC.RoughnessSizeBonus;
-    IslandSize *= (0.5f + 0.5f * SizeFactor);
-    IslandSize *= FMath::Lerp(0.10f, 1.15f, Cache.ShardFalloff);
-    IslandSize = FMath::Max(IslandSize, 400.f);
-
-    const float MaxIslandSizeForAltitude = FMath::Lerp(20000.f, 8000.f, Cache.HeightNorm);
-    IslandSize = FMath::Min(IslandSize, MaxIslandSizeForAltitude);
-
-    const float AbsoluteMaxRadius = GridSize * 0.48f; 
-    IslandSize = FMath::Min(IslandSize, AbsoluteMaxRadius);
-
-    const float Dist = FMath::Sqrt(BestDistSq);
-    if (Dist > IslandSize) return Cache; 
-
-    const float AltitudeBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrength);
-    Cache.SkyAlt = CenterHeight + AltitudeBase + CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus + Cache.ShardFalloff * SC.LowTerrainAltitudeBoost;
-    Cache.HalfThick = IslandSize * SC.ThicknessRatio;
-
-    Cache.Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Cache.Prob);
-    Cache.WX_base = X + Off.X;
-    Cache.WY_base = Y + Off.Y;
-
-    Cache.WX = Cache.WX_base;
-    Cache.WY = Cache.WY_base;
-    if (SC.bEnableDomainWarping) {
-      const float WF = SC.DomainWarpFrequency;
-      Cache.WX += FastNoise3D(Cache.WX * WF + 10.f, Cache.WY * WF + 20.f, 0.f) * SC.DomainWarpStrength;
-      Cache.WY += FastNoise3D(Cache.WX * WF + 50.f, Cache.WY * WF + 10.f, 0.f) * SC.DomainWarpStrength;
-    }
-
-    const float SizeRatio = FMath::Max(1.f, (float)(IslandSize / SC.BaseIslandSize));
+    const float BlendedIslandSize = SumIslandSize / SumWeight;
+    const float SizeRatio = FMath::Max(1.f, (float)(BlendedIslandSize / SC.BaseIslandSize));
     Cache.Freq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
     Cache.Freq = FMath::Max(Cache.Freq, 0.00025f);
 
-    const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves, 2), 1, Config.Performance.MaxNoiseOctaves);
-    Cache.ShapeXY = FBM(Cache.WX * Cache.Freq, Cache.WY * Cache.Freq, 0.f, Oct2D, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
+    Cache.Prob = 0.5f; // Used only as coefficient downstream
 
-    if (Cache.ShapeXY <= Cache.Threshold)
-      return Cache;
-
+    Cache.WX_base = X + Off.X;
+    Cache.WY_base = Y + Off.Y;
+    Cache.WX = Cache.WX_base;
+    Cache.WY = Cache.WY_base;
     Cache.bHasSkyland = true;
     return Cache;
 }

@@ -1,0 +1,107 @@
+=== FIRSTVOXEL SESSION [2026.03.17-01.33.33] ===
+[+01:33:33.813] FirstVoxel module started.
+[+01:33:41.618] VoxelWorld: GenerateWorldDeferred started.
+[+01:33:41.618] VoxelWorld: Queued 245 chunks.
+[+01:33:41.725] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=5988 SlopeVerts=10380
+[+01:33:41.739] VoxelChunk: GenerateAsync (0,0,0)
+[+01:33:41.740] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=1368 SlopeVerts=882
+[+01:33:41.832] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=3600 SlopeVerts=13752
+[+01:33:41.847] VoxelChunk: GenerateAsync (1,0,0)
+[+01:33:41.848] VoxelMesh: Chunk X=1 Y=0 Z=0 FlatVerts=180 SlopeVerts=138
+[+01:33:41.934] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=8106 SlopeVerts=6360
+[+01:33:41.947] VoxelChunk: GenerateAsync (1,1,0)
+[+01:33:41.948] VoxelMesh: Chunk X=1 Y=1 Z=0 FlatVerts=1476 SlopeVerts=714
+[+01:33:42.033] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=990 SlopeVerts=5526
+[+01:33:42.039] VoxelChunk: GenerateAsync (1,1,1)
+[+01:33:42.039] VoxelMesh: Chunk X=1 Y=1 Z=1 FlatVerts=144 SlopeVerts=1698
+[+01:33:42.141] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=144 SlopeVerts=1698
+[+01:33:42.143] VoxelChunk: GenerateAsync (0,1,1)
+[+01:33:42.144] VoxelMesh: Chunk X=0 Y=1 Z=1 FlatVerts=0 SlopeVerts=0
+[+01:33:42.246] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=0 SlopeVerts=0
+[+01:33:42.246] VoxelChunk: GenerateAsync (-1,1,1)
+[+01:33:42.347] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=1608 SlopeVerts=20934
+[+01:33:42.364] VoxelChunk: GenerateAsync (1,0,1)
+[+01:33:42.365] VoxelMesh: Chunk X=1 Y=0 Z=1 FlatVerts=270 SlopeVerts=5094
+[+01:33:42.483] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=456 SlopeVerts=10890
+[+01:33:42.491] VoxelChunk: GenerateAsync (0,0,1)
+[+01:33:42.492] VoxelMesh: Chunk X=0 Y=0 Z=1 FlatVerts=54 SlopeVerts=2136
+[+01:33:42.585] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=1542 SlopeVerts=1056
+[+01:33:42.588] VoxelChunk: GenerateAsync (0,-1,-1)
+[+01:33:42.690] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=216 SlopeVerts=198
+[+01:33:42.691] VoxelChunk: GenerateAsync (1,-1,-1)
+[+01:33:42.795] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=9804 SlopeVerts=2352
+[+01:33:42.808] VoxelChunk: GenerateAsync (0,1,0)
+[+01:33:42.809] VoxelMesh: Chunk X=0 Y=1 Z=0 FlatVerts=2520 SlopeVerts=30
+[+01:33:42.901] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=10458 SlopeVerts=30
+[+01:33:42.915] VoxelChunk: GenerateAsync (-1,1,-1)
+[+01:33:42.998] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=9000 SlopeVerts=2988
+[+01:33:43.013] VoxelChunk: GenerateAsync (-1,0,0)
+[+01:33:43.014] VoxelMesh: Chunk X=-1 Y=0 Z=0 FlatVerts=2526 SlopeVerts=48
+[+01:33:43.104] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=1050 SlopeVerts=10668
+[+01:33:43.112] VoxelChunk: GenerateAsync (-1,-1,1)
+[+01:33:43.113] VoxelMesh: Chunk X=-1 Y=-1 Z=1 FlatVerts=516 SlopeVerts=1440
+[+01:33:43.209] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=5532 SlopeVerts=1776
+[+01:33:43.218] VoxelChunk: GenerateAsync (0,0,-1)
+[+01:33:43.309] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=6012 SlopeVerts=9192
+[+01:33:43.322] VoxelChunk: GenerateAsync (-1,-1,0)
+[+01:33:43.323] VoxelMesh: Chunk X=-1 Y=-1 Z=0 FlatVerts=1098 SlopeVerts=816
+[+01:33:43.420] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=2346 SlopeVerts=13626
+[+01:33:43.431] VoxelChunk: GenerateAsync (0,-1,0)
+[+01:33:43.432] VoxelMesh: Chunk X=0 Y=-1 Z=0 FlatVerts=6 SlopeVerts=24
+[+01:33:43.524] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=54 SlopeVerts=2202
+[+01:33:43.525] VoxelChunk: GenerateAsync (-1,0,1)
+[+01:33:43.527] VoxelMesh: Chunk X=-1 Y=0 Z=1 FlatVerts=0 SlopeVerts=0
+[+01:33:43.628] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=10458 SlopeVerts=30
+[+01:33:43.641] VoxelChunk: GenerateAsync (-1,1,0)
+[+01:33:43.641] VoxelMesh: Chunk X=-1 Y=1 Z=0 FlatVerts=2538 SlopeVerts=0
+[+01:33:43.735] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=9684 SlopeVerts=744
+[+01:33:43.748] VoxelChunk: GenerateAsync (0,1,-1)
+[+01:33:43.842] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=8946 SlopeVerts=966
+[+01:33:43.855] VoxelChunk: GenerateAsync (-1,0,-1)
+[+01:33:43.950] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=900 SlopeVerts=11538
+[+01:33:43.959] VoxelChunk: GenerateAsync (1,-1,0)
+[+01:33:44.053] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=7176 SlopeVerts=1398
+[+01:33:44.062] VoxelChunk: GenerateAsync (1,1,-1)
+[+01:33:44.156] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=2016 SlopeVerts=1272
+[+01:33:44.161] VoxelChunk: GenerateAsync (1,0,-1)
+[+01:33:44.263] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=648 SlopeVerts=25830
+[+01:33:44.283] VoxelChunk: GenerateAsync (1,-1,1)
+[+01:33:44.284] VoxelMesh: Chunk X=1 Y=-1 Z=1 FlatVerts=0 SlopeVerts=1542
+[+01:33:44.371] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=792 SlopeVerts=22050
+[+01:33:44.387] VoxelChunk: GenerateAsync (0,-1,1)
+[+01:33:44.388] VoxelMesh: Chunk X=0 Y=-1 Z=1 FlatVerts=510 SlopeVerts=4014
+[+01:33:44.475] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=4986 SlopeVerts=1782
+[+01:33:44.483] VoxelChunk: GenerateAsync (-1,-1,-1)
+[+01:33:44.579] VoxelChunk: GenerateAsync (1,0,-2)
+[+01:33:44.682] VoxelChunk: GenerateAsync (2,0,-2)
+[+01:33:44.785] VoxelChunk: GenerateAsync (0,-1,-2)
+[+01:33:44.888] VoxelChunk: GenerateAsync (1,-1,-2)
+[+01:33:44.990] VoxelChunk: GenerateAsync (-1,-2,-2)
+[+01:33:45.092] VoxelChunk: GenerateAsync (-2,-2,-2)
+[+01:33:45.203] VoxelChunk: GenerateAsync (2,-1,-2)
+[+01:33:45.301] VoxelChunk: GenerateAsync (0,1,-2)
+[+01:33:45.403] VoxelChunk: GenerateAsync (1,1,-2)
+[+01:33:45.506] VoxelChunk: GenerateAsync (1,-2,-2)
+[+01:33:45.612] VoxelChunk: GenerateAsync (2,1,-2)
+[+01:33:45.714] VoxelChunk: GenerateAsync (-2,2,-2)
+[+01:33:45.815] VoxelChunk: GenerateAsync (-2,0,-2)
+[+01:33:45.916] VoxelChunk: GenerateAsync (-2,-1,-2)
+[+01:33:46.018] VoxelChunk: GenerateAsync (-1,2,-2)
+[+01:33:46.121] VoxelChunk: GenerateAsync (0,2,-2)
+[+01:33:46.222] VoxelChunk: GenerateAsync (-1,0,-2)
+[+01:33:46.323] VoxelChunk: GenerateAsync (1,2,-2)
+[+01:33:46.428] VoxelChunk: GenerateAsync (2,2,-2)
+[+01:33:46.530] VoxelChunk: GenerateAsync (0,0,-2)
+[+01:33:46.635] VoxelChunk: GenerateAsync (-1,-1,-2)
+[+01:33:46.741] VoxelChunk: GenerateAsync (2,-2,-2)
+[+01:33:46.849] VoxelChunk: GenerateAsync (0,-2,-2)
+[+01:33:46.950] VoxelChunk: GenerateAsync (-2,1,-2)
+[+01:33:47.065] VoxelChunk: GenerateAsync (-1,1,-2)
+[+01:33:47.163] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=0 SlopeVerts=6
+[+01:33:47.164] VoxelChunk: GenerateAsync (1,2,2)
+[+01:33:47.266] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=3486 SlopeVerts=2028
+[+01:33:47.272] VoxelChunk: GenerateAsync (2,1,-1)
+[+01:33:47.366] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=0 SlopeVerts=0
+[+01:33:47.366] VoxelChunk: GenerateAsync (-2,1,1)
+[+01:33:47.473] VoxelMesh: Chunk X=0 Y=0 Z=0 FlatVerts=3522 SlopeVerts=1254
+[+01:33:47.479] VoxelChunk: GenerateAsync (-2,-2,-1)

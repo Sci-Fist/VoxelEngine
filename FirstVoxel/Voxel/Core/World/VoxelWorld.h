@@ -62,7 +62,7 @@ public:
   /** Max background tasks allowed at once. Higher values speed up generation
    * but can cause framerate hitching or high CPU usage. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Performance")
-  int32 MaxConcurrentGenerations = 4;
+  int32 MaxConcurrentGenerations = 12;
 
   /** Distance from player where LOD1 (Lower Detail) chunks begin. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|LOD")
@@ -372,7 +372,7 @@ private:
   FVector LastStreamedPos = FVector::ZeroVector;
 
   float StreamingTimer = 0.f;
-  static constexpr float StreamingInterval = 0.5f;
+  static constexpr float StreamingInterval = 0.25f;
 
   bool bInitialized = false;
   FThreadSafeBool bShutdown{false};

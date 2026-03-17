@@ -186,6 +186,9 @@ void AVoxelWorld::GenerateWorldDeferred()
 	{
 		FTimerHandle TempHandle;
 		TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+		// 2.5s gives the initial nearby chunks time to fully generate before
+		// snapping the player. With MaxConcurrentGenerations=12 and drain=8,
+		// the spawn-area chunks (3x3x3 = 27) finish well within this window.
 		GetWorldTimerManager().SetTimer(TempHandle, [WeakThis]()
 		{
 			if (AVoxelWorld* StrongThis = WeakThis.Get())
@@ -193,7 +196,7 @@ void AVoxelWorld::GenerateWorldDeferred()
 				if (StrongThis->bShutdown) return;
 				StrongThis->ProcessInitialPlayerSpawn();
 			}
-		}, 0.8f, false);
+		}, 2.5f, false);
 	}
 }
 
@@ -229,6 +232,10 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord)
 	Chunk->SetFolderPath(FName(*FolderName));
 
 	Chunk->ChunkCoord = Coord;
+	
+	const float SizeInCm = ChunkSize * VoxelSize;
+	Chunk->SetActorLocation(FVector(Coord.X * SizeInCm, Coord.Y * SizeInCm, Coord.Z * SizeInCm));
+
 	ConfigureChunk(Chunk);
 
 	LoadedChunks.Add(Coord, Chunk);
@@ -289,7 +296,7 @@ void AVoxelWorld::DrainGenerationQueue()
 	if (!GetWorld()) return;
 
 	const bool bIsEditor = !GetWorld()->IsGameWorld();
-	const int32 Limit = bIsEditor ? 1 : 4; // Editor: 1 per tick, Game: up to 4
+	const int32 Limit = bIsEditor ? 2 : 8; // Editor: 2 per tick, Game: up to 8
 
 	int32 ProcessedThisTick = 0;
 	while (ProcessedThisTick < Limit && QueueHead < GenerationQueue.Num())

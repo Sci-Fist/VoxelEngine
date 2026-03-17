@@ -54,6 +54,24 @@ void AFirstVoxelCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
+
+
+	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
+	{
+		if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
+			ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
+		{
+			Subsystem->AddMappingContext(DefaultMappingContext, 0);
+		}
+	}
+
+	// Reset dig/build timestamps so re-entering PIE never blocks the first action
+	DigLastActionTime   = -1.f;
+	BuildLastActionTime = -1.f;
+}
+
+void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
 	// Auto-load input assets when not pre-assigned via a Blueprint subclass
 	if (!JumpAction)
 		JumpAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Jump.IA_Jump"));
@@ -72,22 +90,6 @@ void AFirstVoxelCharacter::BeginPlay()
 	if (!MapAction)
 		MapAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Map.IA_Map"));
 
-	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
-	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
-			ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
-		{
-			Subsystem->AddMappingContext(DefaultMappingContext, 0);
-		}
-	}
-
-	// Reset dig/build timestamps so re-entering PIE never blocks the first action
-	DigLastActionTime   = -1.f;
-	BuildLastActionTime = -1.f;
-}
-
-void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
-{
 	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		// Jump (keyboard/gamepad A)
@@ -370,13 +372,36 @@ void AFirstVoxelCharacter::ToggleFly()
 	{
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode DISABLED"));
+		// Nach Flugmodus: Kollision prüfen und ggf. repositionieren
+		if (!GetCharacterMovement()->IsFalling() && !GetCharacterMovement()->IsFlying()) {
+			if (!GetCapsuleComponent()->IsOverlappingActor(nullptr)) {
+				UE_LOG(LogTemplateCharacter, Warning, TEXT("Player not overlapping any actor after flight! Attempting reposition."));
+				FVector Current = GetActorLocation();
+				SetActorLocation(Current + FVector(0,0,200), false, nullptr, ETeleportType::TeleportPhysics);
+			}
+		}
+		UE_LOG(LogTemplateCharacter, Log, TEXT("MovementMode after flight: %d, Collision: %d"),
+			(int32)GetCharacterMovement()->MovementMode, (int32)GetCapsuleComponent()->GetCollisionEnabled());
 	}
 	else
 	{
 		GetCharacterMovement()->SetMovementMode(MOVE_Flying);
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode ENABLED"));
+		UE_LOG(LogTemplateCharacter, Log, TEXT("MovementMode after enabling flight: %d, Collision: %d"),
+			(int32)GetCharacterMovement()->MovementMode, (int32)GetCapsuleComponent()->GetCollisionEnabled());
 	}
 }
+// Automatische Reparatur: Wenn Spieler sehr tief fällt, repositionieren
+{
+	Super::Tick(DeltaTime);
+
+	if (GetActorLocation().Z < -1000.f && GetCharacterMovement() && GetCharacterMovement()->MovementMode == MOVE_Walking)
+	{
+		UE_LOG(LogTemplateCharacter, Warning, TEXT("Player fell below world! Auto-reposition to surface."));
+		SetActorLocation(FVector(GetActorLocation().X, GetActorLocation().Y, 500.f), false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
+// ...existing code...
 
 void AFirstVoxelCharacter::Sprint()
 {
