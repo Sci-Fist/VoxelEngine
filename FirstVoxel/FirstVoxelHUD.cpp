@@ -110,4 +110,62 @@ void AFirstVoxelHUD::DrawHUD()
         DrawRow(this, X, Y, LineH, TEXT("[WASD]"),         BC, TEXT(": Move"),             ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[Mouse]"),        BC, TEXT(": Look"),             ColAction, SmallFont);
     }
+
+    // ── Tool Wheel Overlay ────────────────────────────────────────────────
+    AFirstVoxelCharacter* Char = Cast<AFirstVoxelCharacter>(GetOwningPawn());
+    if (Char && Char->bToolWheelOpen)
+    {
+        // 1. Dim background
+        DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
+
+        const float CenterX = Canvas->SizeX * 0.5f;
+        const float CenterY = Canvas->SizeY * 0.5f;
+        const float Radius  = 160.f;
+
+        // 2. Labels mapped directly to EVoxelToolMode index
+        // Order: 0/Dig, 1/Build, 2/Smooth, 3/Flatten
+        FString ToolNames[] = { TEXT("DIG"), TEXT("BUILD"), TEXT("SMOOTH"), TEXT("FLATTEN") };
+        FVector2D Offsets[] = {
+            FVector2D(-Radius, 0.f), // 0: Dig (Left)
+            FVector2D(0.f, -Radius), // 1: Build (Top)
+            FVector2D(Radius, 0.f),  // 2: Smooth (Right)
+            FVector2D(0.f, Radius)   // 3: Flatten (Bottom)
+        };
+
+        const int32 SelectedIdx = static_cast<int32>(Char->CurrentTool);
+
+        for (int32 i = 0; i < 4; ++i)
+        {
+            const bool bSel = (i == SelectedIdx);
+            FLinearColor TextCol = bSel ? FLinearColor::Green : FLinearColor::White;
+            
+            float TextW, TextH;
+            GetTextSize(ToolNames[i], TextW, TextH, SmallFont);
+
+            const float DrawX = CenterX + Offsets[i].X - (TextW * 0.5f);
+            const float DrawY = CenterY + Offsets[i].Y - (TextH * 0.5f);
+
+            if (bSel)
+            {
+                // Simple highlight box
+                DrawRect(FLinearColor(0.2f, 0.8f, 0.2f, 0.4f), 
+                         DrawX - 12.f, DrawY - 6.f, TextW + 24.f, TextH + 12.f);
+            }
+
+            DrawText(ToolNames[i], TextCol, DrawX, DrawY, SmallFont);
+        }
+
+        // Draw central pointer
+        DrawRect(FLinearColor::White, CenterX - 3.f, CenterY - 3.f, 6.f, 6.f);
+
+        if (!Char->bLastInputWasGamepad)
+        {
+            float MouseX, MouseY;
+            APlayerController* PC = GetOwningPlayerController();
+            if (PC && PC->GetMousePosition(MouseX, MouseY))
+            {
+                DrawLine(CenterX, CenterY, MouseX, MouseY, FLinearColor::Yellow, 2.f);
+            }
+        }
+    }
 }

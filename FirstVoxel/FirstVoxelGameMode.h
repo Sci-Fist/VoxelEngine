@@ -4,6 +4,9 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "GameFramework/HUD.h"
+
+// The generated header must always be the last include
 #include "FirstVoxelGameMode.generated.h"
 
 /**
@@ -15,10 +18,11 @@
  * variants. They are preserved in the codebase for potential future integration
  * but are not referenced by this main game mode.
  */
-UCLASS(abstract)
+UCLASS()
 class FIRSTVOXEL_API AFirstVoxelGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
+
 
 public:
 	/** Constructor */

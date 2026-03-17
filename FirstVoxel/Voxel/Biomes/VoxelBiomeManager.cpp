@@ -36,36 +36,37 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     FVoxelBiomeWeightMap Map;
 
     // Forest: thrives in low-erosion (flat) areas with temperate temperatures.
-    const float ForestW = FMath::Clamp(1.0f - Erosion * 0.40f, 0.f, 1.f)
+    float ForestW = FMath::Clamp(1.0f - Erosion * 0.40f, 0.f, 1.f)
                        * FMath::Clamp(1.5f - Temp, 0.f, 1.f); // taper down at high temp
 
     // Desert: thrives in low-erosion + hot temperature.
-    const float DesertW = FMath::Clamp(1.0f - Erosion * 0.40f, 0.f, 1.f)
+    float DesertW = FMath::Clamp(1.0f - Erosion * 0.40f, 0.f, 1.f)
                        * FMath::Clamp((Temp - 0.70f) * 4.0f, 0.f, 1.f);
 
     // Peaks: trigger at high erosion (rarer) and steeper rise
-    const float PeaksW = FMath::Clamp((Erosion - 0.68f) * B.PeaksStrength * 2.5f, 0.f, 1.f)
+    float PeaksW = FMath::Clamp((Erosion - 0.68f) * B.PeaksStrength * 2.5f, 0.f, 1.f)
                        * FMath::Clamp(1.2f - Temp, 0.f, 1.f);
 
     // Cliffs: rough + warm. Ridged terrain in drier, warmer zones.
-    const float CliffsW = FMath::Clamp((Erosion - 0.50f) * B.CliffsStrength * 1.6f, 0.f, 1.f)
+    float CliffsW = FMath::Clamp((Erosion - 0.50f) * B.CliffsStrength * 1.6f, 0.f, 1.f)
                         * FMath::Clamp(Temp * 1.3f - 0.15f, 0.f, 1.f);
 
     // Mesa: hot + moderate erosion. The sharp temperature cutoff gives Mesa a distinctive zone.
-    const float MesaW = FMath::Clamp((Temp - 0.62f) * 3.5f * B.MesaStrength, 0.f, 1.f)
+    float MesaW = FMath::Clamp((Temp - 0.62f) * 3.5f * B.MesaStrength, 0.f, 1.f)
                       * FMath::Clamp(1.f - FMath::Abs(Erosion - 0.4f) * 3.5f, 0.f, 1.f);
 
     // Craters: rare, driven by a separate low-frequency noise not related to Temp/Erosion.
     // Uses the Z=200 slice as a pseudo-2D crater placement field.
-    // ----- Center Canyon Force Overlay -----
+    // Apply a soft bias near the world origin to naturally invite the Crater Biome 
+    // to spawn at the center without artificial shape overrides.
     const float DistFrom0 = FMath::Sqrt(X * X + Y * Y);
-    const float CenterCanyonRadius = 15000.f; // 150m starting basin
-    const float CenterCanyonStr = FMath::Clamp(1.f - DistFrom0 / CenterCanyonRadius, 0.f, 1.f);
+    const float CenterBias = FMath::Clamp(1.0f - DistFrom0 / 18000.f, 0.f, 1.f) * 0.35f;
 
     const float CraterNoise = FMath::PerlinNoise3D(FVector(
         (X + Off.X) * (Config.Craters.Frequency * 0.5f),
         (Y + Off.Y) * (Config.Craters.Frequency * 0.5f),
-        200.f));
+        200.f)) + CenterBias;
+
     // Weight caps at 0.45 so other biomes (Forest, Desert…) remain active inside craters.
     // Without this cap, CratersW normalized to ~1.0 at the core, zeroing out all other
     // biome weights and making crater interiors a featureless flat plain.
@@ -73,9 +74,6 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
         Config.Craters.ImpactThreshold + 0.1f,
         Config.Craters.ImpactThreshold,
         CraterNoise) * 0.45f;
-    
-    // Smoothly maximize to Crater weight at (0,0) center
-    CratersW = FMath::Max(CratersW, CenterCanyonStr * 0.45f);
 
     Map.SetWeight(EVoxelBiome::Forest,  ForestW);
     Map.SetWeight(EVoxelBiome::Peaks,   PeaksW);

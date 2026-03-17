@@ -217,6 +217,16 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Input")
 	bool bLastInputWasGamepad = false;
 
+	/** True while the radial tool selection wheel is held open. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel|Tools")
+	bool bToolWheelOpen = false;
+
+	UFUNCTION(BlueprintCallable, Category="Voxel|Tools")
+	void OpenToolWheel();
+
+	UFUNCTION(BlueprintCallable, Category="Voxel|Tools")
+	void CloseToolWheel();
+
 	/** Look sensitivity for gamepad right stick (degrees per second). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Input", meta=(ClampMin="10.0", ClampMax="500.0"))
 	float GamepadLookSensitivity = 160.f;

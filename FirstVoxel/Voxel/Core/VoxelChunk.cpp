@@ -342,7 +342,7 @@ void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, 
 		Data.UVs,
 		Data.VertexColors,
 		Data.Tangents,
-		LOD == 0  // OPTIMIZATION: Only build heavy collision mesh for highest-detail center chunks
+		LOD <= 1  // OPTIMIZATION: Build collision mesh for highest and mid-detail chunks
 	);
 
 

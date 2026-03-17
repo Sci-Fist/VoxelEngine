@@ -7,3 +7,6 @@ AFirstVoxelGameMode::AFirstVoxelGameMode()
 {
 	HUDClass = AFirstVoxelHUD::StaticClass();
 }
+
+
+

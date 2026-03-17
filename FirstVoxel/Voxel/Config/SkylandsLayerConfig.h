@@ -52,7 +52,7 @@ struct FSkylandsLayerConfig
     // --- Size ---
     // BaseIslandSize: minimum island radius in cm — tiny shards above flat terrain.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size")
-    float BaseIslandSize = 800.f;
+    float BaseIslandSize = 2500.f;
 
     // HeightSizeBonus: over high terrain islands grow much larger.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size")
@@ -75,7 +75,7 @@ struct FSkylandsLayerConfig
     float ThresholdAtMaxProbability = -0.18f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Absolute Noise Bounds")
-    float ThresholdAtMinProbability = 0.68f;
+    float ThresholdAtMinProbability = 0.25f;
 
     // --- Domain Warping ---
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Domain Warp")

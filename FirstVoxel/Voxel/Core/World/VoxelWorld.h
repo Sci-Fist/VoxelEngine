@@ -149,9 +149,8 @@ public:
   float CraterSpawnMinWeight = 0.25f;
 
   /** Minimum height above terrain when snapping the player to ground (cm). */
-  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn",
-            meta = (ClampMin = "50.0"))
-  float SafeSpawnHeightOffset = 350.f;
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn")
+  float SafeSpawnHeightOffset = 1500.f;
 
   UFUNCTION(CallInEditor, Category = "Voxel")
   void GenerateWorld();

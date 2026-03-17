@@ -58,12 +58,14 @@ void AVoxelWorld::UpdateChunkStreaming()
 	const float HeightNormSky    = FMath::Clamp(PlayerSurfH / SC.MaxTerrainReference, 0.f, 1.f);
 	const float RoughnessNormSky = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
 	const float TerrainStrSky    = FMath::Clamp(HeightNormSky * 1.5f + RoughnessNormSky * 0.8f, 0.f, 1.f);
+	const float ShardFalloff     = FMath::Pow(TerrainStrSky, 2.2f); // Match GetSkylandColumnCache()
 	const float CurvedH          = FMath::Pow(HeightNormSky,    2.5f);
 	const float CurvedR          = FMath::Pow(RoughnessNormSky, 2.0f);
 	const float AltBase          = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrSky);
 	const float SkyAltWorld      = PlayerSurfH + AltBase
 		                           + CurvedH * SC.HeightAltitudeBonus
-		                           + CurvedR * SC.RoughnessAltitudeBonus;
+		                           + CurvedR * SC.RoughnessAltitudeBonus
+		                           + ShardFalloff * SC.LowTerrainAltitudeBoost;
 
 	// Island vertical half-thickness in chunks (+ 2 margin chunks on each side)
 	const float IslandSize    = FMath::Max(SC.BaseIslandSize,

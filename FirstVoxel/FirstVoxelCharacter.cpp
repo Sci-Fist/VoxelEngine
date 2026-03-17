@@ -18,6 +18,7 @@ DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "InputActionValue.h"
+#include "Kismet/GameplayStatics.h"
 
 AFirstVoxelCharacter::AFirstVoxelCharacter()
 {
@@ -125,6 +126,12 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	PlayerInputComponent->BindKey(EKeys::M,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp,   IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AFirstVoxelCharacter::DecreaseRadius);
+
+	// Tool Wheel Bindings
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed,  this, &AFirstVoxelCharacter::OpenToolWheel);
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &AFirstVoxelCharacter::CloseToolWheel);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed,  this, &AFirstVoxelCharacter::OpenToolWheel);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Released, this, &AFirstVoxelCharacter::CloseToolWheel);
 
 	// ── Tool selection (Keyboard 1-4) ─────────────────────────────────────
 	PlayerInputComponent->BindKey(EKeys::One,   IE_Pressed, this, &AFirstVoxelCharacter::SelectToolDig);
@@ -248,6 +255,8 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 		if (PC->IsInputKeyDown(EKeys::LeftControl)) AddMovementInput(FVector::UpVector, -1.f);
 	}
 
+
+
 	// ── 3. Gamepad: Left Stick Move ──────────────────────────────────────
 	if (FMath::Abs(GPLx) > 0.15f || FMath::Abs(GPLy) > 0.15f)
 		DoMove(GPLx, GPLy);
@@ -255,9 +264,20 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 	// ── 4. Gamepad: Right Stick Look ─────────────────────────────────────
 	if (FMath::Abs(GPRx) > 0.1f || FMath::Abs(GPRy) > 0.1f)
 	{
-		const float S = GamepadLookSensitivity * DeltaTime;
-		DoLook(GPRx * S, GPRy * S);
-		bLookedThisFrame = true;
+		if (bToolWheelOpen)
+		{
+			const float Angle = FMath::RadiansToDegrees(FMath::Atan2(-GPRy, GPRx));
+			if (Angle >= -135.f && Angle < -45.f)      SelectToolByIndex(1); // Build (Top)
+			else if (Angle >= -45.f && Angle < 45.f) SelectToolByIndex(2); // Smooth (Right)
+			else if (Angle >= 45.f && Angle < 135.f) SelectToolByIndex(3); // Flatten (Bottom)
+			else                                      SelectToolByIndex(0); // Dig (Left)
+		}
+		else
+		{
+			const float S = GamepadLookSensitivity * DeltaTime;
+			DoLook(GPRx * S, GPRy * S);
+			bLookedThisFrame = true;
+		}
 	}
 
 	// ── 5. Gamepad: Flight vertical (A = up, X = down) ───────────────────
@@ -279,8 +299,14 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 	// regardless of whether those assets are set up, matching the gamepad trigger path.
 	if (!bLastInputWasGamepad)
 	{
-		if (PC->IsInputKeyDown(EKeys::LeftMouseButton) || PC->IsInputKeyDown(EKeys::RightMouseButton))
+		if (PC->IsInputKeyDown(EKeys::LeftMouseButton))
 		{
+			CurrentTool = EVoxelToolMode::Dig;
+			ApplyCurrentTool();
+		}
+		else if (PC->IsInputKeyDown(EKeys::RightMouseButton))
+		{
+			CurrentTool = EVoxelToolMode::Build;
 			ApplyCurrentTool();
 		}
 	}
@@ -296,7 +322,28 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 	}
 
 	// ── 8. Mouse look fallback (when EnhancedInput doesn't supply deltas) ─
-	if (!bLookedThisFrame)
+	if (bToolWheelOpen && !bLastInputWasGamepad)
+	{
+		FVector2D ScreenSize;
+		if (GEngine && GEngine->GameViewport)
+		{
+			GEngine->GameViewport->GetViewportSize(ScreenSize);
+			float MouseX, MouseY;
+			if (PC->GetMousePosition(MouseX, MouseY))
+			{
+				const FVector2D Dir(MouseX - ScreenSize.X * 0.5f, MouseY - ScreenSize.Y * 0.5f);
+				if (Dir.Size() > 20.f)
+				{
+					const float Angle = FMath::RadiansToDegrees(FMath::Atan2(Dir.Y, Dir.X));
+					if (Angle >= -135.f && Angle < -45.f)      SelectToolByIndex(1); // Build (Top)
+					else if (Angle >= -45.f && Angle < 45.f) SelectToolByIndex(2); // Smooth (Right)
+					else if (Angle >= 45.f && Angle < 135.f) SelectToolByIndex(3); // Flatten (Bottom)
+					else                                      SelectToolByIndex(0); // Dig (Left)
+				}
+			}
+		}
+	}
+	else if (!bLookedThisFrame)
 	{
 		float MouseX, MouseY;
 		PC->GetInputMouseDelta(MouseX, MouseY);
@@ -372,14 +419,7 @@ void AFirstVoxelCharacter::ToggleFly()
 	{
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode DISABLED"));
-		// Nach Flugmodus: Kollision prüfen und ggf. repositionieren
-		if (!GetCharacterMovement()->IsFalling() && !GetCharacterMovement()->IsFlying()) {
-			if (!GetCapsuleComponent()->IsOverlappingActor(nullptr)) {
-				UE_LOG(LogTemplateCharacter, Warning, TEXT("Player not overlapping any actor after flight! Attempting reposition."));
-				FVector Current = GetActorLocation();
-				SetActorLocation(Current + FVector(0,0,200), false, nullptr, ETeleportType::TeleportPhysics);
-			}
-		}
+		// Repositioning logic removed due to bug causing unintended teleports.
 		UE_LOG(LogTemplateCharacter, Log, TEXT("MovementMode after flight: %d, Collision: %d"),
 			(int32)GetCharacterMovement()->MovementMode, (int32)GetCapsuleComponent()->GetCollisionEnabled());
 	}
@@ -390,4 +430,137 @@ void AFirstVoxelCharacter::ToggleFly()
 		UE_LOG(LogTemplateCharacter, Log, TEXT("MovementMode after enabling flight: %d, Collision: %d"),
 			(int32)GetCharacterMovement()->MovementMode, (int32)GetCapsuleComponent()->GetCollisionEnabled());
 	}
-// ...existing code...
+}
+
+// ── Missing Functions Implementation ──────────────────────────────────────
+
+void AFirstVoxelCharacter::Sprint()
+{
+	if (GetCharacterMovement())
+	{
+		GetCharacterMovement()->MaxWalkSpeed = 900.f;
+	}
+}
+
+void AFirstVoxelCharacter::StopSprinting()
+{
+	if (GetCharacterMovement())
+	{
+		GetCharacterMovement()->MaxWalkSpeed = 500.f;
+	}
+}
+
+void AFirstVoxelCharacter::Dig()
+{
+	CurrentTool = EVoxelToolMode::Dig;
+	ApplyCurrentTool();
+}
+
+void AFirstVoxelCharacter::Build()
+{
+	CurrentTool = EVoxelToolMode::Build;
+	ApplyCurrentTool();
+}
+
+void AFirstVoxelCharacter::SelectToolByIndex(int32 ToolIndex)
+{
+	CurrentTool = static_cast<EVoxelToolMode>(FMath::Clamp(ToolIndex, 0, 3));
+}
+
+void AFirstVoxelCharacter::SelectToolDig()     { SelectToolByIndex(0); }
+void AFirstVoxelCharacter::SelectToolBuild()   { SelectToolByIndex(1); }
+void AFirstVoxelCharacter::SelectToolSmooth()  { SelectToolByIndex(2); }
+void AFirstVoxelCharacter::SelectToolFlatten() { SelectToolByIndex(3); }
+
+void AFirstVoxelCharacter::ToggleAutoWalk()
+{
+	bAutoWalk = !bAutoWalk;
+	UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk toggled: %s"), bAutoWalk ? TEXT("TRUE") : TEXT("FALSE"));
+}
+
+void AFirstVoxelCharacter::IncreaseRadius()
+{
+	InteractionRadius = FMath::Clamp(InteractionRadius + 50.f, 50.f, 1000.f);
+	UE_LOG(LogTemplateCharacter, Log, TEXT("Interaction Radius Increased: %.1f"), InteractionRadius);
+}
+
+void AFirstVoxelCharacter::DecreaseRadius()
+{
+	InteractionRadius = FMath::Clamp(InteractionRadius - 50.f, 50.f, 1000.f);
+	UE_LOG(LogTemplateCharacter, Log, TEXT("Interaction Radius Decreased: %.1f"), InteractionRadius);
+}
+
+AVoxelWorld* AFirstVoxelCharacter::FindAndCacheVoxelWorld()
+{
+	if (CachedVoxelWorld) return CachedVoxelWorld;
+
+	CachedVoxelWorld = Cast<AVoxelWorld>(UGameplayStatics::GetActorOfClass(GetWorld(), AVoxelWorld::StaticClass()));
+	return CachedVoxelWorld;
+}
+
+void AFirstVoxelCharacter::ApplyCurrentTool()
+{
+	AVoxelWorld* World = FindAndCacheVoxelWorld();
+	if (!World) return;
+
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC) return;
+
+	FVector CamLoc;
+	FRotator CamRot;
+	PC->GetPlayerViewPoint(CamLoc, CamRot);
+
+	FVector Start = CamLoc;
+	FVector End = Start + (CamRot.Vector() * 1500.f);
+
+	FHitResult Hit;
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(this);
+
+	if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
+	{
+		FVector ImpactPoint = Hit.ImpactPoint;
+		float CurrentTime = GetWorld()->GetTimeSeconds();
+
+		if (CurrentTool == EVoxelToolMode::Dig)
+		{
+			if (CurrentTime - DigLastActionTime > 0.05f)
+			{
+				// Offset dig slightly into the ground along the view vector to scoop better chunks than just surface slices
+				FVector DigSpeedPos = ImpactPoint + (CamRot.Vector() * 40.f); 
+				World->SetVoxelSphere(DigSpeedPos, InteractionRadius, -1.0f, true);
+				DigLastActionTime = CurrentTime;
+			}
+		}
+		else if (CurrentTool == EVoxelToolMode::Build)
+		{
+			if (CurrentTime - BuildLastActionTime > 0.05f)
+			{
+				FVector BuildPos = ImpactPoint + (Hit.ImpactNormal * 10.f);
+				World->SetVoxelSphere(BuildPos, InteractionRadius, 1.0f, true);
+				BuildLastActionTime = CurrentTime;
+			}
+		}
+	}
+}
+
+void AFirstVoxelCharacter::OpenToolWheel()
+{
+	bToolWheelOpen = true;
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC)
+	{
+		// Center the mouse cursor on open
+		if (!bLastInputWasGamepad)
+		{
+			FVector2D ScreenSize;
+			GEngine->GameViewport->GetViewportSize(ScreenSize);
+			PC->SetMouseLocation(ScreenSize.X * 0.5f, ScreenSize.Y * 0.5f);
+		}
+	}
+}
+
+void AFirstVoxelCharacter::CloseToolWheel()
+{
+	bToolWheelOpen = false;
+}

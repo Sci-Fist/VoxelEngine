@@ -28,6 +28,7 @@
 #include "Misc/DateTime.h"
 #include "Kismet/GameplayStatics.h"
 #include "HAL/PlatformProcess.h"
+#include "GameFramework/PlayerStart.h"
 
 DEFINE_LOG_CATEGORY(LogVoxelWorld);
 
@@ -61,6 +62,21 @@ void AVoxelWorld::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Clean up any unpossessed placeholder characters placed in the Editor 
+	// (prevents double spawning alongside the GameMode dynamic player spawn).
+	TArray<AActor*> FoundCharacters;
+	UGameplayStatics::GetAllActorsOfClass(this, APawn::StaticClass(), FoundCharacters);
+	for (AActor* Act : FoundCharacters)
+	{
+		APawn* P = Cast<APawn>(Act);
+		// If it's a Pawn, not controlled by a player controller, and not the current local viewer
+		if (P && !P->IsPlayerControlled() && !P->IsPawnControlled())
+		{
+			UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Destroying unpossessed editor-placed duplicate actor %s to fix double spawn."), *Act->GetName());
+			Act->Destroy();
+		}
+	}
+
 	// ---- Density generator (all 3 layers: Surface / Skylands / Caves) ----
 	DensityGenerator = MakeUnique<FVoxelDensityGenerator>();
 
@@ -78,11 +94,7 @@ void AVoxelWorld::BeginPlay()
 	}
 
 	// ---- Optional random seed ----
-	if (bRandomizeSeedOnStartup)
-	{
-		GenerationConfig.Seed = FMath::RandRange(0, TNumericLimits<int32>::Max());
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Randomised seed = %d"), GenerationConfig.Seed);
-	}
+	// Removed to ensure Editor previews match Gameplay 1:1. Use explicit Editor Button to randomize seed.
 
 	if (bAutoGenerateOnBeginPlay)
 	{
@@ -132,6 +144,42 @@ void AVoxelWorld::Tick(float DeltaTime)
 
 	DrainGenerationQueue();
 
+	// ── Initial Spawn Hover Lock ─────────────────────────────────────
+	if (bWaitingForInitialSpawn)
+	{
+		bool bAllReady = true;
+		for (const FIntVector& C : InitialSpawnCoords)
+		{
+			if (AVoxelChunk** Ptr = LoadedChunks.Find(C))
+			{
+				if (!(*Ptr)->IsReady())
+				{
+					bAllReady = false;
+					break;
+				}
+			}
+			else
+			{
+				bAllReady = false;
+				break;
+			}
+		}
+
+		if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
+		{
+			FVector Pos = Player->GetActorLocation();
+			// Hover the player at TargetZ to prevent falling during async cooks
+			Pos.Z = TargetCoordsZ;
+			Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
+
+			if (bAllReady)
+			{
+				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Initial Spawn Ready at Z=%.2f"), TargetCoordsZ);
+				bWaitingForInitialSpawn = false;
+				InitialSpawnCoords.Empty();
+			}
+		}
+	}
 
 	// Rebuild any chunks dirtied by player edits.
 	for (auto& It : LoadedChunks)
@@ -186,16 +234,39 @@ void AVoxelWorld::ClearWorld()
 void AVoxelWorld::SnapPlayerToGround()
 {
 	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
-	if (!Player) return;
+	AActor* TargetActor = Player;
 
-	FVector Pos = Player->GetActorLocation();
-	Pos = SnapToVoxelGrid(Pos);
+	if (!TargetActor)
+	{
+		TArray<AActor*> PlayerStarts;
+		UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
+		if (PlayerStarts.Num() > 0)
+		{
+			TargetActor = PlayerStarts[0];
+			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Snapping PlayerStart instead of Pawn in Editor."));
+		}
+	}
+
+	if (!TargetActor)
+	{
+		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: SnapPlayerToGround failed - No Player Pawn or PlayerStart found."));
+		return;
+	}
+
+	FVector Pos = TargetActor->GetActorLocation();
 
 	const FVoxelGenerationConfig& Config = GetEffectiveConfig();
 	if (bForceCraterSpawn)
+	{
 		Pos = FindCraterSpawnLocation(Pos, Config);
+	}
 
-	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
+	// Find ground height at position
+	float GroundZ = GetTerrainHeight(Pos.X, Pos.Y);
+	Pos.Z = GroundZ + SafeSpawnHeightOffset;
+
+	TargetActor->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Snapped %s to Z=%.2f"), *TargetActor->GetName(), Pos.Z);
 }
 
 // ============================================================
@@ -218,7 +289,12 @@ void AVoxelWorld::LoadFromPreset()
 // ============================================================
 //  Public API stubs
 // ============================================================
-void AVoxelWorld::GenerateWorld()    { GenerateWorldDeferred(); }
+void AVoxelWorld::GenerateWorld()    
+{ 
+	if (bRandomizeSeedOnStartup) RandomizeSeed();
+	ClearWorld(); 
+	GenerateWorldDeferred(); 
+}
 void AVoxelWorld::RandomizeSeed()    { GenerationConfig.Seed = FMath::RandRange(0, TNumericLimits<int32>::Max()); }
 void AVoxelWorld::ClearWorldModifications() { DataMap.Clear(); }
 void AVoxelWorld::RebuildWorld()     { ClearWorld(); GenerateWorldDeferred(); }

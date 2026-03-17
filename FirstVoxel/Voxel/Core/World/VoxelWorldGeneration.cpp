@@ -15,6 +15,7 @@
 #include "Voxel/VoxelLogger.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerStart.h"
 #include "EngineUtils.h"
 
 #include "Kismet/GameplayStatics.h"
@@ -42,6 +43,35 @@ void AVoxelWorld::GenerateWorldDeferred()
 	float JumpStep = WorldRadius * 3.f; 
 
 	FVector CandidatePos = GetActorLocation();
+
+	// Prioritise centering generation on the PlayerStart to accurately match Play Mode centering
+	TArray<AActor*> PlayerStarts;
+	UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
+	
+	if (bForceCraterSpawn)
+	{
+		// Force CandidatePos to Center Crater Origin (0,0)
+		CandidatePos.X = 0.f;
+		CandidatePos.Y = 0.f;
+
+		// Move PlayerStart to (0,0) so the player actually spawns there in Play mode!
+		if (PlayerStarts.Num() > 0 && PlayerStarts[0])
+		{
+			if (PlayerStarts[0]->GetRootComponent()) {
+				PlayerStarts[0]->GetRootComponent()->SetMobility(EComponentMobility::Movable);
+			}
+			FVector StartPos = PlayerStarts[0]->GetActorLocation();
+			StartPos.X = 0.f;
+			StartPos.Y = 0.f;
+			PlayerStarts[0]->SetActorLocation(StartPos, false, nullptr, ETeleportType::TeleportPhysics);
+			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: bForceCraterSpawn enabled - Moving PlayerStart to (0,0) for Play mode alignment."));
+		}
+	}
+	else if (PlayerStarts.Num() > 0 && PlayerStarts[0])
+	{
+		CandidatePos = PlayerStarts[0]->GetActorLocation();
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering GenerateWorld on PlayerStart %s"), *CandidatePos.ToString());
+	}
 	bool bFoundConflict = true;
 	int32 MaxAttempts = 100;
 
@@ -301,6 +331,11 @@ void AVoxelWorld::DrainGenerationQueue()
 	int32 ProcessedThisTick = 0;
 	while (ProcessedThisTick < Limit && QueueHead < GenerationQueue.Num())
 	{
+		if (ActiveGenerations >= MaxConcurrentGenerations)
+		{
+			break; // Throttle to prevent overloading thread-pool scheduler
+		}
+
 		const FIntVector Coord = GenerationQueue[QueueHead++];
 		SpawnChunk(Coord);
 		ProcessedThisTick++;
@@ -443,6 +478,14 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	TargetCoordsZ = TargetZ;
 	CachedSurfaceHeight = Surface;
 
+	// Immediately suspend player high up to prevent falling into the void before async Tick cooks
+	if (Player)
+	{
+		FVector HighPos = Player->GetActorLocation();
+		HighPos.Z = TargetCoordsZ; // Match TargetCoordsZ exactly for continuous hover lock
+		Player->SetActorLocation(HighPos, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
 	const FIntVector LandCoord = WorldToChunkCoord(Pos);
 	const float ChunkHeight = ChunkSize * VoxelSize;
 	const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
@@ -454,7 +497,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 			FIntVector NeighborCoord = LandCoord + FIntVector(x, y, 0);
 			SpawnChunk(NeighborCoord);
 			InitialSpawnCoords.Add(NeighborCoord);
-			if (AVoxelChunk** Ptr = LoadedChunks.Find(NeighborCoord)) { (*Ptr)->GetProceduralMesh()->bUseAsyncCooking = false; }
+			// Left async cooking enabled to avoid synchronous GameThread stall (startup hang).
 
 			if (SpawnChunkZ != 0)
 			{

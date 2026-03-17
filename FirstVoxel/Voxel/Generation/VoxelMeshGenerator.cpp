@@ -304,11 +304,24 @@ void FVoxelMeshGenerator::GenerateMesh(
 		return ColumnColors[CX + CY * S];
 	};
 
-	// World-space UV tiling: one tile per 4 voxels so textures don't stretch.
-	auto MakeUV = [&](const FVector& VLocal) -> FVector2D
+	// World-space UV tiling: Triplanar-Style normal weighted projection to prevent cliff stretching.
+	auto MakeUV = [&](const FVector& VLocal, const FVector& Norm) -> FVector2D
 	{
 		const FVector VWorld = ChunkOrigin + VLocal;
-		return FVector2D(VWorld.X / (InVoxelSize * 4.f), VWorld.Y / (InVoxelSize * 4.f));
+		const float s = InVoxelSize * 4.f;
+		
+		if (FMath::Abs(Norm.Z) > 0.65f)
+		{
+			return FVector2D(VWorld.X / s, VWorld.Y / s);
+		}
+		else if (FMath::Abs(Norm.X) > FMath::Abs(Norm.Y))
+		{
+			return FVector2D(VWorld.Y / s, VWorld.Z / s);
+		}
+		else
+		{
+			return FVector2D(VWorld.X / s, VWorld.Z / s);
+		}
 	};
 
 	// Emit one triangle into the correct mesh section.
@@ -321,7 +334,11 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const int32 Base = Dest.Vertices.Num();
 		Dest.Vertices.Add(V0);  Dest.Vertices.Add(V1);  Dest.Vertices.Add(V2);
 		Dest.Normals.Add(N0);   Dest.Normals.Add(N1);   Dest.Normals.Add(N2);
-		Dest.UVs.Add(MakeUV(V0)); Dest.UVs.Add(MakeUV(V1)); Dest.UVs.Add(MakeUV(V2));
+		
+		Dest.UVs.Add(MakeUV(V0, N0)); 
+		Dest.UVs.Add(MakeUV(V1, N1)); 
+		Dest.UVs.Add(MakeUV(V2, N2));
+		
 		Dest.VertexColors.Add(VertexColor);
 		Dest.VertexColors.Add(VertexColor);
 		Dest.VertexColors.Add(VertexColor);

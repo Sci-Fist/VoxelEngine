@@ -166,11 +166,15 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   const float CenterCanyonStr =
       FMath::Clamp(1.f - DistFrom0 / CenterCanyonRadius, 0.f, 1.f);
 
+  // Add domain warp so the artificial basin center has organic wavy walls rather than perfect circles
+  const float CenterWarp = FastNoise3D(nX * 0.004f, nY * 0.004f, 100.f) * 0.25f;
+  const float SmoothCenterStr = FMath::Clamp(CenterCanyonStr + CenterWarp, 0.f, 1.f);
+
   float Impact = FastNoise3D(nX * (CRC.Frequency * 0.5f),
                              nY * (CRC.Frequency * 0.5f), 200.f);
 
   // Force Impact towards -1.0 at (0,0) center to carve a deep basin
-  Impact = FMath::Lerp(Impact, -1.0f, CenterCanyonStr);
+  Impact = FMath::Lerp(Impact, -1.0f, SmoothCenterStr);
 
   const float BasePlains = Config.SeaLevel + 1000.f;
   // const float Impact     = FastNoise3D(nX * (CRC.Frequency * 0.5f), nY *
@@ -180,22 +184,23 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     return BasePlains + FastNoise3D(nX * 0.001f, nY * 0.001f, 0.f) * 200.f;
   }
 
-  float NormalizedDepth =
-      (FMath::Abs(Impact) - FMath::Abs(CRC.ImpactThreshold)) /
-      (1.f - FMath::Abs(CRC.ImpactThreshold));
-  NormalizedDepth = FMath::Max(
-      0.f, NormalizedDepth); // Clamp to prevent negative Lerp divergences
+  const float Denominator = 1.f - FMath::Abs(CRC.ImpactThreshold);
+  float NormalizedDepth = 0.f;
+  if (Denominator > 0.001f) {
+    NormalizedDepth = (FMath::Abs(Impact) - FMath::Abs(CRC.ImpactThreshold)) / Denominator;
+  }
+  NormalizedDepth = FMath::Clamp(NormalizedDepth, 0.f, 1.f);
   const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 2.5f;
   const float RimHeight = BasePlains + CRC.RimHeight * 1.2f;
   const float RimNoise =
       FastNoise3D(nX * 0.008f, nY * 0.008f, 0.f) * CRC.RimNoiseAmplitude;
 
-  float Height;
+  float Height = BasePlains;
   if (NormalizedDepth > 0.40f) {
     Height = BottomDepth +
              FastNoise3D(nX * 0.01f, nY * 0.01f, 0.f) * CRC.FloorNoiseAmplitude;
   } else if (NormalizedDepth > 0.25f) {
-    float t = (NormalizedDepth - 0.25f) / 0.25f;
+    float t = (NormalizedDepth - 0.25f) / 0.15f;
     const float Terrace = FMath::Floor(t * 5.0f) / 5.0f;
     t = FMath::Lerp(t, Terrace, 0.75f);
     Height = FMath::Lerp(RimHeight + RimNoise, BottomDepth, t);
@@ -306,7 +311,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float HashProb = (FastNoise3D(cnX * 0.002f, cnY * 0.002f, 200.f) + 1.f) * 0.5f; 
 
         float Prob = FMath::Clamp(SC.BaseProbability + CurvedHeight * SC.HeightProbabilityBonus + CurvedRough * SC.RoughnessProbabilityBonus, 0.02f, 1.f);
-        Prob *= FMath::Lerp(0.15f, 1.0f, ShardFalloff);
+        Prob *= FMath::Lerp(0.45f, 1.0f, ShardFalloff); // Lifted from 0.15f
         if (HashProb > Prob) continue;
 
         const float SizeNoise  = FBM(cnX * 0.00008f, cnY * 0.00008f, 50.f, 2, 2.0f, 0.5f, 2);
@@ -314,7 +319,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
         float IslandSize = SC.BaseIslandSize + CurvedHeight * SC.HeightSizeBonus + CurvedRough * SC.RoughnessSizeBonus;
         IslandSize *= (0.5f + 0.5f * SizeFactor);
-        IslandSize *= FMath::Lerp(0.10f, 1.15f, ShardFalloff);
+        IslandSize *= FMath::Lerp(0.40f, 1.15f, ShardFalloff); // Lifted from 0.10f
         IslandSize = FMath::Max(IslandSize, 400.f);
 
         const float MaxIslandSizeForAltitude = FMath::Lerp(20000.f, 8000.f, HeightNorm);
@@ -430,7 +435,7 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     float D = HorizStrength * Falloff * 2.5f - (1.f - Falloff) * 1.8f + RootDensity;
 
     const float BreakUpStrength = FMath::Lerp(0.50f, 2.80f, Cache.HeightNorm);
-    const float BreakUp = FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f) * BreakUpStrength;
+    const float BreakUp = FMath::Max(0.f, FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f)) * BreakUpStrength;
     D -= BreakUp;
 
     return FMath::Clamp(D, -2.f, 2.f);
@@ -497,7 +502,6 @@ float FVoxelBiomeGenerators::GetCrystalCavernDelta(
   // --- 💎 CRYSTAL PLACEMENT FIX ---
   // Crystals should ONLY spawn inside already hollowed chambers to prevent
   // canceling out the carver and creating solid wall plates.
-  const float NetDelta = -(CarveFactor * 1.3f) + (CarveFactor > 0.15f ? CrystalFill * 0.8f : 0.f);
-
+  const float NetDelta = -(CarveFactor * 1.3f); // Scrapped CrystalFill stalagmites
   return NetDelta * Fade;
 }
