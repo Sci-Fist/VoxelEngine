@@ -275,11 +275,32 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		if (BiomeRender.SlopeMaterialOverride) SlopeMat = BiomeRender.SlopeMaterialOverride.Get();
 	}
 
+	// ── Generate biome-specific mesh name ─────────────────────────────────
+	// Create descriptive mesh names that include biome information for debugging
+	FString BiomeName = "Unknown";
+	switch (DominantBiome)
+	{
+		case EVoxelBiome::Forest:  BiomeName = "Forest"; break;
+		case EVoxelBiome::Desert:  BiomeName = "Desert"; break;
+		case EVoxelBiome::Peaks:   BiomeName = "Peaks"; break;
+		case EVoxelBiome::Cliffs:  BiomeName = "Cliffs"; break;
+		case EVoxelBiome::Mesa:    BiomeName = "Mesa"; break;
+		case EVoxelBiome::Craters: BiomeName = "Craters"; break;
+		default: BiomeName = "Mixed";
+	}
+
+	// Generate chunk coordinate string for mesh naming
+	FString ChunkCoordStr = FString::Printf(TEXT("%d_%d_%d"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+	
+	// Set biome-specific mesh section names for debugging and profiling
+	FString FlatMeshName = FString::Printf(TEXT("FlatMesh_%s_%s"), *BiomeName, *ChunkCoordStr);
+	FString SlopeMeshName = FString::Printf(TEXT("SlopeMesh_%s_%s"), *BiomeName, *ChunkCoordStr);
+
 	// ── Upload terrain mesh sections ──────────────────────────────────────
 	// Clear existing mesh sections and upload new geometry
 	ProceduralMesh->ClearAllMeshSections();
-	UploadSection(0, Out.FlatMesh,  FlatMat);
-	UploadSection(1, Out.SlopeMesh, SlopeMat);
+	UploadSection(0, Out.FlatMesh,  FlatMat, FlatMeshName);
+	UploadSection(1, Out.SlopeMesh, SlopeMat, SlopeMeshName);
 
 	// ── Per-biome foliage system (Recycled / Pooled) ──────────────────────
 	// Handle biome-specific foliage placement with efficient component reuse
@@ -417,7 +438,7 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	}
 }
 
-void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat)
+void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName)
 {
 	// Safety check: ensure we have valid data and mesh component
 	if (Data.Vertices.Num() == 0 || !IsValid(ProceduralMesh)) return;
@@ -439,6 +460,12 @@ void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, 
 
 	// Apply material if provided
 	if (Mat) ProceduralMesh->SetMaterial(SectionIndex, Mat);
+
+	// Set biome-specific section name for debugging and profiling
+	if (!SectionName.IsEmpty())
+	{
+		ProceduralMesh->SetSectionName(SectionIndex, FName(*SectionName));
+	}
 }
 
 void AVoxelChunk::DestroyAndRebuildMesh()
