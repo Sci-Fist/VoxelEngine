@@ -1,13 +1,24 @@
 // VoxelGenerationConfig.h
+// 
 // Master configuration hierarchy for the 3-layer voxel world generator.
+// This is the central configuration struct that drives all world generation parameters.
 //
 // LAYER ARCHITECTURE:
 //   Surface Layer  — height-field terrain blending multiple biomes (Forest/Peaks/Cliffs/Mesa/Craters)
 //   Skylands Layer — floating islands driven by the terrain height and roughness BELOW them
 //   Cave Layer     — worm tunnels + crystal cavern chambers carved below the surface
 //
-// Every parameter here is exposed to the Details Panel. Create a UVoxelBiomeDataAsset
-// in the Content Browser to save named presets and swap them on any AVoxelWorld at runtime.
+// CONFIGURATION PHILOSOPHY:
+// - All parameters are exposed to the Details Panel for easy tweaking
+// - Create UVoxelBiomeDataAsset presets in Content Browser for different world types
+// - Runtime swapping of presets allows dynamic world generation changes
+// - Modular design allows individual layer configuration without affecting others
+//
+// PERFORMANCE CONSIDERATIONS:
+// - Noise octave limits prevent excessive generation time
+// - Optional features (overhangs, 3D skylands) can be disabled for performance
+// - Biome blending uses efficient smoothstep functions
+// - Seed offset caching reduces redundant hash calculations
 
 #pragma once
 #include "CoreMinimal.h"
@@ -512,7 +523,7 @@ struct FVoxelGenerationConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Global",
         meta=(ClampMin="10.0",
               ToolTip="How fast density transitions from solid to air at the surface (cm). Smaller = sharper terrain surface."))
-    float SurfaceGradientScale = 1000.f;
+    float SurfaceGradientScale = 2500.f;  // FIX: was 1000 — too tight, made spike transitions abrupt
 
     // --- Biome blending ---
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Biome Blend",

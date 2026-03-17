@@ -29,6 +29,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "HAL/PlatformProcess.h"
 #include "GameFramework/PlayerStart.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 DEFINE_LOG_CATEGORY(LogVoxelWorld);
 
@@ -98,7 +100,36 @@ void AVoxelWorld::BeginPlay()
 
 	if (bAutoGenerateOnBeginPlay)
 	{
-		GenerateWorld();
+		// ---- Freeze player during generation to stop the double-spawn flash ----
+		// UE's GameMode has already spawned the player at the PlayerStart location
+		// by the time BeginPlay runs. Without freezing, the player is briefly
+		// visible at (0,0,Z) before ProcessInitialPlayerSpawn teleports them
+		// 2.5s later — the "spawns at 0,0 then gets ported" bug.
+		// We hide the pawn, disable movement, and park it 100,000 cm above the
+		// world until ProcessInitialPlayerSpawn() restores everything.
+		APawn* EarlyPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
+		if (EarlyPlayer != nullptr)
+		{
+			// Park far above the world so it can't collide with anything
+			EarlyPlayer->SetActorLocation(FVector(0.f, 0.f, 100000.f),
+				false, nullptr, ETeleportType::TeleportPhysics);
+			EarlyPlayer->SetActorHiddenInGame(true);
+
+			// Disable movement so gravity doesn't pull the pawn down while hidden
+			ACharacter* EarlyChar = Cast<ACharacter>(EarlyPlayer);
+			if (EarlyChar && EarlyChar->GetCharacterMovement())
+			{
+				EarlyChar->GetCharacterMovement()->DisableMovement();
+			}
+			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Player parked at sky-hold during generation."));
+		}
+
+		if (bRandomizeSeedOnStartup)
+		{
+			RandomizeSeed();
+		}
+		ClearWorld();
+		GenerateWorldDeferred();
 	}
 }
 
@@ -145,51 +176,88 @@ void AVoxelWorld::Tick(float DeltaTime)
 	DrainGenerationQueue();
 
 	// ── Initial Spawn Hover Lock ─────────────────────────────────────
-	if (bWaitingForInitialSpawn)
+	if (!bWaitingForInitialSpawn)
 	{
-		bool bAllReady = true;
-		for (const FIntVector& C : InitialSpawnCoords)
+		SpawnWaitAccum = 0.f;
+	}
+	else
+	{
+		SpawnWaitAccum += DeltaTime;
+		const bool bTimedOut = (SpawnWaitAccum > 8.f);
+
+		bool bAllReady = bTimedOut;
+		if (!bTimedOut)
 		{
-			if (AVoxelChunk** Ptr = LoadedChunks.Find(C))
+			bAllReady = true;
+			for (const FIntVector& C : InitialSpawnCoords)
 			{
+				AVoxelChunk** Ptr = LoadedChunks.Find(C);
+				if (Ptr == nullptr)
+				{
+					bAllReady = false;
+					break;
+				}
 				if (!(*Ptr)->IsReady())
 				{
 					bAllReady = false;
 					break;
 				}
 			}
-			else
-			{
-				bAllReady = false;
-				break;
-			}
 		}
 
-		if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
+		APawn* SpawnPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
+		if (SpawnPlayer != nullptr)
 		{
-			FVector Pos = Player->GetActorLocation();
-			// Hover the player at TargetZ to prevent falling during async cooks
-			Pos.Z = TargetCoordsZ;
-			Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
-
-			if (bAllReady)
+			if (!bAllReady)
 			{
-				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Initial Spawn Ready at Z=%.2f"), TargetCoordsZ);
+				FVector HoverPos = SpawnPlayer->GetActorLocation();
+				HoverPos.Z = TargetCoordsZ;
+				SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
+			}
+			else
+			{
+				if (bTimedOut)
+				{
+					UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn hover-lock timed out."));
+				}
+				else
+				{
+					UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawn ready at Z=%.2f"), TargetCoordsZ);
+				}
 				bWaitingForInitialSpawn = false;
+				SpawnWaitAccum = 0.f;
 				InitialSpawnCoords.Empty();
 			}
 		}
 	}
 
 	// Rebuild any chunks dirtied by player edits.
+	// FIX: Must increment ActiveGenerations and wire OnGenerationComplete BEFORE
+	// calling GenerateAsync(), otherwise the counter saturates after ~12 digs
+	// and all future async generation (both tools AND streaming) silently stops.
 	for (auto& It : LoadedChunks)
 	{
 		if (AVoxelChunk* Chunk = It.Value)
 		{
 			if (Chunk->bMeshDirty && !Chunk->IsGenerating())
 			{
-				Chunk->GenerateAsync();
 				Chunk->bMeshDirty = false;
+				if (ActiveGenerations < MaxConcurrentGenerations)
+				{
+					ActiveGenerations++;
+					TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+					Chunk->OnGenerationComplete = [WeakThis]()
+					{
+						if (AVoxelWorld* W = WeakThis.Get())
+							W->ActiveGenerations = FMath::Max(0, W->ActiveGenerations - 1);
+					};
+					Chunk->GenerateAsync();
+				}
+				else
+				{
+					// Re-flag dirty so it retries next tick when a slot frees up
+					Chunk->bMeshDirty = true;
+				}
 			}
 		}
 	}
@@ -291,11 +359,22 @@ void AVoxelWorld::LoadFromPreset()
 // ============================================================
 void AVoxelWorld::GenerateWorld()    
 { 
-	if (bRandomizeSeedOnStartup) RandomizeSeed();
+	// Always randomize when the Generate World button is pressed.
+	// bRandomizeSeedOnStartup only governs BeginPlay auto-randomization.
+	RandomizeSeed();
 	ClearWorld(); 
 	GenerateWorldDeferred(); 
 }
-void AVoxelWorld::RandomizeSeed()    { GenerationConfig.Seed = FMath::RandRange(0, TNumericLimits<int32>::Max()); }
+
+void AVoxelWorld::RandomizeSeed()
+{
+	// Only write to GenerationConfig.Seed. GetEffectiveConfig() now always
+	// injects this seed even when a BiomePreset is active, so writing to
+	// the preset asset (a UDataAsset on disk) is no longer needed and
+	// avoids accidentally dirtying the asset file.
+	GenerationConfig.Seed = FMath::RandRange(1, TNumericLimits<int32>::Max());
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: New seed = %d"), GenerationConfig.Seed);
+}
 void AVoxelWorld::ClearWorldModifications() { DataMap.Clear(); }
 void AVoxelWorld::RebuildWorld()     { ClearWorld(); GenerateWorldDeferred(); }
 void AVoxelWorld::RunTests()         { RunVoxelTests(); }

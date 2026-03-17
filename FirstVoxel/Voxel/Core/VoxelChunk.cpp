@@ -1,3 +1,28 @@
+// VoxelChunk.cpp
+// 
+// Core chunk implementation for the voxel engine, handling terrain generation,
+// mesh creation, foliage placement, and water simulation integration.
+//
+// ARCHITECTURE OVERVIEW:
+// This class represents a single chunk of the voxel world, responsible for
+// generating terrain geometry, applying materials, placing foliage, and
+// managing water simulation data. Chunks are the fundamental building blocks
+// of the streaming voxel world system.
+//
+// KEY RESPONSIBILITIES:
+// - Asynchronous terrain generation and mesh creation
+// - Biome-based material assignment and foliage placement
+// - Water simulation data management and mesh generation
+// - LOD transition handling and mesh state management
+// - Integration with the world streaming system
+//
+// PERFORMANCE CHARACTERISTICS:
+// - Background thread generation to prevent frame drops
+// - Procedural mesh components for dynamic geometry
+// - Instanced static mesh components for efficient foliage rendering
+// - Water mesh generation for realistic water surfaces
+// - LOD system for distance-based detail management
+
 #include "Core/VoxelChunk.h"
 #include "FirstVoxel.h"
 #include "CoreMinimal.h"
@@ -19,27 +44,29 @@ DEFINE_LOG_CATEGORY(LogVoxelChunk);
 
 AVoxelChunk::AVoxelChunk()
 {
+	// Initialize procedural mesh component for terrain geometry
+	// This component handles dynamic mesh generation and rendering
 	ProceduralMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("ProceduralMesh"));
 	RootComponent = ProceduralMesh;
 
+	// Configure terrain mesh collision properties
 	ProceduralMesh->SetCollisionProfileName(TEXT("BlockAll"));
 	ProceduralMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	ProceduralMesh->bUseComplexAsSimpleCollision = true;
 	ProceduralMesh->bUseAsyncCooking = true;
-	// FIX: Hide terrain mesh until geometry is actually ready to prevent invisible-mesh pop.
-	// SetVisibility(true) is called at the end of ApplyMesh() once all sections are uploaded.
+	
+	// IMPORTANT: Hide terrain mesh until geometry is actually ready
+	// This prevents invisible-mesh pop-in during generation
+	// SetVisibility(true) is called at the end of ApplyMesh() once all sections are uploaded
 	ProceduralMesh->SetVisibility(false);
 	
-	// FIXED: Ensure proper face orientation by using double-sided materials
-	// This prevents materials from being hidden on incorrectly oriented faces
-	// Note: bUseBackfaceCulling is not available in UProceduralMeshComponent
-	
-	// Initialize mesh state
+	// Initialize mesh state management for LOD transitions
 	MeshState = EChunkMeshState::Empty;
 	TransitionProgress = 0.0f;
 	TransitionStartTime = 0.0f;
 
-	// Water mesh component — translucent, no collision, visible by default for proper rendering.
+	// Initialize water mesh component for water surface rendering
+	// Water mesh is translucent, has no collision, and is managed separately from terrain
 	WaterMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("WaterMesh"));
 	WaterMesh->SetupAttachment(RootComponent);
 	WaterMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -48,6 +75,8 @@ AVoxelChunk::AVoxelChunk()
 	WaterMesh->SetCastShadow(false);
 	WaterMesh->SetVisibility(false); // Hidden until BuildWaterMeshInternal confirms actual water geometry
 
+	// Initialize foliage components using instanced static mesh for performance
+	// Trees and grass are handled separately for different rendering and culling needs
 	TreeHISM = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("TreeHISM"));
 	TreeHISM->SetupAttachment(RootComponent);
 
@@ -58,31 +87,48 @@ AVoxelChunk::AVoxelChunk()
 void AVoxelChunk::BeginPlay()
 {
 	Super::BeginPlay();
+	
+	// Log chunk initialization for debugging purposes
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: BeginPlay (%d,%d,%d)"), 
+		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 }
+
 void AVoxelChunk::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// Clean up any ongoing generation tasks before destruction
 	CancelGeneration();
+	
+	// Log chunk cleanup for debugging purposes
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: EndPlay (%d,%d,%d) - Reason: %d"), 
+		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, (int32)EndPlayReason));
+	
 	Super::EndPlay(EndPlayReason);
 }
 
 void AVoxelChunk::CancelGeneration()
 {
+	// Early exit if no generation is currently in progress
 	if (!bGenerating) return;
 
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: CancelGeneration (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
+	// Log generation cancellation for debugging
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: CancelGeneration (%d,%d,%d)"), 
+		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 
+	// Cancel the current generation task if it exists
 	if (CurrentTask.IsValid())
 	{
 		CurrentTask->Cancel();
 	}
 
-	// Invalidate any queued completion callbacks for this generation.
+	// Invalidate any queued completion callbacks for this generation
+	// This prevents stale callbacks from executing after cancellation
 	++GenerationId;
 	
-	// Ensure we don't report as generating once cancellation is requested.
+	// Ensure we don't report as generating once cancellation is requested
 	bGenerating = false;
 
-	// Notify the world once so it can decrement ActiveGenerations even on cancel.
+	// Notify the world that generation was cancelled so it can decrement ActiveGenerations
+	// This is important for maintaining accurate generation state tracking
 	if (OnGenerationComplete)
 	{
 		OnGenerationComplete();
@@ -92,16 +138,23 @@ void AVoxelChunk::CancelGeneration()
 
 void AVoxelChunk::GenerateAsync()
 {
+	// Early exit if generation is already in progress
 	if (bGenerating) return;
+	
+	// Set generation state flags
 	bGenerating = true;
 	bMeshApplied = false;
 
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: GenerateAsync (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
+	// Log generation start for debugging and performance tracking
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: GenerateAsync (%d,%d,%d)"), 
+		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 
+	// Increment generation ID to track this specific generation cycle
 	uint32 TaskId = ++GenerationId;
 	FVector Origin = GetActorLocation();
 
-	// Use injected FVoxelDensityGenerator so caves, skylands, and overhangs are all active.
+	// Determine density provider for terrain generation
+	// Use injected provider if available, otherwise fall back to global generator
 	IVoxelDensityProvider* DensityProvider = DensityGenerator;
 	if (!DensityProvider)
 	{
@@ -109,36 +162,44 @@ void AVoxelChunk::GenerateAsync()
 		DensityProvider = &FallbackDensityGenerator;
 	}
 
+	// Retrieve local terrain data if data map is available
 	TMap<int32, float> LocalMap;
 	if (DataMap)
 	{
 		DataMap->GetChunkData(ChunkCoord, LocalMap);
 	}
 
+	// Create generation task with all necessary parameters
 	CurrentTask = MakeShared<FVoxelGeneratorTask>(
-		ChunkCoord,
-		Origin,
-		ChunkSize,
-		VoxelSize,
-		GetStepSize(),
-		GenerationConfig,
-		DensityProvider,
-		FoliageDensity,
-		MaxFoliageSlope,
-		LocalMap
+		ChunkCoord,                    // Chunk coordinates for world positioning
+		Origin,                        // World origin for this chunk
+		ChunkSize,                     // Number of voxels per dimension
+		VoxelSize,                     // World units per voxel
+		GetStepSize(),                 // Step size for density sampling
+		GenerationConfig,              // Generation configuration settings
+		DensityProvider,               // Terrain density provider
+		FoliageDensity,                // Foliage placement density
+		MaxFoliageSlope,               // Maximum slope for foliage placement
+		LocalMap                       // Local terrain modifications
 	);
 
+	// Capture task and this pointer for async execution
 	TSharedPtr<FVoxelGeneratorTask> LocalTask = CurrentTask;
 	TWeakObjectPtr<AVoxelChunk> SafeThis(this);
 
+	// Execute generation task on background thread
 	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [SafeThis, LocalTask, TaskId]()
 	{
+		// Safety check: ensure chunk still exists and task wasn't cancelled
 		if (!SafeThis.IsValid() || LocalTask->IsCancelled()) return;
 
+		// Execute the generation task
 		LocalTask->Execute();
 
+		// Return to game thread to apply the generated mesh
 		AsyncTask(ENamedThreads::GameThread, [SafeThis, LocalTask, TaskId]()
 		{
+			// Final safety check: ensure chunk still exists and this is the correct generation
 			if (SafeThis.IsValid() && TaskId == SafeThis->GenerationId)
 			{
 				SafeThis->ApplyMesh(LocalTask);
@@ -149,40 +210,52 @@ void AVoxelChunk::GenerateAsync()
 
 void AVoxelChunk::GenerateSync()
 {
+	// Create a global density generator for synchronous generation
+	// This is used primarily in editor contexts where async generation isn't suitable
 	static FVoxelDensityGenerator GlobalDensityGeneratorSync;
+	
+	// Retrieve local terrain data if data map is available
 	TMap<int32, float> LocalMap;
 	if (DataMap)
 	{
 		DataMap->GetChunkData(ChunkCoord, LocalMap);
 	}
 
+	// Create generation task with synchronous execution parameters
 	CurrentTask = MakeShared<FVoxelGeneratorTask>(
-		ChunkCoord,
-		GetActorLocation(),
-		ChunkSize,
-		VoxelSize,
-		GetStepSize(),
-		GenerationConfig,
-		&GlobalDensityGeneratorSync,
-		FoliageDensity,
-		MaxFoliageSlope,
-		LocalMap
+		ChunkCoord,                    // Chunk coordinates for world positioning
+		GetActorLocation(),            // World origin for this chunk
+		ChunkSize,                     // Number of voxels per dimension
+		VoxelSize,                     // World units per voxel
+		GetStepSize(),                 // Step size for density sampling
+		GenerationConfig,              // Generation configuration settings
+		&GlobalDensityGeneratorSync,   // Synchronous density provider
+		FoliageDensity,                // Foliage placement density
+		MaxFoliageSlope,               // Maximum slope for foliage placement
+		LocalMap                       // Local terrain modifications
 	);
+	
+	// Execute generation task synchronously on current thread
 	CurrentTask->Execute();
+	
+	// Apply the generated mesh immediately
 	ApplyMesh(CurrentTask);
 }
 
 void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 {
+	// Safety check: ensure task is valid
 	if (!CompletedTask.IsValid()) return;
 
+	// Get the generated mesh output from the completed task
 	const FVoxelMeshOutput& Out = CompletedTask->GetMeshOutput();
 
-	// Store mesh output for state management and transitions
+	// Store mesh output for state management and LOD transitions
 	MeshOutput = Out;
 
 	// ── Determine per-biome material overrides ────────────────────────────
 	// Sample the dominant biome at the chunk geometric centre (XY and Z).
+	// This provides accurate biome-based material selection for the entire chunk.
 	const float HalfChunk = ChunkSize * VoxelSize * 0.5f;
 	const FVector ChunkCentre = GetActorLocation() + FVector(HalfChunk, HalfChunk, HalfChunk);
 	const FVoxelBiomeWeightMap CentreWeights =
@@ -190,8 +263,11 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	const EVoxelBiome DominantBiome = CentreWeights.GetDominantBiome();
 	const FVoxelBiomeRenderConfig& BiomeRender = GenerationConfig.GetBiomeRender(DominantBiome);
 
+	// Determine materials to use for flat and slope surfaces
 	UMaterialInterface* FlatMat  = MasterFlatMaterial;
 	UMaterialInterface* SlopeMat = MasterSlopeMaterial;
+	
+	// Apply biome-specific material overrides if enabled and threshold met
 	if (BiomeRender.bEnableMaterialOverride &&
 		CentreWeights.GetWeight(DominantBiome) >= BiomeRender.MaterialOverrideThreshold)
 	{
@@ -200,11 +276,13 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	}
 
 	// ── Upload terrain mesh sections ──────────────────────────────────────
+	// Clear existing mesh sections and upload new geometry
 	ProceduralMesh->ClearAllMeshSections();
 	UploadSection(0, Out.FlatMesh,  FlatMat);
 	UploadSection(1, Out.SlopeMesh, SlopeMat);
 
 	// ── Per-biome foliage system (Recycled / Pooled) ──────────────────────
+	// Handle biome-specific foliage placement with efficient component reuse
 	const TArray<TArray<FTransform>>& PerFoliage = CompletedTask->GetPerFoliageTransforms();
 	const TArray<UStaticMesh*>&       FoliageMeshes = CompletedTask->GetPerFoliageMeshes();
 
@@ -212,12 +290,15 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 
 	if (bHasPerBiomeFoliage)
 	{
+		// Process each foliage type with component pooling for performance
 		for (int32 Slot = 0; Slot < PerFoliage.Num(); ++Slot)
 		{
 			UStaticMesh* SlotMesh = (Slot < FoliageMeshes.Num()) ? FoliageMeshes[Slot] : nullptr;
 			if (!SlotMesh || PerFoliage[Slot].Num() == 0) continue;
 
 			UInstancedStaticMeshComponent* HISM = nullptr;
+			
+			// Reuse existing component if available, otherwise create new one
 			if (Slot < BiomeFoliageHISMs.Num())
 			{
 				HISM = BiomeFoliageHISMs[Slot];
@@ -225,8 +306,8 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 			}
 			else
 			{
+				// Create new component with clean integer naming
 				float NextIdx = BiomeFoliageHISMs.Num();
-				// Use %d so component names are clean integers, not "BiomeFoliage_0.000000".
 				HISM = NewObject<UInstancedStaticMeshComponent>(this,
 				*FString::Printf(TEXT("BiomeFoliage_%d"), (int32)NextIdx));
 				HISM->SetupAttachment(RootComponent);
@@ -236,44 +317,47 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 
 			if (HISM)
 			{
-				// FIX: Set mobility to Movable BEFORE SetStaticMesh to avoid Static mobility error
+				// IMPORTANT: Set mobility to Movable BEFORE SetStaticMesh
 				// Components default to Static, which prevents runtime mesh assignment
 				HISM->SetMobility(EComponentMobility::Movable);
 				HISM->SetStaticMesh(SlotMesh);
-				// TODO: Consider SetMobility(Static) after initial setup for Lumen baking
+				// Note: Consider SetMobility(Static) after initial setup for Lumen baking
 				// but this breaks runtime foliage updates
 				HISM->SetCullDistances(0, 12000);
 				HISM->AddInstances(PerFoliage[Slot], false);
 			}
 		}
 
-		// Clear unused instances for trailing pooled slots
+		// Clear unused instances for trailing pooled slots to prevent memory leaks
 		for (int32 i = PerFoliage.Num(); i < BiomeFoliageHISMs.Num(); ++i)
 		{
 			if (BiomeFoliageHISMs[i]) BiomeFoliageHISMs[i]->ClearInstances();
 		}
-
 	}
 	else
 	{
 		// ── Legacy fallback: global tree/grass meshes ─────────────────────
+		// Handle traditional tree and grass placement for backward compatibility
 		if (IsValid(TreeHISM))  TreeHISM->ClearInstances();
 		if (IsValid(GrassHISM)) GrassHISM->ClearInstances();
 
-		// Local variables — these are only needed during this call, so they live on the stack.
+		// Get transform arrays from completed task
 		const TArray<FTransform>& TreeTransforms  = CompletedTask->GetTreeTransforms();
 		const TArray<FTransform>& GrassTransforms = CompletedTask->GetGrassTransforms();
 
+		// Apply tree instances with proper component setup
 		if (IsValid(TreeHISM) && TreeMesh)
 		{
-			// FIX: Set mobility to Movable before SetStaticMesh (components default to Static)
+			// IMPORTANT: Set mobility to Movable before SetStaticMesh
 			TreeHISM->SetMobility(EComponentMobility::Movable);
 			TreeHISM->SetStaticMesh(TreeMesh);
 			TreeHISM->AddInstances(TreeTransforms, false);
 		}
+		
+		// Apply grass instances with proper component setup
 		if (IsValid(GrassHISM) && GrassMesh)
 		{
-			// FIX: Set mobility to Movable before SetStaticMesh (components default to Static)
+			// IMPORTANT: Set mobility to Movable before SetStaticMesh
 			GrassHISM->SetMobility(EComponentMobility::Movable);
 			GrassHISM->SetStaticMesh(GrassMesh);
 			GrassHISM->AddInstances(GrassTransforms, false);
@@ -282,15 +366,18 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 
 	// ── Populate water solid-cell map from the task's density array ──────────
 	// This is used by FVoxelWaterSimulator to know which cells block water flow.
+	// Initialize water data structure and populate solid cell information
 	{
 		WaterData.Init(ChunkSize);
 		const TArray<float>& Dens = CompletedTask->GetDensities();
-		const int32 S = (ChunkSize / GetStepSize()) + 3; // density array stride
+		const int32 S = (ChunkSize / GetStepSize()) + 3; // density array stride with padding
+		
+		// Map density data to water solid cell data
 		for (int32 lz = 0; lz < ChunkSize; ++lz)
 		for (int32 ly = 0; ly < ChunkSize; ++ly)
 		for (int32 lx = 0; lx < ChunkSize; ++lx)
 		{
-			// Density array: local voxel (lx,ly,lz) is at padded index (lx+1, ly+1, lz+1)
+			// Density array uses padded indexing: local voxel (lx,ly,lz) is at padded index (lx+1, ly+1, lz+1)
 			const int32 DIdx = (lx + 1) + (ly + 1) * S + (lz + 1) * S * S;
 			const int32 WIdx = lx + ly * ChunkSize + lz * ChunkSize * ChunkSize;
 			if (Dens.IsValidIndex(DIdx))
@@ -300,6 +387,7 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 
 	// ── Register water source positions detected during generation ────────────
 	// OnChunkWaterReady is bound by AVoxelWorld so it can call SetSource() on the simulator.
+	// This enables water simulation to know where to place water sources in the world.
 	if (OnChunkWaterReady)
 	{
 		OnChunkWaterReady(CompletedTask->GetWaterSources());
@@ -316,10 +404,12 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	SetActorHiddenInGame(false);
 	SetActorEnableCollision(true);
 
+	// Update generation state flags
 	bMeshApplied = true;
 	bGenerating  = false;
 
 	// Notify AVoxelWorld that this chunk finished so it can decrement ActiveGenerations.
+	// This is crucial for the world's generation state management.
 	if (OnGenerationComplete)
 	{
 		OnGenerationComplete();
@@ -329,23 +419,25 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 
 void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat)
 {
+	// Safety check: ensure we have valid data and mesh component
 	if (Data.Vertices.Num() == 0 || !IsValid(ProceduralMesh)) return;
 
-	// CreateMeshSection (FColor overload) correctly uploads the biome vertex colors
+	// Create mesh section with vertex color data
+	// IMPORTANT: Using the FColor overload correctly uploads the biome vertex colors
 	// baked by FVoxelMeshGenerator. Using the LinearColor overload with an empty array
 	// was silently discarding all vertex color data, making every biome look identical.
 	ProceduralMesh->CreateMeshSection(
 		SectionIndex,
-		Data.Vertices,
-		Data.Triangles,
-		Data.Normals,
-		Data.UVs,
-		Data.VertexColors,
-		Data.Tangents,
-		LOD <= 1  // OPTIMIZATION: Build collision mesh for highest and mid-detail chunks
+		Data.Vertices,        // Vertex positions
+		Data.Triangles,       // Triangle indices
+		Data.Normals,         // Vertex normals
+		Data.UVs,             // Texture coordinates
+		Data.VertexColors,    // Biome vertex colors (CRITICAL for visual variety)
+		Data.Tangents,        // Vertex tangents for lighting
+		LOD <= 1              // OPTIMIZATION: Build collision mesh only for highest and mid-detail chunks
 	);
 
-
+	// Apply material if provided
 	if (Mat) ProceduralMesh->SetMaterial(SectionIndex, Mat);
 }
 
@@ -355,19 +447,26 @@ void AVoxelChunk::DestroyAndRebuildMesh()
 }
 
 // ---------------------------------------------------------------------------
-// Water mesh
+// Water Mesh Generation System
 // ---------------------------------------------------------------------------
 void AVoxelChunk::RebuildWaterMesh()
 {
+	// Safety check: ensure water mesh component is valid
 	if (!IsValid(WaterMesh)) return;
+	
+	// Generate water mesh geometry
 	BuildWaterMeshInternal();
+	
+	// Mark water data as clean after mesh rebuild
 	WaterData.bMeshDirty = false;
 }
 
 void AVoxelChunk::BuildWaterMeshInternal()
 {
+	// Clear existing water mesh sections
 	WaterMesh->ClearAllMeshSections();
 
+	// Safety check: ensure water material is assigned
 	// Without a material the water mesh renders UE's default black geometry
 	// which overlays and hides the terrain. Skip the build entirely.
 	if (!WaterMaterial)
@@ -376,14 +475,17 @@ void AVoxelChunk::BuildWaterMeshInternal()
 		return;
 	}
 
+	// Early exit if no water exists in this chunk
 	if (!WaterData.HasAnyWater())
 	{
 		WaterMesh->SetVisibility(false);
 		return;
 	}
 
-	// We generate a simple flat-quad mesh for every water surface cell:
-	// top face (air above), and side faces where the neighbour is air.
+	// Generate procedural water mesh for visualization
+	// We create simple flat-quad meshes for every water surface cell:
+	// - Top face (when air is above the water)
+	// - Side faces (when water meets air on the sides)
 	TArray<FVector>   Vertices;
 	TArray<int32>     Triangles;
 	TArray<FVector>   Normals;
@@ -392,7 +494,7 @@ void AVoxelChunk::BuildWaterMeshInternal()
 	const int32 CS = ChunkSize;
 	const float VS = VoxelSize;
 
-	// Helper: get water level at a local coord (clamped, 0 outside range)
+	// Helper function: get water level at local coordinates with bounds checking
 	auto GetW = [&](int32 lx, int32 ly, int32 lz) -> uint8
 	{
 		if (lx < 0 || lx >= CS || ly < 0 || ly >= CS || lz < 0 || lz >= CS)
@@ -401,6 +503,7 @@ void AVoxelChunk::BuildWaterMeshInternal()
 		return WaterData.Cells[i];
 	};
 
+	// Helper function: check if coordinate contains solid terrain
 	auto IsSolidLocal = [&](int32 lx, int32 ly, int32 lz) -> bool
 	{
 		if (lx < 0 || lx >= CS || ly < 0 || ly >= CS || lz < 0 || lz >= CS)
@@ -409,6 +512,7 @@ void AVoxelChunk::BuildWaterMeshInternal()
 		return WaterData.SolidCells.IsValidIndex(i) && WaterData.SolidCells[i];
 	};
 
+	// Helper function: emit a quad face with proper UVs and normals
 	auto EmitQuad = [&](FVector V0, FVector V1, FVector V2, FVector V3, FVector Normal)
 	{
 		const int32 Base = Vertices.Num();
@@ -419,17 +523,17 @@ void AVoxelChunk::BuildWaterMeshInternal()
 		Triangles.Add(Base+0); Triangles.Add(Base+2); Triangles.Add(Base+3);
 	};
 
+	// Generate water mesh geometry for each voxel in the chunk
 	for (int32 lz = 0; lz < CS; ++lz)
 	for (int32 ly = 0; ly < CS; ++ly)
 	for (int32 lx = 0; lx < CS; ++lx)
 	{
 		uint8 Level = GetW(lx, ly, lz);
 
-		// Ocean surface is handled by UVoxelWaterComponent (a static mesh plane that
-		// follows the player). Per-chunk ocean injection here caused solid terrain
-		// near SeaLevel to receive water quads on top, rendering black with no material.
+		// Skip empty cells
 		if (Level == WATER_EMPTY) continue;
 
+		// Calculate water surface height
 		const float WLevel  = (Level == WATER_SOURCE ? 1.f : (float)Level / (float)WATER_FULL);
 		const float x0 = lx * VS;
 		const float y0 = ly * VS;
@@ -438,7 +542,8 @@ void AVoxelChunk::BuildWaterMeshInternal()
 		const float y1 = y0 + VS;
 		const float zTop = z0 + VS * WLevel; // water surface at fill fraction
 
-		// TOP face — only if cell above is air/empty
+		// Generate top face if cell above is air/empty
+		// This creates the visible water surface
 		const bool bAboveEmpty = !IsSolidLocal(lx, ly, lz+1) && GetW(lx, ly, lz+1) == WATER_EMPTY;
 		if (bAboveEmpty)
 		{
@@ -451,12 +556,14 @@ void AVoxelChunk::BuildWaterMeshInternal()
 		}
 	}
 
+	// Early exit if no water geometry was generated
 	if (Vertices.Num() == 0)
 	{
 		WaterMesh->SetVisibility(false);
 		return;
 	}
 
+	// Create mesh section with generated geometry
 	TArray<FVector>          EmptyNorms;
 	TArray<FColor>           EmptyColors;
 	TArray<FProcMeshTangent> EmptyTangents;
@@ -464,25 +571,35 @@ void AVoxelChunk::BuildWaterMeshInternal()
 	WaterMesh->CreateMeshSection(
 		0, Vertices, Triangles, Normals, UVs, EmptyColors, EmptyTangents, false);
 
+	// Apply water material
 	if (WaterMaterial)
 		WaterMesh->SetMaterial(0, WaterMaterial);
 
+	// Make water mesh visible
 	WaterMesh->SetVisibility(true);
 
 	// --- 📜 LOGGER ---
-	// Log procedural water volume metrics so we can verify generation amounts in Log files
+	// Log procedural water volume metrics for debugging and performance analysis
 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWater: Chunk %s emitted %d procedural water vertices (Ocean/Pools)"), 
 		*ChunkCoord.ToString(), Vertices.Num()));
 }
 
 void AVoxelChunk::ClearMesh()
 {
+	// Increment generation ID to invalidate any pending operations
 	++GenerationId;
+	
+	// Clear terrain mesh sections and hide component
 	ProceduralMesh->ClearAllMeshSections();
 	ProceduralMesh->SetVisibility(false); // hide until next ApplyMesh reveals it
+	
+	// Clear water mesh sections and hide component
 	WaterMesh->ClearAllMeshSections();
 	WaterMesh->SetVisibility(false);
+	
+	// Reset water simulation data
 	WaterData.Reset();
+	
 	// Recycle dynamic per-biome foliage components instead of destroying them.
 	// This preserves the components on the actor when returned to the pool,
 	// removing thousands of synchronous Game Thread deallocations/allocations.
@@ -493,13 +610,18 @@ void AVoxelChunk::ClearMesh()
 			HISM->ClearInstances();
 		}
 	}
+	
+	// Reset mesh state flags
 	bMeshApplied = false;
 }
 
 #if WITH_EDITOR
 void AVoxelChunk::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
+	// Handle property changes in editor context
 	Super::PostEditChangeProperty(PropertyChangedEvent);
+	
+	// Regenerate chunk if any properties were modified
 	if (PropertyChangedEvent.Property)
 	{
 		GenerateSync();
@@ -507,7 +629,7 @@ void AVoxelChunk::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedE
 }
 #endif
 
-// OnMeshGenerated intentionally removed — the mesh ready callback is handled
+// Note: OnMeshGenerated intentionally removed — the mesh ready callback is handled
 // by OnGenerationComplete (the TFunction<void()> delegate) which AVoxelWorld binds.
 // Keeping a dead stub here caused confusion about the correct notification path.
 
@@ -517,37 +639,41 @@ void AVoxelChunk::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedE
 
 void AVoxelChunk::TransitionToLOD(int32 NewLOD)
 {
+	// Early exit if LOD is already the target
 	if (NewLOD == LOD) return;
 	
-	// Store current mesh as previous for blending
+	// Store current mesh as previous for potential blending
 	PreviousMesh = MeshOutput;
 	TargetLOD = NewLOD;
 	MeshState = EChunkMeshState::Transitioning;
 	TransitionProgress = 0.0f;
 	TransitionStartTime = GetWorld()->GetTimeSeconds();
 	
-	// Start generating new LOD mesh
+	// Start generating new LOD mesh asynchronously
 	LOD = NewLOD;
 	GenerateAsync();
 }
 
 void AVoxelChunk::UpdateMeshState()
 {
+	// Handle mesh state transitions and progress tracking
 	if (MeshState == EChunkMeshState::Transitioning)
 	{
+		// Calculate transition progress based on elapsed time
 		float CurrentTime = GetWorld()->GetTimeSeconds();
 		float Elapsed = CurrentTime - TransitionStartTime;
 		TransitionProgress = FMath::Clamp(Elapsed / TransitionDuration, 0.0f, 1.0f);
 		
 		if (TransitionProgress >= 1.0f)
 		{
+			// Transition complete
 			MeshState = EChunkMeshState::Ready;
 			PreviousMesh.Reset();
 		}
 		else
 		{
 			// TODO: Implement mesh blending here when both meshes are available
-			// For now, just ensure visibility is maintained
+			// For now, just ensure visibility is maintained during transition
 			SetMeshVisibility(true);
 		}
 	}
@@ -555,6 +681,7 @@ void AVoxelChunk::UpdateMeshState()
 
 void AVoxelChunk::BlendMeshes(const FVoxelMeshOutput& From, const FVoxelMeshOutput& To, float Alpha)
 {
+	// Placeholder implementation for mesh blending
 	// For now, we'll use a simple approach: keep the old mesh visible until new is ready
 	// In a full implementation, we would:
 	// 1. Create intermediate mesh data by interpolating vertices
@@ -576,6 +703,7 @@ void AVoxelChunk::BlendMeshes(const FVoxelMeshOutput& From, const FVoxelMeshOutp
 
 void AVoxelChunk::SetMeshVisibility(bool bVisible)
 {
+	// Set visibility for all mesh components based on current state
 	if (ProceduralMesh)
 	{
 		// Only change visibility if state allows it
@@ -585,12 +713,13 @@ void AVoxelChunk::SetMeshVisibility(bool bVisible)
 		}
 	}
 	
+	// Update water mesh visibility
 	if (WaterMesh)
 	{
 		WaterMesh->SetVisibility(bVisible);
 	}
 	
-	// Update foliage visibility
+	// Update per-biome foliage visibility
 	for (UInstancedStaticMeshComponent* HISM : BiomeFoliageHISMs)
 	{
 		if (HISM)
@@ -599,6 +728,7 @@ void AVoxelChunk::SetMeshVisibility(bool bVisible)
 		}
 	}
 	
+	// Update legacy foliage visibility
 	if (TreeHISM)
 	{
 		TreeHISM->SetVisibility(bVisible);

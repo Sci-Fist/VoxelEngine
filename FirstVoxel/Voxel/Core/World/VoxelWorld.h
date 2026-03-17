@@ -21,10 +21,49 @@ class USceneComponent;
 
 /**
  * AVoxelWorld is the central manager for the procedural voxel engine.
- * Responsibilities include tracking player position, streaming chunks in and
- * out based on render distance, and orchestrating asynchronous mesh generation
- * queues. It enforces a consistent world origin of (0,0,0) and handles global
- * settings like voxel size, materials, and generation noise seeds.
+ * 
+ * ARCHITECTURE OVERVIEW:
+ * This class serves as the orchestrator for the entire voxel generation system,
+ * responsible for:
+ * 
+ * 1. **World Management**: Coordinates chunk generation, streaming, and cleanup
+ *    based on player position and render distance settings
+ * 
+ * 2. **Generation Pipeline**: Manages the asynchronous generation queue with
+ *    configurable concurrency limits to balance performance and responsiveness
+ * 
+ * 3. **Biome System**: Handles multi-biome terrain blending with per-biome
+ *    material overrides and foliage configuration
+ * 
+ * 4. **LOD System**: Implements Level-of-Detail transitions for performance
+ *    optimization with smooth mesh blending
+ * 
+ * 5. **Water Simulation**: Integrates with FVoxelWaterSimulator for dynamic
+ *    water flow and pool formation
+ * 
+ * 6. **Persistence**: Provides save/load functionality for world modifications
+ *    and terrain edits
+ * 
+ * 7. **Editor Integration**: Extensive editor support with real-time preview,
+ *    preset management, and debugging tools
+ * 
+ * STREAMING MODEL:
+ * - Chunks are generated in a radius around the player based on RenderDistanceXY/Z
+ * - Skylands use separate distance settings for performance optimization
+ * - Chunks are pooled and reused to minimize memory allocation overhead
+ * - Background generation tasks are throttled to prevent frame rate drops
+ * 
+ * PERFORMANCE FEATURES:
+ * - Configurable LOD distances with smooth transitions
+ * - Async generation with progress tracking
+ * - Chunk pooling for memory efficiency
+ * - Editor-specific optimizations to prevent viewport freezing
+ * 
+ * BIOME SYSTEM:
+ * - Temperature/Erosion based biome distribution
+ * - Per-biome material overrides and foliage configuration
+ * - Weight-based blending for natural biome transitions
+ * - Special handling for spawn area biome forcing
  */
 UCLASS()
 class FIRSTVOXEL_API AVoxelWorld : public AActor {
@@ -116,15 +155,35 @@ public:
       meta = (ToolTip = "Rebuild the editor viewport world after stopping Play-In-Editor so you can inspect what was generated."))
   bool bRegenerateViewportAfterPIE = true;
 
-  /** Returns the effective generation config (preset wins over inline). */
-  const FVoxelGenerationConfig &GetEffectiveConfig() const {
-    return (BiomePreset != nullptr) ? BiomePreset->Config : GenerationConfig;
+  /** Returns the effective generation config.
+   * Preset wins for all parameters EXCEPT Seed, which always comes from
+   * GenerationConfig so RandomizeSeed() takes effect regardless of preset.
+   * We cache the merged result as a mutable member to avoid rebuilding it
+   * every call (seed writes are infrequent; config reads are per-voxel). */
+  const FVoxelGenerationConfig &GetEffectiveConfig() const
+  {
+    if (BiomePreset != nullptr)
+    {
+      // Merge: start with preset, override seed from our runtime GenerationConfig
+      // so every RandomizeSeed() call actually changes the world.
+      MergedConfig         = BiomePreset->Config;
+      MergedConfig.Seed    = GenerationConfig.Seed;
+      return MergedConfig;
+    }
+    return GenerationConfig;
   }
+
+private:
+  mutable FVoxelGenerationConfig MergedConfig;
+public:
 
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Generation")
   bool bAutoGenerateOnBeginPlay = true;
 
-  /** Force initial runtime spawn to land inside a crater biome region. */
+  /** If true, searches for a crater biome region near the PlayerStart and
+   * places the player inside the crater basin on spawn.
+   * Uses FindCraterSpawnLocation() with the current seed to find the nearest
+   * high-weight crater zone. Does NOT mutate any config. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn")
   bool bForceCraterSpawn = true;
 
@@ -388,6 +447,9 @@ private:
   float TargetCoordsZ = 0.f;
   bool bSkylandFoundBackup = false;
   float CachedSurfaceHeight = 0.f;
+  // FIX: Replaces static-local SpawnWaitTime in Tick() to avoid MSVC C2181
+  // and to reset properly between PIE sessions.
+  float SpawnWaitAccum = 0.f;
 
   FVector SnapToVoxelGrid(const FVector &WorldPos) const;
 

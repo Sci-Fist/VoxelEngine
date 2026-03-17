@@ -1,10 +1,32 @@
 // VoxelBiomeManager.cpp
-// Drives the 2D surface biome distribution using two orthogonal noise fields:
-//   Temperature (X axis of biome space) — warm vs cold
-//   Erosion     (Y axis of biome space) — flat vs rough
+// 
+// Core biome distribution system that manages 2D surface biome blending.
+// Uses orthogonal noise fields to create natural biome transitions across the world.
 //
-// Biome weights are always normalized to sum to 1.0. The resulting weight map
-// is used to blend surface heights and for skyland roughness estimation.
+// BIOME DISTRIBUTION SYSTEM:
+// The system uses two primary noise dimensions to determine biome placement:
+// 
+// 1. Temperature Axis (X): Controls climate-based biomes
+//    - Low values (0.0-0.5): Cold/temperate regions → Forest, Peaks
+//    - High values (0.5-1.0): Hot/dry regions → Desert, Mesa
+//
+// 2. Erosion Axis (Y): Controls terrain roughness
+//    - Low values (0.0-0.5): Flat/eroded terrain → Forest, Desert
+//    - High values (0.5-1.0): Rough/eroded terrain → Peaks, Cliffs
+//
+// BIOME MAPPING:
+// - Forest: Low erosion + any temperature (temperate plains)
+// - Desert: Low erosion + high temperature (arid flatlands)
+// - Peaks: High erosion + low temperature (alpine mountains)
+// - Cliffs: High erosion + high temperature (canyons/rocky shores)
+// - Mesa: Moderate erosion + high temperature (plateau regions)
+// - Craters: Noise-driven sparse impact sites (overrides other biomes locally)
+//
+// The resulting weight map is normalized to sum to 1.0 and used for:
+// - Surface height blending
+// - Material assignment
+// - Skyland roughness estimation
+// - Foliage distribution
 
 #include "VoxelBiomeManager.h"
 #include "FirstVoxel.h"
@@ -57,19 +79,15 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
 
     // Craters: rare, driven by a separate low-frequency noise not related to Temp/Erosion.
     // Uses the Z=200 slice as a pseudo-2D crater placement field.
-    // Apply a soft bias near the world origin to naturally invite the Crater Biome 
-    // to spawn at the center without artificial shape overrides.
-    const float DistFrom0 = FMath::Sqrt(X * X + Y * Y);
-    const float CenterBias = FMath::Clamp(1.0f - DistFrom0 / 18000.f, 0.f, 1.f) * 0.35f;
-
+    // FIX: Removed CenterBias and the DistFrom0 < 500 hardcoded block.
+    // Those two pieces forced a crater basin (deep hole) directly at world origin (0,0)
+    // every single generation, which was the visible hole at spawn.
+    // Craters now spawn purely based on noise, same as every other biome.
     const float CraterNoise = FMath::PerlinNoise3D(FVector(
         (X + Off.X) * (Config.Craters.Frequency * 0.5f),
         (Y + Off.Y) * (Config.Craters.Frequency * 0.5f),
-        200.f)) + CenterBias;
+        200.f));
 
-    // Weight caps at 0.45 so other biomes (Forest, Desert…) remain active inside craters.
-    // Without this cap, CratersW normalized to ~1.0 at the core, zeroing out all other
-    // biome weights and making crater interiors a featureless flat plain.
     float CratersW = FMath::SmoothStep(
         Config.Craters.ImpactThreshold + 0.1f,
         Config.Craters.ImpactThreshold,
@@ -144,4 +162,24 @@ float FVoxelBiomeManager::GetErosionWithSeed(float X, float Y, const FVoxelGener
         (X + SeedOff.X) * Config.BiomeBlend.ErosionFrequency + 100.f,
         (Y + SeedOff.Y) * Config.BiomeBlend.ErosionFrequency + 100.f))
         * 0.5f + 0.5f;
+}
+
+// ============================================================
+//  GetBaseSurfaceDensity
+//  Simple surface-layer density: positive below surface, negative above.
+//  Does NOT include caves, skylands, or overhangs.
+//  This is used by FVoxelDensityGenerator for the base terrain layer.
+//  Returns (SurfaceHeight - Z) / SurfaceGradientScale as per analysis document.
+// ============================================================
+float FVoxelBiomeManager::GetBaseSurfaceDensity(float Z, float SurfaceHeight, const FVoxelGenerationConfig& Config)
+{
+    // Calculate density based on distance from surface
+    // Positive values indicate solid terrain (below surface)
+    // Negative values indicate air (above surface)
+    const float DistanceFromSurface = SurfaceHeight - Z;
+    
+    // Use the gradient scale from config for proper scaling
+    const float GradientScale = Config.SurfaceGradientScale;
+    
+    return DistanceFromSurface / GradientScale;
 }

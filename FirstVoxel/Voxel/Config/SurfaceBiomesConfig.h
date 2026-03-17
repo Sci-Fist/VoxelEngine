@@ -102,16 +102,16 @@ struct FPeaksBiomeConfig
     float HeightMin = 3000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Peaks")
-    float HeightMax = 80000.f;
+    float HeightMax = 25000.f;  // FIX: was 80000 (800m) — caused extreme stalagmite spikes
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Peaks")
     int32 Octaves = 5;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Peaks")
-    float Sharpness = 2.5f;
+    float Sharpness = 1.8f;  // FIX: was 2.5 — high sharpness on FBM creates razor peaks
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Peaks")
-    float DetailAmplitude = 500.f;
+    float DetailAmplitude = 300.f;  // FIX: was 500 — reduced detail noise to soften peaks
 };
 
 // ============================================================
@@ -129,22 +129,22 @@ struct FCliffsBiomeConfig
     float HeightMin = 1500.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cliffs")
-    float HeightMax = 40000.f;
+    float HeightMax = 15000.f;  // FIX: was 40000 — too tall combined with ridge sharpness
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cliffs")
     int32 Octaves = 5;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cliffs")
-    float Sharpness = 3.6f;
+    float Sharpness = 1.8f;  // FIX: was 3.6 — ridge noise ^ 3.6 = pure stalagmites
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cliffs")
-    float TerraceFactor = 0.6f;
+    float TerraceFactor = 0.35f;  // FIX: was 0.6 — less aggressive terracing
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cliffs")
-    int32 TerraceSteps = 12;
+    int32 TerraceSteps = 5;  // FIX: was 12 — fewer steps = smoother cliff faces
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cliffs")
-    float DetailAmplitude = 800.f;
+    float DetailAmplitude = 400.f;  // FIX: was 800 — reduced detail noise amplitude
 };
 
 // ============================================================
@@ -210,5 +210,5 @@ struct FOverhangConfig
     float NoiseFrequency = 0.0007f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Overhangs")
-    float Amplitude = 0.35f;
+    float Amplitude = 0.12f;  // FIX: was 0.35 — was amplifying spikes on steep terrain
 };

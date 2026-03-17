@@ -69,6 +69,10 @@ void AFirstVoxelCharacter::BeginPlay()
 	// Reset dig/build timestamps so re-entering PIE never blocks the first action
 	DigLastActionTime   = -1.f;
 	BuildLastActionTime = -1.f;
+	// FIX: Clear the cached VoxelWorld pointer on each BeginPlay.
+	// Without this, PIE restart leaves a stale pointer to the destroyed actor
+	// from the previous session, causing all tool raycasts to silently fail.
+	CachedVoxelWorld = nullptr;
 }
 
 void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -241,18 +245,22 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 		if (PC->IsInputKeyDown(EKeys::A)) DoMove(-1.f, 0.f);
 		if (PC->IsInputKeyDown(EKeys::D)) DoMove( 1.f, 0.f);
 
-		// Q/E yaw look
-		const float KBLook = 120.f * DeltaTime;
-		if (PC->IsInputKeyDown(EKeys::Q)) AddControllerYawInput(-KBLook);
-		if (PC->IsInputKeyDown(EKeys::E)) AddControllerYawInput( KBLook);
+		// FIX: Q/E yaw-look removed — Q is bound to ToolWheel open, so using it
+		// for look input caused the camera to spin every time the wheel opened.
+		// Use mouse or right stick for looking instead.
 	}
 
-	// ── 2. Keyboard: Flight vertical (Space / Ctrl) ───────────────────────
-	// Only poll here; FlyDown() handles the Ctrl action via EnhancedInput.
+	// ── 2. Keyboard: Flight vertical (Space = rise, Ctrl = descend) ──────────
+	// FIX: Only inject vertical movement when already flying. Space also binds
+	// Jump (ACharacter::Jump) but MOVE_Flying mode ignores the jump impulse, so
+	// polling IsInputKeyDown here is safe — it won't cause a double-jump on land.
+	// LeftControl is polled here as a backup; FlyDown() via EnhancedInput also
+	// fires for Ctrl — both paths call AddMovementInput so there's no conflict.
 	if (bFlying && !bLastInputWasGamepad)
 	{
 		if (PC->IsInputKeyDown(EKeys::SpaceBar))    AddMovementInput(FVector::UpVector,  1.f);
 		if (PC->IsInputKeyDown(EKeys::LeftControl)) AddMovementInput(FVector::UpVector, -1.f);
+		if (PC->IsInputKeyDown(EKeys::C))           AddMovementInput(FVector::UpVector, -1.f); // bonus: C to descend
 	}
 
 
@@ -385,10 +393,11 @@ void AFirstVoxelCharacter::DoLook(float Yaw, float Pitch)
 
 void AFirstVoxelCharacter::DoJumpStart()
 {
-	if (GetCharacterMovement() && GetCharacterMovement()->MovementMode == MOVE_Flying)
-		AddMovementInput(FVector::UpVector, 1.f);
-	else
-		Jump();
+	// FIX: Do NOT call AddMovementInput here when flying — Tick already polls
+	// SpaceBar every frame for vertical flight input. Calling it here too caused
+	// a one-shot impulse on press but no sustained rise (felt like nothing happened).
+	// Just call Jump() unconditionally; MOVE_Flying mode ignores the jump velocity.
+	Jump();
 }
 
 void AFirstVoxelCharacter::DoJumpEnd() { StopJumping(); }
@@ -418,21 +427,24 @@ void AFirstVoxelCharacter::ToggleFly()
 	if (!GetCharacterMovement()) return;
 	if (GetCharacterMovement()->MovementMode == MOVE_Flying)
 	{
+		// FIX: Restore full collision BEFORE switching to Walking so the
+		// capsule is solid again when the movement mode snaps to ground.
+		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode DISABLED"));
-		// FIXED: Proper collision handling when exiting flight
-		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		UE_LOG(LogTemplateCharacter, Log, TEXT("MovementMode after flight: %d, Collision: %d"),
-			(int32)GetCharacterMovement()->MovementMode, (int32)GetCapsuleComponent()->GetCollisionEnabled());
 	}
 	else
 	{
 		GetCharacterMovement()->SetMovementMode(MOVE_Flying);
+		// FIX: Keep collision enabled while flying so terrain dig/build
+		// raycasts still hit the world, and so re-enabling walk collision
+		// works correctly. Flying mode in UE already ignores floor/gravity
+		// without needing to disable the capsule collision entirely.
+		// The old NoCollision call was the root cause of clipping through terrain.
+		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode ENABLED"));
-		// FIXED: Disable collision when entering flight to prevent getting stuck
-		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		UE_LOG(LogTemplateCharacter, Log, TEXT("MovementMode after enabling flight: %d, Collision: %d"),
-			(int32)GetCharacterMovement()->MovementMode, (int32)GetCapsuleComponent()->GetCollisionEnabled());
 	}
 }
 
@@ -531,8 +543,9 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 		{
 			if (CurrentTime - DigLastActionTime > 0.05f)
 			{
-				// FIXED: Better dig positioning - move slightly into the surface for better scooping
-				FVector DigPos = ImpactPoint + (Hit.ImpactNormal * 20.f);
+				// FIX: Move INTO the surface (subtract normal) so the sphere actually
+				// overlaps solid voxels. Adding the normal placed the sphere in air.
+				FVector DigPos = ImpactPoint - (Hit.ImpactNormal * (InteractionRadius * 0.5f));
 				World->SetVoxelSphere(DigPos, InteractionRadius, -1.0f, true);
 				DigLastActionTime = CurrentTime;
 			}
@@ -541,10 +554,20 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 		{
 			if (CurrentTime - BuildLastActionTime > 0.05f)
 			{
-				// FIXED: Better build positioning - place blocks slightly away from surface
-				FVector BuildPos = ImpactPoint + (Hit.ImpactNormal * 30.f);
+				// Build: place sphere just above the surface so new voxels attach cleanly
+				FVector BuildPos = ImpactPoint + (Hit.ImpactNormal * (InteractionRadius * 0.5f));
 				World->SetVoxelSphere(BuildPos, InteractionRadius, 1.0f, true);
 				BuildLastActionTime = CurrentTime;
+			}
+		}
+		else if (CurrentTool == EVoxelToolMode::Smooth || CurrentTool == EVoxelToolMode::Flatten)
+		{
+			// Smooth/Flatten: dig very lightly at the surface to shave protruding voxels
+			if (CurrentTime - DigLastActionTime > 0.08f)
+			{
+				FVector SmoothPos = ImpactPoint - (Hit.ImpactNormal * (InteractionRadius * 0.25f));
+				World->SetVoxelSphere(SmoothPos, InteractionRadius, -0.3f, true);
+				DigLastActionTime = CurrentTime;
 			}
 		}
 	}

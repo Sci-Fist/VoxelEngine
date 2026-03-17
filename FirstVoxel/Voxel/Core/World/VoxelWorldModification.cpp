@@ -1,7 +1,27 @@
 // VoxelWorld_Modification.cpp
+// 
 // Implementation of voxel modification and utility functions for AVoxelWorld.
 // This file contains modification-related function implementations to reduce
 // the size of VoxelWorld.cpp and improve maintainability.
+//
+// ARCHITECTURE OVERVIEW:
+// This module handles all player-driven modifications to the voxel world,
+// including terrain editing, data persistence, and utility functions for
+// world interaction. It provides a clean separation between world management
+// and modification logic.
+//
+// KEY FEATURES:
+// - Spherical voxel editing with configurable density values
+// - Persistent modification storage and loading
+// - Coordinate transformation utilities
+// - Biome-aware spawn location finding
+// - Comprehensive testing and debugging tools
+//
+// PERFORMANCE CHARACTERISTICS:
+// - Efficient sparse data storage for modifications
+// - Binary serialization for fast save/load operations
+// - Chunk dirty tracking for selective regeneration
+// - Grid-based search algorithms for spawn location finding
 
 #include "VoxelWorld.h"
 #include "Voxel/Core/VoxelChunk.h"
@@ -23,49 +43,45 @@
 
 void AVoxelWorld::SetVoxelSphere(FVector WorldPosition, float Radius, float DensityValue, bool bRebuildChunks)
 {
+	// Safety check: ensure world is valid and not shutting down
 	if (!GetWorld() || bShutdown) return;
 
+	// Log modification for debugging and performance tracking
 	UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: SetVoxelSphere at %s, Radius=%.2f, Density=%.2f"),
 		*WorldPosition.ToString(), Radius, DensityValue);
 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("SetVoxelSphere: pos=%s radius=%.2f density=%.2f"),
 		*WorldPosition.ToString(), Radius, DensityValue));
 
+	// Apply spherical modification to the data map
+	// FIX: DataMap uses pure world-space coordinates (no actor offset).
+	// The density generator also samples in world space, so they match.
+	// Previously the coordinate spaces were consistent but the chunk dirty
+	// calculation below was using WorldToChunkCoord which DOES account for
+	// the actor anchor -- so we must use WorldToChunkCoord for dirty marking,
+	// not manual arithmetic that assumed the actor is at (0,0,0).
 	DataMap.SetSphere(WorldPosition, Radius, DensityValue, VoxelSize);
 
-
-	// If rebuild is requested, mark affected chunks as dirty
+	// Mark affected chunks as dirty for regeneration if requested
 	if (bRebuildChunks)
 	{
-		const FVector Anchor = GetActorLocation();
+		// Calculate chunk coordinates that contain the modified sphere
+		// FIX: Use WorldToChunkCoord which correctly accounts for GetActorLocation()
+		// as the anchor. The old manual arithmetic subtracted Anchor from WorldPosition
+		// but DataMap.SetSphere wrote voxels WITHOUT subtracting Anchor, so the dirty
+		// chunk range was offset from the actual modified chunks.
+		const FIntVector MinChunkCoord = WorldToChunkCoord(WorldPosition - FVector(Radius));
+		const FIntVector MaxChunkCoord = WorldToChunkCoord(WorldPosition + FVector(Radius));
 
-		// Find all chunks that intersect with the modified region
-		const FIntVector MinChunkCoord = FIntVector(
-			FMath::FloorToInt((WorldPosition.X - Radius - Anchor.X) / (ChunkSize * VoxelSize)),
-			FMath::FloorToInt((WorldPosition.Y - Radius - Anchor.Y) / (ChunkSize * VoxelSize)),
-			FMath::FloorToInt((WorldPosition.Z - Radius - Anchor.Z) / (ChunkSize * VoxelSize))
-		);
-		const FIntVector MaxChunkCoord = FIntVector(
-			FMath::CeilToInt((WorldPosition.X + Radius - Anchor.X) / (ChunkSize * VoxelSize)),
-			FMath::CeilToInt((WorldPosition.Y + Radius - Anchor.Y) / (ChunkSize * VoxelSize)),
-			FMath::CeilToInt((WorldPosition.Z + Radius - Anchor.Z) / (ChunkSize * VoxelSize))
-		);
-
-		// Mark each affected chunk as dirty
+		// Mark all chunks within the bounding box as dirty
 		for (int32 z = MinChunkCoord.Z; z <= MaxChunkCoord.Z; ++z)
+		for (int32 y = MinChunkCoord.Y; y <= MaxChunkCoord.Y; ++y)
+		for (int32 x = MinChunkCoord.X; x <= MaxChunkCoord.X; ++x)
 		{
-			for (int32 y = MinChunkCoord.Y; y <= MaxChunkCoord.Y; ++y)
+			const FIntVector Coord(x, y, z);
+			if (AVoxelChunk** ChunkPtr = LoadedChunks.Find(Coord))
 			{
-				for (int32 x = MinChunkCoord.X; x <= MaxChunkCoord.X; ++x)
-				{
-					const FIntVector ChunkCoord(x, y, z);
-					if (AVoxelChunk** ChunkPtr = LoadedChunks.Find(ChunkCoord))
-					{
-						if (AVoxelChunk* Chunk = *ChunkPtr)
-						{
-							Chunk->bMeshDirty = true;
-						}
-					}
-				}
+				if (AVoxelChunk* Chunk = *ChunkPtr)
+					Chunk->bMeshDirty = true;
 			}
 		}
 	}
@@ -73,6 +89,8 @@ void AVoxelWorld::SetVoxelSphere(FVector WorldPosition, float Radius, float Dens
 
 void AVoxelWorld::ClearModifications()
 {
+	// Clear all player modifications from the data map
+	// This resets the world to its generated state
 	DataMap.Clear();
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: All modifications cleared"));
 }
@@ -80,8 +98,10 @@ void AVoxelWorld::ClearModifications()
 
 void AVoxelWorld::SaveToFile(const FString& SlotName)
 {
+	// Safety check: ensure world is valid
 	if (!GetWorld()) return;
 
+	// Create save directory if it doesn't exist
 	const FString SaveDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("VoxelSaves"));
 	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
 
@@ -90,19 +110,23 @@ void AVoxelWorld::SaveToFile(const FString& SlotName)
 		PlatformFile.CreateDirectoryTree(*SaveDir);
 	}
 
+	// Generate file path with world name and slot name
 	const FString FilePath = FPaths::Combine(SaveDir, FString::Printf(TEXT("%s_%s.sav"), *GetName(), *SlotName));
 
 	// -- ⚡ HIGH SPEED BINARY SAVING --
+	// Use binary serialization for optimal performance and smaller file sizes
 	FBufferArchive ToBuffer;
 	
+	// Write version header for future compatibility
 	float Version = 1.0f;
 	int32 Seed = GetEffectiveConfig().Seed;
 	ToBuffer << Version;
 	ToBuffer << Seed;
 
-	// Serialize sparse data map
+	// Serialize the sparse data map containing all modifications
 	DataMap.Serialize(ToBuffer);
 
+	// Save binary data to file
 	if (FFileHelper::SaveArrayToFile(ToBuffer, *FilePath))
 	{
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Successfully saved modifications to slot '%s'"), *SlotName);
@@ -115,25 +139,30 @@ void AVoxelWorld::SaveToFile(const FString& SlotName)
 
 void AVoxelWorld::LoadFromFile(const FString& SlotName)
 {
+	// Safety check: ensure world is valid
 	if (!GetWorld()) return;
 
+	// Construct file path
 	const FString SaveDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("VoxelSaves"));
 	const FString FilePath = FPaths::Combine(SaveDir, FString::Printf(TEXT("%s_%s.sav"), *GetName(), *SlotName));
 
+	// Check if file exists
 	if (!FPaths::FileExists(FilePath)) return;
 
+	// Load binary data from file
 	TArray<uint8> FromBuffer;
 	if (FFileHelper::LoadFileToArray(FromBuffer, *FilePath))
 	{
+		// Create memory reader for deserialization
 		FMemoryReader FromBufferReader(FromBuffer);
 
-		// Read Header/Version
+		// Read version header for compatibility checking
 		float Version = 0.0f;
 		int32 Seed = 0;
 		FromBufferReader << Version;
 		FromBufferReader << Seed;
 
-		// Serialize sparse data map
+		// Clear existing modifications and load new ones
 		DataMap.Clear();
 		DataMap.Serialize(FromBufferReader);
 
@@ -143,11 +172,13 @@ void AVoxelWorld::LoadFromFile(const FString& SlotName)
 
 void AVoxelWorld::SaveDefaultSlot()
 {
+	// Save modifications to the default slot for quick save/load operations
 	SaveToFile(TEXT("DefaultSlot"));
 }
 
 void AVoxelWorld::LoadDefaultSlot()
 {
+	// Load modifications from the default slot
 	LoadFromFile(TEXT("DefaultSlot"));
 }
 
@@ -157,17 +188,23 @@ void AVoxelWorld::LoadDefaultSlot()
 
 float AVoxelWorld::GetTerrainHeight(float X, float Y) const
 {
+	// Get biome weights at the specified coordinates
 	const FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(X, Y, GetEffectiveConfig());
+	
+	// Calculate surface height based on biome weights and configuration
 	return FVoxelBiomeManager::GetSurfaceHeightStatic(X, Y, Weights, GetEffectiveConfig());
 }
 
 float AVoxelWorld::GetSurfaceZ(float X, float Y) const
 {
+	// Convenience function that delegates to GetTerrainHeight
 	return GetTerrainHeight(X, Y);
 }
 
 FVector AVoxelWorld::SnapToVoxelGrid(const FVector& WorldPos) const
 {
+	// Snap world position to the nearest voxel boundary
+	// This ensures consistent positioning relative to the voxel grid
 	const float SnappedX = FMath::RoundToFloat(WorldPos.X / VoxelSize) * VoxelSize;
 	const float SnappedY = FMath::RoundToFloat(WorldPos.Y / VoxelSize) * VoxelSize;
 	const float SnappedZ = FMath::RoundToFloat(WorldPos.Z / VoxelSize) * VoxelSize;
@@ -177,27 +214,33 @@ FVector AVoxelWorld::SnapToVoxelGrid(const FVector& WorldPos) const
 
 FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVoxelGenerationConfig& Config) const
 {
+	// Safety check: ensure world is valid
 	if (!GetWorld()) return StartPos;
 
+	// Configuration parameters for crater search
 	const float SearchRadius = CraterSpawnSearchRadius;
 	const float Step = CraterSpawnSearchStep;
 	const float MinWeight = CraterSpawnMinWeight;
 
-
+	// Initialize search with starting position
 	FVector BestPos = StartPos;
 	float BestWeight = -1.0f;
 
 	// Search in a grid pattern around the start position
+	// This provides comprehensive coverage while maintaining performance
 	for (float y = -SearchRadius; y <= SearchRadius; y += Step)
 	{
 		for (float x = -SearchRadius; x <= SearchRadius; x += Step)
 		{
+			// Generate candidate position
 			FVector Candidate = FVector(StartPos.X + x, StartPos.Y + y, StartPos.Z);
 
-			// Get biome weights at this position
+			// Get biome weights at this position to determine crater likelihood
 			FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(Candidate.X, Candidate.Y, Config);
 			float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
 
+			// Update best position if this candidate has higher crater weight
+			// and meets the minimum weight threshold
 			if (CraterWeight > BestWeight && CraterWeight >= MinWeight)
 			{
 				BestWeight = CraterWeight;
@@ -211,8 +254,12 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 
 float AVoxelWorld::GetSafeSpawnHeightOffset() const
 {
-	// This can be made configurable if needed
-	return 350.0f;
+	// FIX: Use the configurable SafeSpawnHeightOffset property (default 1500cm).
+	// The old hardcoded 350cm placed the player's feet below the terrain surface
+	// because the surface height from noise is the top of solid voxels, and
+	// 350cm is less than one voxel height (100cm * capsule half-height 96cm = ~196cm
+	// minimum needed just to stand). 1500cm gives comfortable clearance.
+	return SafeSpawnHeightOffset;
 }
 
 // ============================================================
@@ -221,13 +268,15 @@ float AVoxelWorld::GetSafeSpawnHeightOffset() const
 
 void AVoxelWorld::RunVoxelTests()
 {
+	// Execute comprehensive voxel engine tests for debugging and validation
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Running voxel tests..."));
 
-	// Test 1: Check if density generator is working
+	// Test 1: Check if density generator is working correctly
 	{
 		static FVoxelDensityGenerator TestGen;
 		const FVoxelGenerationConfig& Config = GetEffectiveConfig();
 
+		// Test density calculation at a specific world position
 		float TestX = 1000.f, TestY = 2000.f, TestZ = 500.f;
 		float Density = TestGen.GetDensity(TestX, TestY, TestZ, Config);
 
@@ -235,15 +284,17 @@ void AVoxelWorld::RunVoxelTests()
 			TestX, TestY, TestZ, Density);
 	}
 
-	// Test 2: Check biome weights
+	// Test 2: Check biome weight distribution
 	{
+		// Test biome weight calculation at world origin
 		const FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(0.f, 0.f, GetEffectiveConfig());
 		UE_LOG(LogVoxelWorld, Log, TEXT("Test 2: Biome weights at origin - Forest:%.3f Peaks:%.3f Cliffs:%.3f Mesa:%.3f Craters:%.3f Desert:%.3f"),
 			Weights.Forest, Weights.Peaks, Weights.Cliffs, Weights.Mesa, Weights.Craters, Weights.Desert);
 	}
 
-	// Test 3: Check surface height
+	// Test 3: Check surface height calculation
 	{
+		// Test surface height calculation at world origin
 		float SurfaceH = GetTerrainHeight(0.f, 0.f);
 		UE_LOG(LogVoxelWorld, Log, TEXT("Test 3: Surface height at origin = %.2f cm"), SurfaceH);
 	}
@@ -253,10 +304,10 @@ void AVoxelWorld::RunVoxelTests()
 
 void AVoxelWorld::TestSmoothLODTransitions()
 {
+	// Test smooth LOD transition functionality
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Testing smooth LOD transitions..."));
 
-	// This test would create a test chunk and verify LOD transitions
-	// For now, just log the configuration
+	// Log LOD configuration for debugging
 	UE_LOG(LogVoxelWorld, Log, TEXT("LOD1Distance: %.2f, LOD2Distance: %.2f"), LOD1Distance, LOD2Distance);
 
 	// Test each loaded chunk's LOD transition capability

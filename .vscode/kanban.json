@@ -1,0 +1,67 @@
+{
+    "title": "Kanban 1",
+    "cols": [
+        {
+            "title": "Bugs",
+            "tasks": [
+                {
+                    "text": "Fix include path errors across voxel engine implementation files",
+                    "id": "fix-include-paths"
+                }
+            ],
+            "id": "dwqsb1dbngwcgrkvuwkcxswc",
+            "color": "#eb144c"
+        },
+        {
+            "title": "To-Do",
+            "tasks": [
+                {
+                    "text": "Review and optimize memory management in chunk streaming and water simulation",
+                    "id": "memory-management-review"
+                },
+                {
+                    "text": "Implement additional performance optimizations for chunk streaming and generation",
+                    "id": "performance-optimizations"
+                },
+                {
+                    "text": "Verify and improve thread safety in water simulation and chunk pooling",
+                    "id": "thread-safety-verification"
+                },
+                {
+                    "text": "Standardize error handling patterns across voxel engine components",
+                    "id": "error-handling-standardization"
+                },
+                {
+                    "text": "Refactor VoxelWorld.cpp for better code organization and maintainability",
+                    "id": "code-organization-refactor"
+                },
+                {
+                    "text": "Enhance configuration validation and error reporting",
+                    "id": "configuration-validation"
+                }
+            ],
+            "id": "b6x0dcdvehecx2k2atkytuba",
+            "color": "#fcb900"
+        },
+        {
+            "title": "Done",
+            "tasks": [
+                {
+                    "text": "Complete comprehensive documentation enhancement project",
+                    "id": "documentation-enhancement"
+                }
+            ],
+            "id": "kdm9zijnmgxwk8ksgztxiltj",
+            "color": "#00d084"
+        },
+        {
+            "title": "Doing",
+            "tasks": [],
+            "id": "os4bjanknkwk68zjpsu6x1iz",
+            "color": "#0693e3"
+        }
+    ],
+    "autosave": true,
+    "saveToFile": true,
+    "timestamp": 1773732694120
+}

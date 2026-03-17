@@ -41,13 +41,39 @@ struct FSkylandsLayerConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability")
     float BaseProbability = 0.06f;
 
-    // HeightProbabilityBonus: extra chance added proportional to terrain height.
-    // Over high mountains this pushes probability close to 1.
+    // HeightProbabilityBonus: max extra spawn chance added at peak altitude.
+    // The J-curve gates this behind the HighAltitudeThreshold so it only
+    // kicks in above mid-terrain, not linearly from the ground up.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability")
     float HeightProbabilityBonus = 0.70f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability")
     float RoughnessProbabilityBonus = 0.40f;
+
+    // --- J-Curve probability shape ---
+    // Mid-altitude suppression: a Gaussian dip centred at MidDipCenter
+    // carves probability down to near-zero at mid terrain heights so skylands
+    // don't appear over rolling hills — only over flat plains (shards) or
+    // dramatic peaks (islands).
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
+        meta=(ClampMin="0.0", ClampMax="1.0",
+              ToolTip="HeightNorm value where mid-altitude suppression is strongest (0=sea level, 1=MaxTerrainReference)."))
+    float ProbMidDipCenter = 0.35f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
+        meta=(ClampMin="0.01", ClampMax="0.5",
+              ToolTip="Width of the mid-altitude Gaussian dip. Larger = wider suppression band."))
+    float ProbMidDipWidth = 0.18f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
+        meta=(ClampMin="0.0", ClampMax="1.0",
+              ToolTip="Depth of the mid-altitude probability dip. 0.55 = suppresses ~55% of probability at the centre."))
+    float ProbMidDipDepth = 0.55f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
+        meta=(ClampMin="0.0", ClampMax="1.0",
+              ToolTip="HeightNorm above which the high-altitude probability surge begins."))
+    float ProbHighAltitudeThreshold = 0.50f;
 
     // --- Size ---
     // BaseIslandSize: minimum island radius in cm — tiny shards above flat terrain.
@@ -99,10 +125,26 @@ struct FSkylandsLayerConfig
 
     // --- Reference calibration ---
     // MaxTerrainReference: terrain height that maps to HeightNorm=1.
-    // Lowered so mid-height terrain (5000-15000cm) meaningfully contributes.
+    // Raised to match Peaks.HeightMax=25000.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="References")
-    float MaxTerrainReference = 12000.f;
+    float MaxTerrainReference = 25000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="References")
     float RoughnessReference = 0.8f;
+
+    // --- Shard / Island size scale ---
+    // ShardMinScale: size of the tiniest low-altitude shards as a fraction of
+    // BaseIslandSize.  0.08 = 8% = ~200cm radius over flat plains.
+    // Increase toward 0.2 for slightly bigger low-altitude rocks.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
+        meta=(ClampMin="0.01", ClampMax="0.5",
+              ToolTip="Minimum shard size as fraction of BaseIslandSize (0.08 = 8%)."))
+    float ShardMinScale = 0.08f;
+
+    // ShardTransitionStrength: upper bound of TerrainStrength that counts as
+    // 'low altitude shard'.  Raise toward 0.6 to make the transition smoother.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
+        meta=(ClampMin="0.1", ClampMax="0.9",
+              ToolTip="TerrainStrength value where shards fully transition to islands."))
+    float ShardTransitionStrength = 0.45f;
 };

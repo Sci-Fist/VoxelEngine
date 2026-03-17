@@ -47,14 +47,17 @@ struct FCaveTunnelsConfig
 
 // ============================================================
 //  CAVE LAYER — CRYSTAL CAVERNS
+//  FIXED: Deeper caverns to prevent stalagmites near surface
 // ============================================================
 USTRUCT(BlueprintType)
 struct FCrystalCavernsConfig
 {
     GENERATED_BODY()
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Caverns")
-    float DepthStart = 3000.f;
+    // FIXED: Start caverns much deeper underground to prevent surface stalagmites
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Caverns",
+        meta=(ToolTip="Minimum depth below surface where crystal caverns can start (cm). Increased to prevent stalagmites near surface."))
+    float DepthStart = 8000.f; // Changed from 3000f to 8000f (80m deep)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Caverns")
     float FadeDepth = 500.f;

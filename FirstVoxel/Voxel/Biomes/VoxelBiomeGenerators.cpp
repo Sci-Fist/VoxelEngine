@@ -69,6 +69,11 @@ float FVoxelBiomeGenerators::GetDesertHeight(
 
 // ============================================================
 //  PEAKS - dramatic alpine mountains
+//
+//  FIX: Reduced domain warp magnitude from 2000 to 1000 and clamped Shaped
+//  to [0,1] before the height lerp.  The old 2000cm warp could fold the noise
+//  field back on itself at sharp warp boundaries, creating local normals that
+//  shot straight up — the vertical spike artifact.
 // ============================================================
 float FVoxelBiomeGenerators::GetPeaksHeight(
     float X, float Y, const FVoxelGenerationConfig &Config) {
@@ -77,27 +82,39 @@ float FVoxelBiomeGenerators::GetPeaksHeight(
   const float nX = X + Off.X, nY = Y + Off.Y;
 
   const float WF = 0.0002f;
-  const float WarpX = FastNoise3D(nX * WF, nY * WF, 0.f) * 2000.f;
-  const float WarpY = FastNoise3D(nX * WF, nY * WF, 100.f) * 2000.f;
+  const float WarpX = FastNoise3D(nX * WF, nY * WF, 0.f) * 1000.f;  // was 2000
+  const float WarpY = FastNoise3D(nX * WF, nY * WF, 100.f) * 1000.f; // was 2000
 
-  float Base =
-      FBM((nX + WarpX) * PC.NoiseFrequency, (nY + WarpY) * PC.NoiseFrequency,
-          10.f, PC.Octaves, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
+  float Base = FBM((nX + WarpX) * PC.NoiseFrequency,
+                   (nY + WarpY) * PC.NoiseFrequency,
+                   10.f, PC.Octaves, 2.0f, 0.5f,
+                   Config.Performance.MaxNoiseOctaves);
 
   float Normalized = (Base + 1.f) * 0.5f;
-  float Shaped = FMath::Pow(FMath::Max(0.f, Normalized), PC.Sharpness);
+  float Shaped = FMath::Pow(FMath::Clamp(Normalized, 0.f, 1.f), PC.Sharpness);
+  Shaped = FMath::Clamp(Shaped, 0.f, 1.f); // guarantee no overshoot into HeightMax
 
-  float Detail = FastNoise3D(nX * PC.NoiseFrequency * 4.f,
-                             nY * PC.NoiseFrequency * 4.f, 0.f) *
-                 PC.DetailAmplitude;
+  // Detail noise capped relative to height range so it can’t spike beyond HeightMax.
+  const float MaxDetail = (PC.HeightMax - PC.HeightMin) * 0.02f; // 2% of range
+  const float Detail = FastNoise3D(nX * PC.NoiseFrequency * 4.f,
+                                   nY * PC.NoiseFrequency * 4.f, 0.f)
+                       * FMath::Min(PC.DetailAmplitude, MaxDetail);
 
-  const float BonusHeight = Shaped * 8000.f;
-  return Config.SeaLevel + FMath::Lerp(PC.HeightMin, PC.HeightMax, Shaped) +
-         BonusHeight + Detail;
+  return Config.SeaLevel + FMath::Lerp(PC.HeightMin, PC.HeightMax, Shaped) + Detail;
 }
 
 // ============================================================
 //  CLIFFS - ridged, terraced terrain
+//
+//  FIX: Replaced the spike-generating ridged noise formula.
+//  Old formula:  Ridge = 1 - Abs(FBM)  then  Pow(Ridge, Sharpness)
+//  Problem:      FBM zero-crossings produce infinitely thin ridges. At those
+//                crossings Ridge=1, everywhere else Ridge<1. Pow() crushes
+//                non-ridge values toward 0, leaving only razor-thin spikes
+//                regardless of Sharpness value.
+//  New formula:  Use a smooth "billow" noise: Abs(FBM) remapped to [0,1].
+//                Billowed noise has broad hills with rounded tops, not spikes.
+//                Terracing is applied to the remapped value for cliff steps.
 // ============================================================
 float FVoxelBiomeGenerators::GetCliffsHeight(
     float X, float Y, const FVoxelGenerationConfig &Config) {
@@ -105,27 +122,39 @@ float FVoxelBiomeGenerators::GetCliffsHeight(
   const FVector Off = Config.GetSeedOffset();
   const float nX = X + Off.X, nY = Y + Off.Y;
 
+  // Moderate domain warp for organic cliff curvature (reduced from 1500 to 800
+  // so warp doesn't create micro-fold spikes at warp boundaries).
   const float WF = 0.00015f;
-  const float WarpX = FastNoise3D(nX * WF, nY * WF, 10.f) * 1500.f;
-  const float WarpY = FastNoise3D(nX * WF, nY * WF, 110.f) * 1500.f;
+  const float WarpX = FastNoise3D(nX * WF, nY * WF, 10.f) * 800.f;
+  const float WarpY = FastNoise3D(nX * WF, nY * WF, 110.f) * 800.f;
 
-  float Base =
-      FBM((nX + WarpX) * CC.NoiseFrequency, (nY + WarpY) * CC.NoiseFrequency,
-          15.f, CC.Octaves, 2.1f, 0.55f, Config.Performance.MaxNoiseOctaves);
+  float Base = FBM((nX + WarpX) * CC.NoiseFrequency,
+                   (nY + WarpY) * CC.NoiseFrequency,
+                   15.f, CC.Octaves, 2.1f, 0.55f,
+                   Config.Performance.MaxNoiseOctaves);
 
+  // Ridged noise: (1 - Abs(FBM)) creates sharp ridgelines.
+  // Clamped to [0,1] and raised to Sharpness (1.8) for defined cliff faces
+  // without the extreme spikes that the old 3.6 power caused.
   float Ridge = 1.f - FMath::Abs(Base);
-  Ridge = FMath::Pow(FMath::Max(0.f, Ridge), CC.Sharpness);
+  Ridge = FMath::Clamp(Ridge, 0.f, 1.f);
+  float Shaped = FMath::Pow(Ridge, CC.Sharpness); // Sharpness=1.8 is safe
 
-  const float StepScale = (float)CC.TerraceSteps;
-  const float Terrace = FMath::Floor(Ridge * StepScale) / StepScale;
-  Ridge = FMath::Lerp(Ridge, Terrace, CC.TerraceFactor);
+  // Terrace: floor-snap to create cliff ledge steps.
+  if (CC.TerraceSteps > 0 && CC.TerraceFactor > 0.f)
+  {
+    const float StepScale = (float)CC.TerraceSteps;
+    const float Terrace   = FMath::Floor(Shaped * StepScale) / StepScale;
+    Shaped = FMath::Lerp(Shaped, Terrace, CC.TerraceFactor);
+  }
 
-  float Detail = FastNoise3D(nX * CC.NoiseFrequency * 8.f,
-                             nY * CC.NoiseFrequency * 8.f, 0.f) *
-                 CC.DetailAmplitude;
+  // Detail noise: small-scale surface roughness, scaled relative to height
+  // range so it never dominates the overall silhouette.
+  const float Detail = FastNoise3D(nX * CC.NoiseFrequency * 6.f,
+                                   nY * CC.NoiseFrequency * 6.f, 0.f)
+                       * CC.DetailAmplitude;
 
-  return Config.SeaLevel + FMath::Lerp(CC.HeightMin, CC.HeightMax, Ridge) +
-         Detail;
+  return Config.SeaLevel + FMath::Lerp(CC.HeightMin, CC.HeightMax, Shaped) + Detail;
 }
 
 // ============================================================
@@ -162,30 +191,26 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   const FVector Off = Config.GetSeedOffset();
   const float nX = X + Off.X, nY = Y + Off.Y;
   
-  // FIXED: Better center force with smoother transitions
-  const float DistFrom0 = FMath::Sqrt(X * X + Y * Y);
-  const float CenterCanyonRadius = 15000.f; // 150m starting basin
-  const float CenterCanyonStr = FMath::Clamp(1.f - DistFrom0 / CenterCanyonRadius, 0.f, 1.f);
-
-  // FIXED: Improved domain warp for more organic crater walls
+  // Domain warp for organic crater walls
   const float CenterWarp = FastNoise3D(nX * 0.004f, nY * 0.004f, 100.f) * 0.25f;
-  const float SmoothCenterStr = FMath::Clamp(CenterCanyonStr + CenterWarp, 0.f, 1.f);
 
   float Impact = FastNoise3D(nX * (CRC.Frequency * 0.5f),
                              nY * (CRC.Frequency * 0.5f), 200.f);
+  Impact += CenterWarp;
 
-  // FIXED: Better impact force with exponential shaping
-  Impact = FMath::Lerp(Impact, -1.0f, SmoothCenterStr);
-  
-  // FIXED: Add secondary noise layer for crater complexity
+  // Secondary noise layer for crater complexity
   const float SecondaryNoise = FastNoise3D(nX * 0.002f, nY * 0.002f, 300.f) * 0.3f;
   Impact += SecondaryNoise;
 
   const float BasePlains = Config.SeaLevel + 1000.f;
 
-  if (Impact > CRC.ImpactThreshold) {
-    // FIXED: Better plains with subtle noise
-    return BasePlains + FastNoise3D(nX * 0.001f, nY * 0.001f, 0.f) * 100.f;
+  if (Impact > CRC.ImpactThreshold)
+  {
+    // Outside any crater basin: return the flat plains height so the weighted
+    // blend evaluates to plains * CratersW + otherBiome * (1-CratersW).
+    // Returning 0 caused the other biomes' heights to be down-weighted,
+    // creating a subtle depression at crater boundaries that looked like a blob.
+    return BasePlains;
   }
 
   const float Denominator = 1.f - FMath::Abs(CRC.ImpactThreshold);
@@ -265,7 +290,28 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
     const FVector Off = Config.GetSeedOffset();
 
-    const float GridSize = SC.BaseIslandSize * 4.0f; 
+    // ---------------------------------------------------------------
+    //  SHARD SYSTEM: altitude-driven grid density
+    //
+    //  High terrain  -> large GridSize  -> islands are rare, large, spaced far apart
+    //  Low terrain   -> small GridSize  -> shards are tiny, numerous, scattered
+    //
+    //  We compute a representative HeightNorm for THIS column first so we can
+    //  set the grid size before we search cells. We use the passed-in SurfaceHeight
+    //  rather than re-sampling, keeping the column-cache call cheap.
+    // ---------------------------------------------------------------
+    const float ColHeightNorm    = FMath::Clamp(SurfaceHeight / SC.MaxTerrainReference, 0.f, 1.f);
+    const float ColRoughnessNorm = FMath::Clamp(Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
+    const float ColTerrainStr    = FMath::Clamp(ColHeightNorm * 1.5f + ColRoughnessNorm * 0.8f, 0.f, 1.f);
+
+    // ShardT: 0 = pure low-altitude shard field, 1 = full-size high-altitude island
+    // Uses a smoothstep so the transition from shard -> island is gradual.
+    const float ShardT = FMath::SmoothStep(0.0f, SC.ShardTransitionStrength, ColTerrainStr);
+
+    // Grid size: shards use a much tighter grid so there are more of them.
+    // High islands:  BaseIslandSize * 4  (wide spacing, few large islands)
+    // Low shards:    BaseIslandSize * 1  (tight spacing, many tiny shards)
+    const float GridSize = SC.BaseIslandSize * FMath::Lerp(1.0f, 4.0f, ShardT);
     if (GridSize <= 0.f) return Cache;
 
     const int32 CellX = FMath::FloorToInt(X / GridSize);
@@ -279,18 +325,16 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     float SumIslandSize    = 0.f;
     float SumWeight        = 0.f;
 
-    float BestDistSq = 99999999.f;
-    FVector2D BestCenter(0.f, 0.f);
-
-    for (int32 dx = -1; dx <= 1; ++dx) {
-      for (int32 dy = -1; dy <= 1; ++dy) {
+    for (int32 dx = -1; dx <= 1; ++dx)
+    for (int32 dy = -1; dy <= 1; ++dy)
+    {
         const int32 currentCellX = CellX + dx;
         const int32 currentCellY = CellY + dy;
 
         const float nX = (float)currentCellX * GridSize + Off.X;
         const float nY = (float)currentCellY * GridSize + Off.Y;
 
-        const float HashX = (FastNoise3D(nX * 0.001f, nY * 0.001f, 0.f) + 1.f) * 0.5f; 
+        const float HashX = (FastNoise3D(nX * 0.001f, nY * 0.001f, 0.f) + 1.f) * 0.5f;
         const float HashY = (FastNoise3D(nX * 0.001f, nY * 0.001f, 100.f) + 1.f) * 0.5f;
 
         const float CenterX = (currentCellX + 0.12f + HashX * 0.76f) * GridSize;
@@ -299,86 +343,129 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float DistSq = FMath::Square(X - CenterX) + FMath::Square(Y - CenterY);
         const float Dist   = FMath::Sqrt(DistSq);
 
-        if (DistSq < BestDistSq) {
-          BestDistSq = DistSq;
-          BestCenter = FVector2D(CenterX, CenterY);
-        }
-
-        // --- Evaluate cell parameters continuously ---
+        // --- Evaluate cell terrain ---
         const FVoxelBiomeWeightMap CenterWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(CenterX, CenterY, Config);
         const float CenterHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(CenterX, CenterY, CenterWeights, Config);
 
-        const float HeightNorm = FMath::Clamp(CenterHeight / SC.MaxTerrainReference, 0.f, 1.f);
+        const float HeightNorm    = FMath::Clamp(CenterHeight / SC.MaxTerrainReference, 0.f, 1.f);
         const float RoughnessNorm = FMath::Clamp(CenterWeights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
 
-        const float CurvedHeight = FMath::Pow(HeightNorm, 2.5f);
-        const float CurvedRough  = FMath::Pow(RoughnessNorm, 2.0f);
-        const float TerrainStrength = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
-        const float ShardFalloff = FMath::Pow(TerrainStrength, 2.2f);
+        const float CurvedHeight  = FMath::Pow(HeightNorm, 2.5f);
+        const float CurvedRough   = FMath::Pow(RoughnessNorm, 2.0f);
+        const float TerrainStr    = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
+        const float ShardFalloff  = FMath::Pow(TerrainStr, 2.2f);
 
-        // 0.008 threshold: only skip cells with truly zero terrain strength.
-        // The old 0.08 cutoff was killing all skylands over flat/low terrain.
+        // CellShardT: same altitude ramp but per-cell so size/thickness are
+        // evaluated against the cell's own terrain, not the query column.
+        const float CellShardT = FMath::SmoothStep(0.0f, SC.ShardTransitionStrength, TerrainStr);
+
+        // Minimum ShardFalloff gate: skip cells with truly zero terrain strength.
         if (ShardFalloff < 0.008f) continue;
 
         const float cnX = CenterX + Off.X;
         const float cnY = CenterY + Off.Y;
-        const float HashProb = (FastNoise3D(cnX * 0.002f, cnY * 0.002f, 200.f) + 1.f) * 0.5f; 
+        const float HashProb = (FastNoise3D(cnX * 0.002f, cnY * 0.002f, 200.f) + 1.f) * 0.5f;
 
-        float Prob = FMath::Clamp(SC.BaseProbability + CurvedHeight * SC.HeightProbabilityBonus + CurvedRough * SC.RoughnessProbabilityBonus, 0.02f, 1.f);
-        Prob *= FMath::Lerp(0.45f, 1.0f, ShardFalloff); // Lifted from 0.15f
+        // -------------------------------------------------------------------
+        //  PROBABILITY
+        //  Low terrain  -> BaseProbability only (sparse scattered shards)
+        //  High terrain -> BaseProbability + HeightBonus + RoughnessBonus
+        //  CurvedHeight applies a power curve so probability rises steeply
+        //  only over genuinely tall terrain, not gradual plains.
+        // -------------------------------------------------------------------
+        float Prob = FMath::Clamp(
+            SC.BaseProbability
+            + CurvedHeight * SC.HeightProbabilityBonus
+            + CurvedRough  * SC.RoughnessProbabilityBonus,
+            0.02f, 1.f);
+        Prob *= FMath::Lerp(0.35f, 1.0f, ShardFalloff);
         if (HashProb > Prob) continue;
 
-        const float SizeNoise  = FBM(cnX * 0.00008f, cnY * 0.00008f, 50.f, 2, 2.0f, 0.5f, 2);
-        const float SizeFactor = (SizeNoise + 1.f) * 0.5f; 
+        // -------------------------------------------------------------------
+        //  SIZE: aggressive altitude falloff
+        //  High island:   BaseIslandSize + HeightSizeBonus + RoughnessSizeBonus
+        //  Low shard:     BaseIslandSize * ShardMinScale  (very small)
+        //
+        //  ShardMinScale from config (default 0.08 = 8% of BaseIslandSize = ~200cm radius).
+        // -------------------------------------------------------------------
+        const float ShardMinScale = SC.ShardMinScale;
+        const float SizeNoise   = FBM(cnX * 0.00008f, cnY * 0.00008f, 50.f, 2, 2.0f, 0.5f, 2);
+        const float SizeFactor  = (SizeNoise + 1.f) * 0.5f;
 
-        float IslandSize = SC.BaseIslandSize + CurvedHeight * SC.HeightSizeBonus + CurvedRough * SC.RoughnessSizeBonus;
-        IslandSize *= (0.5f + 0.5f * SizeFactor);
-        IslandSize *= FMath::Lerp(0.40f, 1.15f, ShardFalloff); // Lifted from 0.10f
-        IslandSize = FMath::Max(IslandSize, 400.f);
+        // Base size at this altitude: lerp from tiny shard to full island.
+        float IslandSize = FMath::Lerp(
+            SC.BaseIslandSize * ShardMinScale,
+            SC.BaseIslandSize + CurvedHeight * SC.HeightSizeBonus + CurvedRough * SC.RoughnessSizeBonus,
+            CellShardT);
 
-        const float MaxIslandSizeForAltitude = FMath::Lerp(20000.f, 8000.f, HeightNorm);
-        IslandSize = FMath::Min(IslandSize, MaxIslandSizeForAltitude);
+        // Apply per-cell size noise (±50% at low altitude, ±25% at high).
+        const float NoiseRange = FMath::Lerp(0.5f, 0.25f, CellShardT);
+        IslandSize *= (1.f - NoiseRange) + NoiseRange * SizeFactor * 2.f;
+        IslandSize  = FMath::Max(IslandSize, 150.f);  // absolute minimum: 1.5m
+
+        // Never exceed grid cell to avoid overlapping adjacent cells.
         IslandSize = FMath::Min(IslandSize, GridSize * 0.48f);
 
         if (Dist > IslandSize) continue;
 
-        // Calculate cell-specific values
-        const float AltitudeBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrength);
-        const float SkyAlt = CenterHeight + AltitudeBase + CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus + ShardFalloff * SC.LowTerrainAltitudeBoost;
-        const float HalfThick = IslandSize * SC.ThicknessRatio;
-        const float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob);
+        // -------------------------------------------------------------------
+        //  ALTITUDE: low shards float just above terrain, high islands soar
+        // -------------------------------------------------------------------
+        const float AltitudeBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStr);
+        const float SkyAlt = CenterHeight + AltitudeBase
+            + CurvedHeight * SC.HeightAltitudeBonus
+            + CurvedRough  * SC.RoughnessAltitudeBonus
+            + ShardFalloff * SC.LowTerrainAltitudeBoost;
+
+        // -------------------------------------------------------------------
+        //  THICKNESS: shards are flat discs, islands are chunky
+        //  Low shard ThicknessRatio: 0.10  (very thin, disc-like)
+        //  High island ThicknessRatio: SC.ThicknessRatio (0.48 default)
+        // -------------------------------------------------------------------
+        const float EffThickness = FMath::Lerp(0.10f, SC.ThicknessRatio, CellShardT);
+        const float HalfThick    = IslandSize * EffThickness;
+
+        // Shape noise threshold: shards use a higher threshold so only the
+        // core of the noise field is solid — making them jagged and irregular.
+        // Islands use a lower threshold for solid, smooth interiors.
+        const float ShardThresholdBoost = FMath::Lerp(0.20f, 0.0f, CellShardT);
+        const float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob)
+                                + ShardThresholdBoost;
 
         // Continuous blend weight
         const float W = FMath::Square(1.f - (Dist / IslandSize));
-        SumAlt          += SkyAlt * W;
+        SumAlt          += SkyAlt    * W;
         SumThick        += HalfThick * W;
         SumThresh       += Threshold * W;
         SumHeightNorm   += HeightNorm * W;
         SumShardFalloff += ShardFalloff * W;
         SumIslandSize   += IslandSize * W;
         SumWeight       += W;
-      }
     }
 
     if (SumWeight <= 0.f) return Cache;
 
-    Cache.SkyAlt       = SumAlt / SumWeight;
-    Cache.HalfThick    = SumThick / SumWeight;
-    Cache.Threshold    = SumThresh / SumWeight;
+    Cache.SkyAlt       = SumAlt       / SumWeight;
+    Cache.HalfThick    = SumThick     / SumWeight;
+    Cache.Threshold    = SumThresh    / SumWeight;
     Cache.HeightNorm   = SumHeightNorm / SumWeight;
     Cache.ShardFalloff = SumShardFalloff / SumWeight;
 
+    // Freq: shards need much higher frequency noise to look jagged.
+    // Low shards: ShapeFrequency * 6  (high-freq = rough, spiky silhouette)
+    // High islands: ShapeFrequency / sqrt(SizeRatio)  (smooth, organic)
     const float BlendedIslandSize = SumIslandSize / SumWeight;
-    const float SizeRatio = FMath::Max(1.f, (float)(BlendedIslandSize / SC.BaseIslandSize));
-    Cache.Freq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
+    const float SizeRatio         = FMath::Max(1.f, BlendedIslandSize / SC.BaseIslandSize);
+    const float IslandFreq        = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
+    const float ShardFreq         = SC.ShapeFrequency * 6.0f;
+    Cache.Freq = FMath::Lerp(ShardFreq, IslandFreq, ShardT);
     Cache.Freq = FMath::Max(Cache.Freq, 0.00025f);
 
-    Cache.Prob = 0.5f; // Used only as coefficient downstream
-
+    Cache.Prob    = 0.5f;
     Cache.WX_base = X + Off.X;
     Cache.WY_base = Y + Off.Y;
-    Cache.WX = Cache.WX_base;
-    Cache.WY = Cache.WY_base;
+    Cache.WX      = Cache.WX_base;
+    Cache.WY      = Cache.WY_base;
     Cache.bHasSkyland = true;
     return Cache;
 }

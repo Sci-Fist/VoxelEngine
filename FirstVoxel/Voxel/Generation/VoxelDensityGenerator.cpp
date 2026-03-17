@@ -1,24 +1,31 @@
 // VoxelDensityGenerator.cpp
-// Composes the full 3-layer density field for any world-space coordinate.
-// This is the ONLY place where all three layers meet -- it keeps Surface,
-// Skylands, and Caves in clearly separated code blocks.
+// 
+// Core density field generator that composes the complete 3D voxel world.
+// This is the central orchestrator that combines all terrain generation layers
+// into a single signed distance field value for each world coordinate.
 //
-// PERFORMANCE IMPROVEMENTS over the previous version:
+// ARCHITECTURE OVERVIEW:
+// The generator follows a layered approach where each layer modifies the density
+// field in sequence. Later layers can override earlier ones, creating the final
+// terrain shape.
 //
-//   1. Config.GetSeedOffset() is now computed ONCE at the top of GetDensityFull()
-//      and the result is forwarded to every sub-system. Previously it ran the
-//      LCG hash 2-3 times per voxel (overhangs path + cave bedrock path +
-//      SampleCaveNoise internal call = up to 3 redundant hashes per voxel).
+// PERFORMANCE OPTIMIZATIONS:
+// 1. Seed Offset Caching: Config.GetSeedOffset() is computed once per voxel
+//    evaluation and reused across all sub-systems, eliminating redundant LCG
+//    hash calculations (previously 2-3 hashes per voxel).
 //
-//   2. GetSkylandDensity() is skipped entirely for voxels that lie below the
-//      lowest possible edge of any island band. That function is the most
-//      expensive noise call in the pipeline (multiple FBM passes + domain
-//      warping). For a typical ground-level chunk the early-out fires for
-//      every voxel, eliminating the call completely for that chunk.
+// 2. Skyland Early-Out: GetSkylandDensity() is skipped for voxels below the
+//    lowest possible island band, saving the most expensive noise evaluation
+//    for ground-level chunks where no skylands exist.
 //
-//   3. SampleCaveNoise() now accepts the pre-computed SeedOff vector rather
-//      than calling GetSeedOffset() internally, saving a 4th LCG hash for
-//      every below-surface solid voxel that has an active cave region.
+// 3. Pre-computed Seed Offsets: SampleCaveNoise() accepts pre-computed seed
+//    offsets to avoid redundant hash calculations in the cave generation path.
+//
+// LAYER PRIORITY (highest to lowest):
+// - Skylands: Always override air, create floating islands
+// - Surface: Base terrain with optional overhangs
+// - Caves: Carve tunnels and chambers (only in solid terrain)
+// - Bedrock: Force solid below bedrock depth
 
 #include "Generation/VoxelDensityGenerator.h"
 #include "FirstVoxel.h"

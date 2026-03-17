@@ -1,7 +1,21 @@
 // VoxelWorld_Generation.cpp
-// Implementation of world generation functions for AVoxelWorld.
-// This file contains the generation-related function implementations to reduce
-// the size of VoxelWorld.cpp and improve maintainability.
+// 
+// Core world generation implementation for the voxel engine.
+// Contains all generation-related functions separated from the main VoxelWorld class
+// to improve code organization and maintainability.
+//
+// GENERATION PIPELINE:
+// 1. World Discovery: Locate existing chunks and avoid overlap
+// 2. Bounds Calculation: Determine generation area centered on world location
+// 3. Chunk Queueing: Sort chunks by distance for optimal generation order
+// 4. Async Generation: Spawn chunks with proper configuration and threading
+// 5. Player Spawning: Position player in appropriate biome with safety checks
+//
+// PERFORMANCE FEATURES:
+// - Editor vs Game threading differences
+// - Chunk pooling for memory efficiency
+// - Async generation with proper completion callbacks
+// - Smart bounds calculation to prevent excessive generation
 
 #include "VoxelWorld.h"
 #include "Voxel/Core/World/Water/VoxelWorldWater.h"
@@ -21,6 +35,9 @@
 #include "Kismet/GameplayStatics.h"
 #include "DrawDebugHelpers.h"
 #include "Misc/DateTime.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 
 
 // ============================================================
@@ -48,23 +65,34 @@ void AVoxelWorld::GenerateWorldDeferred()
 	TArray<AActor*> PlayerStarts;
 	UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
 	
+	// If bForceCraterSpawn is enabled, find the best crater spot near the
+	// PlayerStart BEFORE queuing chunks so the entire generation is centred on
+	// the crater rather than on the fixed editor PlayerStart position.
+	// This prevents the "always same mountain at spawn" issue caused by always
+	// anchoring generation to the same hard-coded PlayerStart XY in the editor.
 	if (bForceCraterSpawn)
 	{
-		// Force CandidatePos to Center Crater Origin (0,0)
-		CandidatePos.X = 0.f;
-		CandidatePos.Y = 0.f;
+		// Always search from world origin (0,0) — NOT from the PlayerStart's
+		// current position. The PlayerStart gets moved each generation, so
+		// using it as the search base makes every run find the same relative
+		// crater from the last run's position. Searching from (0,0) with the
+		// new seed means every generation scans fresh and finds a different crater.
+		const FVoxelGenerationConfig& Cfg = GetEffectiveConfig();
+		const FVector SearchOrigin(0.f, 0.f, 0.f);
+		CandidatePos   = FindCraterSpawnLocation(SearchOrigin, Cfg);
+		CandidatePos.Z = 0.f;
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Crater spawn at %s (seed %d)"), *CandidatePos.ToString(), Cfg.Seed);
 
-		// Move PlayerStart to (0,0) so the player actually spawns there in Play mode!
+		// Move PlayerStart to the found crater XY so UE's GameMode spawns the
+		// pawn near the right place before ProcessInitialPlayerSpawn fires.
 		if (PlayerStarts.Num() > 0 && PlayerStarts[0])
 		{
-			if (PlayerStarts[0]->GetRootComponent()) {
+			if (PlayerStarts[0]->GetRootComponent())
 				PlayerStarts[0]->GetRootComponent()->SetMobility(EComponentMobility::Movable);
-			}
-			FVector StartPos = PlayerStarts[0]->GetActorLocation();
-			StartPos.X = 0.f;
-			StartPos.Y = 0.f;
-			PlayerStarts[0]->SetActorLocation(StartPos, false, nullptr, ETeleportType::TeleportPhysics);
-			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: bForceCraterSpawn enabled - Moving PlayerStart to (0,0) for Play mode alignment."));
+			FVector PSPos = PlayerStarts[0]->GetActorLocation();
+			PSPos.X = CandidatePos.X;
+			PSPos.Y = CandidatePos.Y;
+			PlayerStarts[0]->SetActorLocation(PSPos, false, nullptr, ETeleportType::TeleportPhysics);
 		}
 	}
 	else if (PlayerStarts.Num() > 0 && PlayerStarts[0])
@@ -423,28 +451,25 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	if (!Player) return;
 
 	const FVoxelGenerationConfig& Config = GetEffectiveConfig();
-	FVector Pos = Player->GetActorLocation();
-	Pos = SnapToVoxelGrid(Pos);
-	
-	// FIXED: Always center spawn at world origin (0,0) when bForceCraterSpawn is enabled
-	if (bForceCraterSpawn)
+
+	// FIX: Do NOT use Player->GetActorLocation() here.
+	// The player was parked at Z=100,000 in BeginPlay, so its XY is 0,0 —
+	// which may not be where the PlayerStart actually is.
+	// Instead, read XY from the PlayerStart actor so spawn height is sampled
+	// at the correct world position.
+	// Read XY from the PlayerStart — GenerateWorldDeferred already moved it
+	// to the best crater position for this seed, so we just use that directly.
+	// Do NOT re-run FindCraterSpawnLocation here; it would search again from
+	// the PlayerStart's new position and potentially drift to a different crater.
+	FVector Pos = FVector::ZeroVector;
+	TArray<AActor*> PlayerStarts;
+	UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
+	if (PlayerStarts.Num() > 0 && PlayerStarts[0])
 	{
-		Pos.X = 0.f;
-		Pos.Y = 0.f;
-		// Move PlayerStart to match so Play mode spawns correctly
-		TArray<AActor*> PlayerStarts;
-		UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
-		if (PlayerStarts.Num() > 0 && PlayerStarts[0])
-		{
-			if (PlayerStarts[0]->GetRootComponent()) {
-				PlayerStarts[0]->GetRootComponent()->SetMobility(EComponentMobility::Movable);
-			}
-			FVector StartPos = PlayerStarts[0]->GetActorLocation();
-			StartPos.X = 0.f;
-			StartPos.Y = 0.f;
-			PlayerStarts[0]->SetActorLocation(StartPos, false, nullptr, ETeleportType::TeleportPhysics);
-		}
+		Pos = PlayerStarts[0]->GetActorLocation();
 	}
+	Pos.Z = 0.f; // Z will be determined from surface height below
+	Pos = SnapToVoxelGrid(Pos);
 	
 	// FIXED: Calculate proper spawn height based on terrain
 	const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Config);
@@ -455,12 +480,16 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	const float SafeOffset = GetSafeSpawnHeightOffset();
 	float TargetZ = Surface + SafeOffset;
 	
-	// FIXED: Better crater handling - if we're in a crater, spawn at rim height
+	// Crater spawn: place player on the crater floor with a comfortable offset.
+	// Surface here is the blended height which for a crater center is the FLOOR
+	// of the basin (negative depth from BasePlains). We add SafeOffset so the
+	// player stands on the floor rather than spawning inside it.
 	const float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
 	if (CraterWeight > 0.3f)
 	{
-		// Spawn at crater rim height for better visibility
-		TargetZ = Surface + 2000.f;
+		// Surface already gives us the crater floor height from the noise blend.
+		// Just add normal safe offset — don't jump to rim height.
+		TargetZ = Surface + SafeOffset;
 	}
 	
 	// FIXED: Check for skylands and adjust if needed
@@ -492,7 +521,27 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 		}
 	}
 
-	// FIXED: Set final player position immediately with proper teleport
+	// Restore the player that was frozen in BeginPlay.
+	Player->SetActorHiddenInGame(false);
+	ACharacter* SpawnChar = Cast<ACharacter>(Player);
+	if (SpawnChar && SpawnChar->GetCharacterMovement())
+	{
+		SpawnChar->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+	}
+
+	// Re-capture viewport input focus so the player can move immediately
+	// without needing to left-click first. DisableMovement() + the hidden-pawn
+	// period causes UE to lose viewport focus; we restore it explicitly here.
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		FInputModeGameOnly GameInputMode;
+		PC->SetInputMode(GameInputMode);
+		PC->SetShowMouseCursor(false);
+		// FlushPressedKeys clears any stale held-key state accumulated
+		// during the frozen period so movement doesn't "lurch" on restore.
+		PC->FlushPressedKeys();
+	}
+
 	Pos.Z = TargetZ;
 	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
 	

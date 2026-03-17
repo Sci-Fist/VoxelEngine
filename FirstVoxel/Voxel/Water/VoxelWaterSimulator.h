@@ -1,16 +1,41 @@
 // VoxelWaterSimulator.h  [canonical location: Voxel/Water/]
-// Cellular-automata voxel water simulation.
-//
+// 
+// Cellular-automata voxel water simulation system.
+// 
+// ARCHITECTURE OVERVIEW:
+// This class implements a physics-based water simulation system using cellular
+// automata principles to create realistic water flow and pooling behavior.
+// 
+// SIMULATION PRINCIPLES:
+// The system operates on a voxel grid where each cell can hold water at different
+// levels (0-255). Water follows basic physics rules to create emergent flow patterns.
+// 
 // SIMULATION RULES (run by Step() on a fixed timer from AVoxelWorld)
-//   1. Source cells are forced to WATER_FULL at the start of every step.
-//   2. FALL:   if the cell below is air and not full, water falls into it.
-//   3. SPREAD: if below is blocked, water flows laterally to lower neighbours.
-//   4. EVAPORATE: water leaving a loaded chunk boundary is discarded.
-//
+//   1. **Source Management**: Source cells are forced to WATER_FULL at the start
+//      of every step, maintaining constant water sources like springs or rain
+//   2. **Gravity (FALL)**: If the cell below is air and not full, water falls
+//      into it due to gravity
+//   3. **Flow (SPREAD)**: When blocked below, water flows laterally to lower
+//      neighboring cells, creating natural spreading and pooling
+//   4. **Boundary Handling**: Water leaving a loaded chunk boundary is discarded
+//      to prevent memory leaks and maintain simulation integrity
+// 
+// PERFORMANCE CHARACTERISTICS:
+// - Fixed-step simulation for deterministic behavior
+// - Chunk-based registration for memory efficiency
+// - Dirty chunk tracking to minimize mesh rebuild overhead
+// - Thread-safe design with GameThread-only access
+// 
+// INTEGRATION:
+// - Works with AVoxelChunk's water mesh system for rendering
+// - Integrates with FVoxelWaterData for per-chunk state management
+// - Provides callbacks for mesh updates when water changes occur
+// 
 // THREAD SAFETY
 //   All public methods must be called from the GameThread.
 //   The simulator holds raw pointers into FVoxelWaterData structs owned by
-//   AVoxelChunk; those structs must outlive their registration.
+//   AVoxelChunk; those structs must outlive their registration to prevent
+//   dangling pointer issues.
 #pragma once
 
 #include "CoreMinimal.h"

@@ -1,7 +1,31 @@
 // VoxelBiomeManager.h
-// Manages the 2D distribution of surface biomes and computes blended terrain heights.
-// This class is intentionally surface-only. Skylands and Crystal Caverns are separate
-// layers handled entirely within FVoxelDensityGenerator.
+// 
+// Core biome distribution system for 2D surface terrain generation.
+// 
+// ARCHITECTURE OVERVIEW:
+// This class manages the procedural distribution of surface biomes across the
+// 2D world plane using orthogonal noise fields. It computes biome weights and
+// blended terrain heights for the surface layer only.
+// 
+// DESIGN PHILOSOPHY:
+// - Surface-only focus: Skylands and Crystal Caverns are handled separately
+//   in FVoxelDensityGenerator to maintain clear layer separation
+// - Noise-driven distribution: Uses temperature and erosion noise fields
+//   for natural biome transitions
+// - Weight-based blending: Biome weights sum to 1.0 for smooth transitions
+// - Performance optimized: Caches seed offsets and avoids redundant calculations
+// 
+// BIOME SYSTEM:
+// The system uses two primary noise dimensions to create natural biome
+// distributions:
+// - Temperature axis: Controls climate-based biomes (cold to hot)
+// - Erosion axis: Controls terrain roughness (flat to rugged)
+// 
+// INTEGRATION:
+// - Works with FVoxelDensityGenerator for complete terrain generation
+// - Provides biome weights for material assignment and foliage placement
+// - Supports per-biome configuration overrides and water settings
+// - Integrates with spawn system for biome-specific player placement
 #pragma once
 
 #include "CoreMinimal.h"

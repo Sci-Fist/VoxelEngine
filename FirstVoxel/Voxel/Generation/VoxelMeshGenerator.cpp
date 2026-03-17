@@ -304,24 +304,29 @@ void FVoxelMeshGenerator::GenerateMesh(
 		return ColumnColors[CX + CY * S];
 	};
 
-	// World-space UV tiling: Triplanar-Style normal weighted projection to prevent cliff stretching.
+	// World-space UV: true triplanar blend — no hard axis switch, no seams.
+	// Each of the three planar projections is weighted by pow(|N|, sharpness)
+	// so the blend is smooth across the entire flat-to-slope transition range.
 	auto MakeUV = [&](const FVector& VLocal, const FVector& Norm) -> FVector2D
 	{
 		const FVector VWorld = ChunkOrigin + VLocal;
 		const float s = InVoxelSize * 4.f;
-		
-		if (FMath::Abs(Norm.Z) > 0.65f)
-		{
-			return FVector2D(VWorld.X / s, VWorld.Y / s);
-		}
-		else if (FMath::Abs(Norm.X) > FMath::Abs(Norm.Y))
-		{
-			return FVector2D(VWorld.Y / s, VWorld.Z / s);
-		}
-		else
-		{
-			return FVector2D(VWorld.X / s, VWorld.Z / s);
-		}
+
+		// Blend weights: raise abs(normal component) to a power for sharper blending.
+		// Power 4 gives a clean blend that still transitions smoothly at 45-degree slopes.
+		const float BlendSharpness = 4.f;
+		float wX = FMath::Pow(FMath::Abs(Norm.X), BlendSharpness);
+		float wY = FMath::Pow(FMath::Abs(Norm.Y), BlendSharpness);
+		float wZ = FMath::Pow(FMath::Abs(Norm.Z), BlendSharpness);
+		const float wSum = wX + wY + wZ + 1e-6f;
+		wX /= wSum;  wY /= wSum;  wZ /= wSum;
+
+		// Three planar UVs (scaled the same as before)
+		const FVector2D uvX(VWorld.Y / s, VWorld.Z / s); // projected along X
+		const FVector2D uvY(VWorld.X / s, VWorld.Z / s); // projected along Y
+		const FVector2D uvZ(VWorld.X / s, VWorld.Y / s); // projected along Z (top-down)
+
+		return uvX * wX + uvY * wY + uvZ * wZ;
 	};
 
 	// Emit one triangle into the correct mesh section.

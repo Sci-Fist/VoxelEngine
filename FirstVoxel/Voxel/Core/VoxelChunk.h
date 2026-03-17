@@ -23,10 +23,36 @@ class AVoxelChunk;
 
 /**
  * AVoxelChunk represents a single cubic segment of the procedural world.
- * It owns the ProceduralMeshComponent responsible for rendering the terrain
- * and dispatches background tasks (FVoxelGeneratorTask) to calculate the density field.
- * Once generation finishes on a worker thread, this class builds the final mesh
- * and spawns dynamic foliage instances on the GameThread.
+ * 
+ * ARCHITECTURE OVERVIEW:
+ * This class is the core building block of the voxel engine, responsible for:
+ * 
+ * 1. **Terrain Generation**: Dispatches background tasks to calculate density fields
+ *    using the configured density generator (surface + skylands + caves)
+ * 
+ * 2. **Mesh Construction**: Converts density data into renderable ProceduralMeshComponent
+ *    using Marching Cubes algorithm with material blending
+ * 
+ * 3. **LOD Management**: Supports multiple detail levels for performance optimization
+ *    with smooth transitions between LOD levels
+ * 
+ * 4. **Foliage System**: Spawns trees, grass, and other vegetation based on biome
+ *    configuration and terrain properties
+ * 
+ * 5. **Water Simulation**: Manages voxel water data and renders translucent water surfaces
+ * 
+ * 6. **Memory Management**: Implements chunk pooling for efficient memory usage
+ * 
+ * THREADING MODEL:
+ * - Generation tasks run on background threads via FVoxelGeneratorTask
+ * - Mesh upload and foliage spawning occur on GameThread
+ * - Thread-safe state management prevents race conditions
+ * 
+ * PERFORMANCE FEATURES:
+ * - Configurable chunk size and voxel resolution
+ * - Multi-level LOD with smooth transitions
+ * - Instanced Static Mesh Components for efficient foliage rendering
+ * - Water mesh separation for optimal material blending
  */
 UCLASS()
 class FIRSTVOXEL_API AVoxelChunk : public AActor
