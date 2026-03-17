@@ -1,5 +1,5 @@
 {
-    "title": "Kanban 1",
+    "title": "Voxel Engine",
     "cols": [
         {
             "title": "Information",
@@ -90,5 +90,5 @@
     ],
     "autosave": true,
     "saveToFile": true,
-    "timestamp": 1773739574685
+    "timestamp": 1773739922050
 }
