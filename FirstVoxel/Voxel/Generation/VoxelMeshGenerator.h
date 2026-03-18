@@ -16,25 +16,41 @@
 //  PASS 2 — Quad emission
 //    For every axis-aligned edge that crosses the isosurface, emit a quad
 //    connecting the four cells sharing that edge. Three loops cover X, Y, Z
-//    edges. bD0Solid determines winding so the front face always points into air.
+//    edges. bD0Solid + Axis determine winding so the front face always points
+//    into air (see WINDING ORDER below).
+//
+// -- WINDING ORDER ------------------------------------------------------------
+//
+//  The canonical quad vertex order (i0, i1, i2, i3) is constructed so that
+//  CrossProduct(v1-v0, v2-v0) points in the -Axis direction for ideal grid
+//  vertices.  Therefore:
+//
+//    bD0Solid = true  (D0 solid, air on D1 side) → face must point +Axis
+//               → emit (v2, v1, v0)   REVERSED winding
+//    bD0Solid = false (D1 solid, air on D0 side) → face must point -Axis
+//               → emit (v0, v1, v2)   CANONICAL winding
+//
+//  This rule is DETERMINISTIC — it does not use the actual vertex positions.
+//  Previous code used CrossProduct on actual positions, which failed on
+//  curved terrain because Surface Nets vertices deviate from grid centres
+//  enough to flip the cross-product sign, randomly back-facing some quads
+//  ("checkerboard on slopes" artifact).
 //
 // -- FLAT vs SLOPE CLASSIFICATION ---------------------------------------------
 //
-//  Each quad's geometric face normal (cross-product of diagonals) is tested
-//  against Config.SlopeThreshold (default 0.7 ≈ 45°):
-//    abs(GeomNormal.Z) >= SlopeThreshold → FlatMesh  (grass / dirt material)
-//    abs(GeomNormal.Z) <  SlopeThreshold → SlopeMesh (cliff / rock material)
-//
-//  The classification uses the GEOMETRIC normal, not the averaged per-cell
-//  density-gradient normals. Gradient normals are smooth interpolants for
-//  lighting; they do not reliably indicate the face's actual orientation.
+//  Each quad's outward normal is known from Axis + bD0Solid (see above).
+//  This is tested against Config.SlopeThreshold (default 0.7 ≈ 45°):
+//    abs(OutwardNormal.Z) >= SlopeThreshold → FlatMesh  (grass / dirt material)
+//    abs(OutwardNormal.Z) <  SlopeThreshold → SlopeMesh (cliff / rock material)
 //
 // -- NORMALS ------------------------------------------------------------------
 //
 //  ComputeNormal() returns the negative density gradient (central differences),
-//  which points OUT of solid (into air) — correct for outward-facing normals.
-//  Backface triangles keep the same per-vertex normals but have flipped winding
-//  so they shade the underside of the terrain from inside.
+//  which points OUT of solid (into air) — correct for smooth vertex normals.
+//  These are per-vertex lighting normals, not the geometric face normal used
+//  for winding/classification.
+//  Backface triangles flip winding only; normals are preserved pointing inward
+//  (into solid) so the underside of terrain shades correctly from inside.
 //
 // -- VERTEX COLOR ENCODING ----------------------------------------------------
 //
@@ -43,17 +59,21 @@
 //
 // -- UV PROJECTION ------------------------------------------------------------
 //
-//  MakeUV() selects the projection axis from the geometric face normal:
+//  MakeUV() selects the projection axis from the outward normal:
 //    Top/bottom faces   → XY projection (no stretch on flat ground)
 //    East/West walls    → YZ projection
 //    North/South walls  → XZ projection
 //
 // -- MESH POST-PROCESSING -----------------------------------------------------
 //
-//  FlattenMeshTops() post-processes the generated mesh to ensure top-facing
-//  surfaces (FlatMesh vertices with normal.Z > 0.9) are truly horizontal.
-//  This improves walkability on voxel terrain by eliminating slight edge
-//  variations that cause non-walkable floor normals.
+//  FlattenMeshTops() snaps top-facing vertices (normal.Z > 0.9) to the
+//  local neighbourhood maximum Z.  Improves walkability by eliminating slight
+//  height variation that causes non-walkable floor normals.
+//
+//  Implementation: O(V) 2D spatial grid (bucket map keyed on grid cell).
+//  Pass 1 builds max-Z per cell; Pass 2 looks up each vertex's 3×3 cells
+//  (9 lookups) and snaps.  The old O(V²) brute-force search caused
+//  ~48 M comparisons when 12 background tasks ran concurrently.
 //
 // -- THREAD SAFETY ------------------------------------------------------------
 //

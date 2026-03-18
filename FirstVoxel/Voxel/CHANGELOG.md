@@ -2,6 +2,55 @@
 
 ---
 
+## [Unreleased] — 2026-03-18
+
+### Skylands & Shards
+- **Shard shape rewrite** (`VoxelBiomeGenerators.cpp`): sky-shards now look like floating boulders instead of vertical pillar slabs.
+  - `EffThickness`: shard value raised from `0.10` → `0.65` so `HalfThick ≈ 65%` of radius — a near-spherical boulder aspect instead of a 1-voxel-thin pancake.
+  - `MaxThicknessRatio`: shards use `0.75` (sphere-friendly); islands keep `SC.MaxThicknessRatio` (flat disc). Was a single value for both types.
+  - **Falloff shape** (`GetSkylandDensityFromCache`): shards now use a symmetric spherical falloff (`SmoothStep(1 - |tCenter|^0.6)`) with no flat zone. Islands keep the old flat-top (35% plateau + smooth taper). Blended by `Cache.ShardT`.
+  - **Z noise frequency** for shards: `0.50×` Freq (was always `0.05×`). Higher Z variation gives irregular lumpy boulder surfaces.
+  - **BreakUp strength** for shards: `0.10` (was `0.50`). Excess breakup on thin shapes stripped material off all sides leaving spike tips.
+  - **Size by altitude**: shards now scale with how far they float above local terrain (`AltSizeScale = clamp(AltGap/MinAlt, 0.4, 3.0)`), so high-flying shards are dramatically large and low shards are pebbles.
+  - **`Cache.ShardT`** added to `FSkylandColumnCache` header to drive all of the above blends.
+- **Clearance buffers removed** (`GetSkylandColumnCache`): both 200 cm clearance checks commented out. They were double-offsetting altitude (stacking on top of `MinAltitudeAboveTerrain`) and clamping `HalfThick` too aggressively, causing shards to revert to thin slabs and islands to clip into high terrain.
+
+### Crater Pillar Fix
+- **`GetCraterHeight` fully rewritten** (`VoxelBiomeGenerators.cpp`): eliminated the hard `if/else` zone switches at `NormDepth > 0.45 / 0.30 / 0.15` that produced C0 discontinuities in the height field. Surface Nets generates a vertical column at every such kink — the tall thin pillars visible at spawn.
+  - New formula: bell-curve rim (`SmoothStep` quadratic centred at `NormDepth=0.25`) + `SmoothStep` floor descent. Height field is now C1-continuous everywhere.
+  - `Depth * 8.0f` multiplier removed — was turning `Depth=-4000` into a 320 m deep crater. Now `Depth` is used 1:1.
+- **`FCraterBiomeConfig` defaults tightened** (`SurfaceBiomesConfig.h`):
+  - `Depth`: `-4000` → `-1200` (12 m with 1:1 multiplier)
+  - `RimHeight`: `6000` → `1800`
+  - `RimNoiseAmplitude`: `4000` → `500` (was the direct cause of 40 m rim spikes)
+  - `ShapeDistortion`: `0.5` → `0.20`; `BorderIrregularity`: `0.8` → `0.30`
+  - `BuildingNoiseAmplitude`: `300` → `200`
+
+### Mesh Winding Fix — checkerboard on slopes
+- **Deterministic quad winding** (`VoxelMeshGenerator.cpp` `EmitQuad`): replaced runtime cross-product winding detection with a purely deterministic rule based on `bD0Solid` and `Axis`.
+  - **Root cause**: the canonical quad vertex order `(i0, i1, i2, i3)` produces `CrossProduct(v1-v0, v2-v0)` pointing in `-Axis` in the ideal grid case. On curved terrain Surface Nets vertices deviate from grid positions enough to flip this cross-product, randomly emitting some quads back-face-forward — the checkerboard pattern visible on steep slopes.
+  - **Fix**: `bD0Solid=true` → always emit `(v2,v1,v0)` (reversed); `bD0Solid=false` → always emit `(v0,v1,v2)` (canonical). No vertex positions involved.
+
+### Performance
+- **O(N) dirty-chunk scan eliminated** (`VoxelWorld.cpp`): replaced full `LoadedChunks` loop every frame with a `DirtyRebuildQueue` (`TArray<FIntVector>`). Only populated via `MarkChunkDirty()`. Normal play costs zero per frame.
+- **`MarkChunkDirty(Coord)`** added to `AVoxelWorld` (`VoxelWorld.h/.cpp`) as the correct API for dirtying a chunk from player edits.
+- **Double `StreamingTimer` increment fixed** (`VoxelWorld_Streaming.cpp`): `UpdateChunkStreaming` was incrementing `StreamingTimer` itself in addition to the increment in `Tick`, firing streaming at ~2× the intended rate.
+- **Spawn wait radius**: `RadiusXY=8` (867 chunks, 30+ s load screen) → `RadiusXY=1` (27 chunks, near-instant).
+- **Queue compaction threshold**: `50` → `256` — reduces O(N) `RemoveAt` frequency from every ~6 ticks to every ~32 ticks.
+- **LOD without `sqrt`** (`VoxelWorld_Streaming.cpp`): pre-squared `L1ISq`, `L2ISq` thresholds; compare `DistSq` directly. Eliminates ~500 `sqrt()` calls per streaming update.
+- **Cached `SkyAltWorld`** (`VoxelWorld.h/.cpp + VoxelWorld_Streaming.cpp`): biome noise for skyland altitude now only recomputed when player moves > 1000 cm. Was running full `GetWeightsAndSurfaceHeightStatic` every 0.25 s regardless.
+- **`EmptyChunks` set pruned** on chunk removal (`VoxelWorld_Streaming.cpp`): was growing unboundedly across long sessions.
+- **`FlattenMeshTops` O(V²) → O(V)** (`VoxelMeshGenerator.cpp`): replaced brute-force neighbour search with a 2D spatial grid (bucket map). Reduces 4 M comparisons per 2000-vertex chunk to ~18 lookups per vertex.
+- **Foliage surface height cached** (`VoxelGeneratorTask.h/.cpp`): `CalculateFoliage` now reads `ColumnSurfaceH[]` built during the density pass instead of re-calling `GetSurfaceHeightStatic` per column — eliminates a full biome noise evaluation per column in the foliage path.
+- **Spawn height raised**: `SafeSpawnHeightOffset` default `3000` → `8000` cm (80 m) so the player always drops from above terrain on steep peaks and crater rims.
+
+### Documentation
+- **`ARCHITECTURE.md`** updated: generation pipeline diagram expanded to show `DirtyRebuildQueue`, `UpdateChunkStreaming` sub-steps, `FlattenMeshTops`, and `UploadSection` for both flat and slope meshes. New sections: crater C1 formula, skyland/shard property table, `MarkChunkDirty` how-to. LOD section updated to mention `DistSq` approach and `CachedSkyAltWorld`. Threading section updated with dirty-queue note. Date updated to 2026-03-18.
+- **`VoxelMeshGenerator.h`** header updated with winding-fix note.
+- **`VoxelBiomeGenerators.h`** header updated with shard/island shape system documentation.
+
+---
+
 ## [Unreleased] — 2026-03-17 (continued)
 
 ### Pause Menu (`UI/VoxelPauseMenu.h/.cpp`)

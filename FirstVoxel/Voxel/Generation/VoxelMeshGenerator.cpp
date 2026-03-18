@@ -234,11 +234,8 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const float   s      = InVoxelSize * 4.f;
 		const FVector AN     = FaceNorm.GetAbs();
 
-		if (AN.Z >= AN.X && AN.Z >= AN.Y)
-			return FVector2D(VWorld.X / s, VWorld.Y / s);   // top/bottom face
-		if (AN.X >= AN.Y)
-			return FVector2D(VWorld.Y / s, VWorld.Z / s);   // east/west wall
-		return FVector2D(VWorld.X / s, VWorld.Z / s);        // north/south wall
+		return FVector2D(VWorld.X / s, VWorld.Y / s);   // continuous top-down project
+
 	};
 
 
@@ -313,45 +310,56 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const FVector& v2 = CellVertices[i2]; const FVector& n2 = CellNormals[i2];
 		const FVector& v3 = CellVertices[i3]; const FVector& n3 = CellNormals[i3];
 
-		// FIX 3: Outward normal is forced based on solid side and edge axis.
-		// D0 is at lower coordinate, D1 at higher.
-		// If D0 is solid (bD0Solid=true), air is at D1 -> normal is +Axis.
-		// If D1 is solid (bD0Solid=false), air is at D0 -> normal is -Axis.
+		// Outward normal: D0 is at the lower coordinate, D1 at the higher.
+		// If D0 solid -> air is on the D1 side -> face points +Axis.
+		// If D1 solid -> air is on the D0 side -> face points -Axis.
 		const FVector OutwardNormal = bD0Solid ? Axis : -Axis;
 
-		// Classify flat vs slope using the geometric normal vector's Z component.
-		const float   SlopeThresh = Config.SlopeThreshold;
-		const bool    bIsFlat     = FMath::Abs(OutwardNormal.Z) >= SlopeThresh;
+		// Classify flat vs slope from the outward normal's Z component.
+		const float SlopeThresh = Config.SlopeThreshold;
+		const bool  bIsFlat     = FMath::Abs(OutwardNormal.Z) >= SlopeThresh;
 
-		FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh  : OutMesh.SlopeMesh;
-		FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh  : OutMesh.SlopeBackMesh;
+		FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
+		FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh : OutMesh.SlopeBackMesh;
 
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
-		// Determine if the triangulation (v0, v1, v2) is Counter-Clockwise
-		// with respect to the OutwardNormal.
-		const FVector TriNormal = FVector::CrossProduct(v1 - v0, v2 - v0).GetSafeNormal();
-		const bool bIsCCW = FVector::DotProduct(TriNormal, OutwardNormal) > 0.0f;
-
-		if (bIsCCW)
+		// ---------------------------------------------------------------
+		// WINDING FIX: use a DETERMINISTIC rule, not the cross-product.
+		//
+		// The canonical quad order (i0, i1, i2, i3) is built so that
+		// the cross-product (v1-v0)x(v2-v0) always points in the -Axis
+		// direction in the ideal grid case.  When bD0Solid=true the face
+		// must point +Axis, so we need the REVERSED winding (v2,v1,v0).
+		// When bD0Solid=false the face must point -Axis, so the canonical
+		// winding (v0,v1,v2) is already correct.
+		//
+		// The old code used FVector::CrossProduct on actual vertex positions
+		// to decide winding at runtime.  Surface Nets vertices are averaged
+		// edge-intersection points that deviate from grid positions on curved
+		// terrain; that deviation can flip the cross-product sign and emit
+		// some quads with the winding reversed -> backface visible instead
+		// of the front face (the "checkerboard on slopes" artifact).
+		// ---------------------------------------------------------------
+		if (bD0Solid)
 		{
-			// Triangle order is already Counter-Clockwise (front-facing)
-			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, OutwardNormal, VC);
-			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, OutwardNormal, VC);
-
-			// Backface — flip winding for backface mesh (no collision)
-			EmitTriangle(BackDest, v2, v1, v0, n2, n1, n0, -OutwardNormal, VC);
-			EmitTriangle(BackDest, v3, v2, v0, n3, n2, n0, -OutwardNormal, VC);
-		}
-		else
-		{
-			// Triangle order is Clockwise (back-facing) -> reverse winding to make CCW
+			// Face points +Axis: use reversed winding (v2,v1,v0)
 			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, OutwardNormal, VC);
 			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, OutwardNormal, VC);
 
-			// Backface — flip winding
+			// Backface: flip winding only
 			EmitTriangle(BackDest, v0, v1, v2, n0, n1, n2, -OutwardNormal, VC);
 			EmitTriangle(BackDest, v0, v2, v3, n0, n2, n3, -OutwardNormal, VC);
+		}
+		else
+		{
+			// Face points -Axis: canonical winding (v0,v1,v2) is correct
+			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, OutwardNormal, VC);
+			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, OutwardNormal, VC);
+
+			// Backface: flip winding only
+			EmitTriangle(BackDest, v2, v1, v0, n2, n1, n0, -OutwardNormal, VC);
+			EmitTriangle(BackDest, v3, v2, v0, n3, n2, n0, -OutwardNormal, VC);
 		}
 
 

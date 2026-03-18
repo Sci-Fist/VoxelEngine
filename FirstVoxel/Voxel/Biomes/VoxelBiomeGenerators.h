@@ -27,6 +27,24 @@
 //  GetSkylandDensity()          Convenience wrapper that builds the cache on
 //                              the fly. Use only when no column cache exists.
 //
+//  SHARD vs ISLAND (Cache.ShardT):
+//    ShardT=0  sky-shard (boulder):  EffThickness=0.65, spherical falloff,
+//                                    high Z-noise freq (0.50x), low breakup
+//                                    (0.10), size scales with altitude gap.
+//    ShardT=1  skyland (platform):   EffThickness=ThicknessRatio, flat-top
+//                                    falloff (35% plateau), low Z-noise (0.05x),
+//                                    high breakup (up to 2.80 x HeightNorm).
+//    All per-voxel properties are linearly blended by Cache.ShardT so the
+//    transition from shard field to skyland is smooth and continuous.
+//
+//  WINDING / CLEARANCE NOTES:
+//    The 200 cm clearance buffers (HalfThick clamp and post-selection SkyAlt
+//    raise) are intentionally commented out.  They were double-offsetting
+//    island altitude on top of MinAltitudeAboveTerrain and clamping HalfThick
+//    too aggressively.  The HeightCutoff fade in GetSkylandDensityFromCache
+//    (SkyD → -2 below SurfaceHeight + MinAltitudeAboveTerrain) is the
+//    canonical terrain-intersection guard.
+//
 // -- CRYSTAL CAVERN DELTA -----------------------------------------------------
 //
 //  GetCrystalCavernDelta() returns a NEGATIVE density delta (carve) inside

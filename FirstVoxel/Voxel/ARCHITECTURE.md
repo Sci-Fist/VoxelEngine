@@ -1,6 +1,6 @@
 # FirstVoxel — Architecture Reference
 
-> Last updated: 2026-03-17  
+> Last updated: 2026-03-18  
 > Engine: Unreal Engine 5 · Language: C++17
 
 ---
@@ -135,27 +135,39 @@ One tick's path from queue to visible mesh:
 
 ```
 AVoxelWorld::Tick()
-  └─ DrainGenerationQueue()
-       └─ SpawnChunk(Coord)
-            ├─ ChunkPool.RetrieveOrCreateChunk()    reuse or allocate
-            ├─ ConfigureChunk(Chunk)                inject config + materials
-            └─ Chunk->GenerateAsync()
-                 └─ AsyncTask(BackgroundThread)
-                      └─ FVoxelGeneratorTask::Execute()
-                           ├─ BuildDensityField()   ParallelFor XY columns
-                           │    └─ GetDensityFull() per voxel (O(n³) noise)
-                           ├─ PostProcessDensities() safety clamp
-                           ├─ BuildMesh()            Surface Nets
-                           ├─ CalculateFoliage()     triangle scatter
-                           └─ PlaceWaterSources()    depression scan
-                  ↓ (game thread callback via GenerationId guard)
-            AVoxelChunk::ApplyMesh()
-                 ├─ ClearAllMeshSections()
-                 ├─ UploadSection(0, FlatMesh, FlatMat)
-                 ├─ Populate BiomeFoliageHISMs
-                 ├─ Build FVoxelWaterData.SolidCells
-                 ├─ Fire OnChunkWaterReady callback
-                 └─ ProceduralMesh->SetVisibility(true)
+  ├─ StreamingTimer threshold reached → UpdateChunkStreaming()
+  │    ├─ Build Desired set  (ground volume + skylands volume)
+  │    ├─ DestroyChunk() + EmptyChunks.Remove() for out-of-range chunks
+  │    ├─ LOD update  (DistSq vs pre-squared thresholds — no sqrt)
+  │    └─ Rebuild + re-sort GenerationQueue nearest-first
+  │
+  ├─ DrainGenerationQueue()  (up to 8 chunks/tick in game, 2 in editor)
+  │    └─ SpawnChunk(Coord)
+  │         ├─ ChunkPool.RetrieveOrCreateChunk()    reuse or allocate
+  │         ├─ ConfigureChunk(Chunk)                inject config + materials
+  │         └─ Chunk->GenerateAsync()
+  │              └─ AsyncTask(BackgroundThread)
+  │                   └─ FVoxelGeneratorTask::Execute()
+  │                        ├─ BuildDensityField()   ParallelFor XY×Y columns
+  │                        │    ├─ Column early-outs (bedrock / pure air)
+  │                        │    └─ GetDensityFull() per voxel (O(n³) noise)
+  │                        ├─ PostProcessDensities()  (hook for future passes)
+  │                        ├─ BuildMesh()             Surface Nets
+  │                        │    └─ FlattenMeshTops()  O(V) grid-based flatten
+  │                        ├─ CalculateFoliage()      column-cached scatter
+  │                        └─ PlaceWaterSources()     depression scan
+  │             ↓ (game thread callback via GenerationId guard)
+  │         AVoxelChunk::ApplyMesh()
+  │              ├─ ClearAllMeshSections()
+  │              ├─ UploadSection(0, FlatMesh, FlatMat)
+  │              ├─ UploadSection(1, SlopeMesh, SlopeMat)
+  │              ├─ Populate BiomeFoliageHISMs
+  │              ├─ Build FVoxelWaterData.SolidCells
+  │              ├─ Fire OnChunkWaterReady callback
+  │              └─ ProceduralMesh->SetVisibility(true)
+  │
+  └─ DirtyRebuildQueue drain  (O(dirty) not O(all loaded chunks))
+       └─ GenerateAsync() for each dirty coord when slot available
 ```
 
 ### Density field indexing
@@ -180,6 +192,8 @@ Adjacent chunks sample the same world function for border voxels, so seams are s
 **Generation ID guard:** `GenerateAsync()` increments `AVoxelChunk::GenerationId` (TAtomic). The background callback checks `TaskId == GenerationId` before calling `ApplyMesh`. Stale results from cancelled tasks are silently discarded.
 
 **Callback safety:** `OnGenerationComplete` is moved (`MoveTemp`) before calling and nulled first to prevent double-fire if the callback triggers a re-entrant `GenerateAsync` via `bMeshDirty`.
+
+**Dirty-chunk queue:** Player edits call `AVoxelWorld::MarkChunkDirty(Coord)` which appends to `DirtyRebuildQueue`. The Tick loop drains this queue (O(dirty)) instead of scanning all `LoadedChunks` (O(N)) every frame.
 
 ---
 
@@ -245,6 +259,16 @@ GetSurfaceHeightStatic(X, Y, Weights, Config)
 
 Each biome height function uses FBM (fractional Brownian motion) with per-biome frequency, octave count, sharpness, and optional domain warp.
 
+**Crater height** uses a C1-continuous bell-curve formula (no hard zone switches):
+```
+NormDepth ∈ [0,1]  (0 = outside crater, 1 = centre)
+RimT      = bell curve centred at NormDepth=0.25  (smooth quadratic)
+FloorT    = SmoothStep(0.40, 1.0, NormDepth)
+Height    = Lerp(BasePlains, RimPeak, SmoothStep(0, 0.25, NormDepth))  when NormDepth ≤ 0.25
+          = Lerp(RimPeak,   Floor,   SmoothStep(0.25, 1.0, NormDepth)) when NormDepth > 0.25
+```
+This guarantees a C1 height field with no kink discontinuities that would otherwise produce vertical pillar geometry at zone boundaries.
+
 ### Density composition (per voxel — O(n³))
 
 ```
@@ -263,9 +287,27 @@ GetDensityFull(WorldPos, Weights, SurfH, NeutralSurfH, Config)
 
   ── Layer 4: Skylands ─────────────────────────────────────
   SkyD = GetSkylandDensity(...)   [skipped for ground-level chunks]
+  SkyD faded to -2 below SurfaceHeight + MinAltitudeAboveTerrain
 
   return max(SkyD, SurfD)         skylands override air above surface
 ```
+
+### Skyland / shard shape system
+
+Skylands use a two-type blend controlled by `CellShardT` (0 = shard/rock, 1 = island/platform):
+
+| Property | Shard (CellShardT=0) | Island (CellShardT=1) |
+|----------|---------------------|----------------------|
+| **EffThickness** | 0.65 × IslandSize | ThicknessRatio × IslandSize |
+| **MaxThicknessRatio** | 0.75 | MaxThicknessRatio config |
+| **Falloff shape** | Spherical (no flat zone) | Flat-top 35% + smooth taper |
+| **Z noise frequency** | 0.50× Freq | 0.05× Freq |
+| **3D noise strength** | 0.55 | 0.25 |
+| **BreakUp strength** | 0.10 | up to 2.80 × HeightNorm |
+| **Size scaling** | by altitude gap above terrain | fixed by HeightSizeBonus |
+
+`GetSkylandColumnCache()` runs once per XY column (9-cell grid neighbourhood), caches `SkyAlt`, `HalfThick`, `ShardT`, `Freq`, `Threshold`.  
+`GetSkylandDensityFromCache()` runs per voxel using the cache — only evaluates shape noise + falloff.
 
 ---
 
@@ -302,9 +344,11 @@ Two independent subsystems coexist:
 
 `StepSize = 1 << LOD`. Larger step → fewer density samples → simpler mesh.
 
-**Hysteresis:** A chunk must exceed a LOD boundary by 10% before transitioning, preventing repeated rebuilds when the player walks along the boundary.
+**Hysteresis:** Distance comparisons use pre-squared thresholds (`L1ISq`, `L2ISq`) and `DistSq` directly — no `sqrt()` per chunk. A 10% outer band prevents flip-flopping at boundaries.
 
-**Transition tick:** `AVoxelChunk::Tick()` (enabled post-2026 fix) calls `UpdateMeshState()` each frame while `MeshState == Transitioning`. `TransitionToLOD()` fires `GenerateAsync()` for the new LOD and stores the old mesh in `PreviousMesh` for optional blending.
+**Transition tick:** `AVoxelChunk::Tick()` calls `UpdateMeshState()` each frame while `MeshState == Transitioning`. `TransitionToLOD()` fires `GenerateAsync()` for the new LOD and stores the old mesh in `PreviousMesh` for optional blending.
+
+**Skylands streaming** uses a separate volume centred on the estimated skyland altitude (`CachedSkyAltWorld`). The sky altitude is recomputed only when the player moves > `SkyAltSnapDist` (1000 cm) to avoid per-tick biome noise sampling.
 
 ---
 
@@ -360,6 +404,10 @@ Note the seed shown on screen after clicking **Generate World**, or read `Genera
 - Lower `MaxConcurrentGenerations` (default 12) — reduces CPU burst per tick
 - Set `Performance.MaxNoiseOctaves = 2` — roughly halves density evaluation time
 - Reduce `RenderDistanceXY` / `RenderDistanceZ` — fewer total chunks
+
+### Mark a chunk dirty after a player edit
+
+Call `AVoxelWorld::MarkChunkDirty(ChunkCoord)` instead of setting `bMeshDirty` directly. This appends to the `DirtyRebuildQueue` which drains at O(dirty-count) per tick rather than scanning all loaded chunks.
 
 ### Player terrain editing
 
