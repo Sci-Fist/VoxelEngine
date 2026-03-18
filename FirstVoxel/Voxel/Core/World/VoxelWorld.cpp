@@ -216,7 +216,14 @@ void AVoxelWorld::Tick(float DeltaTime)
 	if (bTitleScreenActive) return;
 
 	if (GetWorld()->IsGameWorld())
-		UpdateChunkStreaming();
+	{
+		StreamingTimer += DeltaTime;
+		if (StreamingTimer >= StreamingInterval)
+		{
+			StreamingTimer = 0.f;
+			UpdateChunkStreaming();
+		}
+	}
 
 	DrainGenerationQueue();
 

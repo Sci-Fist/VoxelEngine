@@ -56,14 +56,21 @@ struct FSkylandsLayerConfig
 {
     GENERATED_BODY()
 
-    // --- Altitude ---
-    // MinAltitude: how far above the terrain even tiny sky-shards float.
+
+    /** MinAltitude: how far above the terrain even tiny sky-shards float. */
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
+
     float MinAltitudeAboveTerrain = 800.f;
 
+
+
     // BaseAltitude: average altitude over mid-height terrain.
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
+
     float BaseAltitudeAboveTerrain = 5000.f;
+
 
     // HeightAltitudeBonus: extra altitude added when terrain below is high.
     // Over peaks the islands soar much higher.
@@ -129,14 +136,39 @@ struct FSkylandsLayerConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size")
     float RoughnessSizeBonus = 7000.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size")
-    float ThicknessRatio = 0.48f;
 
-    /** Maximum allowed thickness ratio (HalfThick / IslandSize). Prevents pillar formation. */
+    /** 
+     * Thickness ratio for islands (HalfThick = IslandSize * ThicknessRatio).
+     * Shards use 0.10 automatically. For flat islands, use 0.2-0.3.
+     * Values >0.5 will cause pillars even with MaxThicknessRatio clamp.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size")
+
+
+    float ThicknessRatio = 0.2f;
+
+
+
+
+    /** 
+     * Maximum allowed thickness ratio (HalfThick / IslandSize). 
+     * Part of the fix for elongated pillar/spike artifacts (see VoxelBiomeGenerators.cpp).
+
+     * Together with linear frequency scaling (Freq = ShapeFrequency / SizeRatio),
+     * this ensures consistent aspect ratio across all island sizes.
+
+     * 
+     * Aspect ratio = (HalfThick * 2) / IslandSize = 2 * (HalfThick/IslandSize).
+     * Default 0.3 → max aspect 0.6 (height 60% of width). Flat islands should be 0.2-0.4.
+     */
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
+
         meta=(ClampMin="0.1", ClampMax="0.5", UIMin="0.1", UIMax="0.5",
-              ToolTip="Maximum thickness as fraction of island diameter. 0.3 = max 60% aspect ratio."))
+
+              ToolTip="Maximum thickness as fraction of island radius. 0.3 = max 0.6 aspect ratio (height/width). Part of spike/pillar fix."))
     float MaxThicknessRatio = 0.3f;
+
 
     // --- Shape ---
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shape")

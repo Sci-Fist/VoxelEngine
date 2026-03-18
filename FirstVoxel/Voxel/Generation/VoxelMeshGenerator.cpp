@@ -258,9 +258,9 @@ void FVoxelMeshGenerator::GenerateMesh(
 
 		if (!FaceNorm.IsNormalized() || FaceNorm.Size() < 0.1f) return;
 
-		// Check for degenerate triangle (zero or near-zero area)
-		const float Area = FVector::CrossProduct(V1 - V0, V2 - V0).Size();
-		if (Area < 0.1f) return; // Skip triangles with area < 0.1 cm²
+		// Check for degenerate triangle (zero or near-zero area) Using SizeSquared to avoid sqrt overhead
+		const float AreaSq = FVector::CrossProduct(V1 - V0, V2 - V0).SizeSquared();
+		if (AreaSq < 0.01f) return; // Skip triangles with area < 0.1 cm²
 
 		const int32 Base = Dest.Vertices.Num();
 

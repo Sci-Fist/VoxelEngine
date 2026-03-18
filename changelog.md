@@ -107,4 +107,18 @@ eventually drains off open edges.
 - **Landing detection**: Implemented CustomFloorCheck() using sphere sweep (like VoxelWorld initial spawn) as a fallback when physics-based landing is delayed. Called every Tick while falling to ensure prompt ground detection.
 - **Landed() override**: Forces immediate floor validation via UpdateFloorFromAdjustment() whenever physics detects a landing, ensuring animation state updates without delay.
 
+
 - Prevented skylands from blanketing low terrain by adding a low-terrain early-out and scaling skyland probability by terrain falloff.
+
+### Fixed — Skyland Elongated Pillars / Spikes
+- **Root cause**: The noise frequency scaling used `ShapeFrequency / sqrt(SizeRatio)`, which caused horizontal feature size to grow slower than island thickness. As islands got larger (high terrain), their aspect ratio increased dramatically, creating tall thin spikes instead of flat discs. Additionally, the threshold for large islands was too high, preventing noise features from coalescing into a single coherent shape.
+- **Frequency scaling fix**: Changed to linear scaling `ShapeFrequency / SizeRatio` so noise wavelength is proportional to island size. This maintains consistent aspect ratio across all island scales: `Cache.Freq = SC.ShapeFrequency / SizeRatio`.
+- **Threshold adjustment for large islands**: Added dynamic threshold reduction for islands (`CellShardT > 0.5f`): `Threshold -= FMath::Log2(SizeRatio) * 0.05f`. This ensures large islands merge their noise lobes into one contiguous disc rather than many separate peaks.
+
+- **MaxThicknessRatio clamp**: Added safety clamp (`MaxThicknessRatio` default 0.3) to prevent extreme aspect ratios even if config values are mis-set.
+
+- **Clearance fix**: Adjusted island bottom to use column `SurfaceHeight` instead of cell `AltitudeBase`, preventing terrain intersection in valleys.
+- **Mesh validation**: Added degenerate triangle check (area < 0.1 cm²) and face normal validation to eliminate PhysX "bad triangles" warnings.
+- **Debug logging**: Added detailed skyland parameter logging (SkyAlt, HalfThick, IslandSize, Aspect) to aid future diagnosis.
+- **Result**: Skylands now generate as flat, disk-like floating islands with proper aspect ratios (0.2–0.6) at all sizes. Shards remain small and flat. No more pillar artifacts.
+

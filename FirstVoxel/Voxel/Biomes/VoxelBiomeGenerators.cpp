@@ -286,14 +286,86 @@ float FVoxelBiomeGenerators::GetSkylandDensity(
     return GetSkylandDensityFromCache(Cache, X, Y, Z, Config, StepSize);
 }
 
+
 FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
+
     float X, float Y, float SurfaceHeight,
+
     const FVoxelBiomeWeightMap& Weights,
+
     const FVoxelGenerationConfig& Config)
+
 {
+
     FSkylandColumnCache Cache;
+
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+
     const FVector Off = Config.GetSeedOffset();
+
+    // ============================================================
+    //  SKYLAND GENERATION OVERVIEW & SPIKE FIX
+    // ============================================================
+
+    //
+
+    // PURPOSE: Generate floating islands ("skylands") that appear high above terrain.
+    // The system uses a cellular grid where each cell may spawn an island. The island's
+
+    // properties (size, altitude, thickness, shape) are determined by the terrain
+    // characteristics (height, roughness) beneath that cell.
+    //
+    // TWO-PHASE EVALUATION:
+    //  1. Column Cache (this function): Expensive O(n²) operation run once per XY column.
+
+    //     Samples 9 neighboring grid cells, selects the best one (nearest with valid spawn),
+    //     and caches its properties (SkyAlt, HalfThick, Freq, Threshold, etc.).
+    //  2. Voxel Density: Cheap O(1) lookup using the cache. Evaluates shape noise and
+    //     vertical falloff to produce the final signed distance value.
+    //
+    // WHY SKYLANDS BECAME SPIKY (pre-fix):
+    //  - Thickness scaled linearly with IslandSize: HalfThick = IslandSize * EffThickness
+    //  - Horizontal feature size (noise wavelength) scaled with sqrt(IslandSize):
+
+    //      Freq = ShapeFrequency / sqrt(SizeRatio)   where SizeRatio = IslandSize / BaseIslandSize
+    //  - As islands grew larger (high terrain), thickness grew faster than horizontal extent.
+
+    //    The aspect ratio (thickness/width) increased ~sqrt(SizeRatio), turning large islands
+    //    into tall thin pillars instead of flat discs.
+    //
+    // THE FIX (implemented below):
+
+    //  1. Linear frequency scaling: Freq = ShapeFrequency / SizeRatio
+
+    //     This makes wavelength proportional to island size, maintaining consistent aspect
+
+    //     ratio across all scales. Large islands are now properly wide and flat.
+    //  2. Threshold reduction for large islands:
+
+    //      if (CellShardT > 0.5f) Threshold -= log2(SizeRatio) * 0.05f
+    //     Lowers the shape threshold so noise lobes merge into one coherent disc instead of
+    //     many separate peaks. Without this, large islands would still be spiky even with
+    //     correct frequency scaling.
+    //  3. MaxThicknessRatio clamp: Safety net to prevent extreme aspect ratios from
+    //     misconfigured parameters. HalfThick = min(HalfThick, IslandSize * MaxThicknessRatio).
+    //  4. Clearance fix: After selecting the best cell, raise the island if its bottom would
+    //     intersect the local terrain (using the column's SurfaceHeight, not the cell's
+    //     AltitudeBase). Ensures visible gap above ground everywhere.
+    //
+    // ASPECT RATIO CONTROL:
+    //  Desired: Aspect = HalfThick / IslandSize ≈ 0.1–0.3 (flat disc)
+    //  With EffThickness = 0.1 (shards) to 0.2–0.3 (islands) and proper frequency scaling,
+
+    //  the noise solid region radius ≈ 0.5–0.7 * IslandSize, giving Aspect ≈ 0.14–0.42.
+    //  The MaxThicknessRatio (default 0.3) caps aspect at 0.6 even if config is extreme.
+    //
+    // PERFORMANCE NOTE:
+
+    //  This function is called once per XY column during chunk generation. All expensive
+    //  operations (biome sampling, noise evaluations) are confined here. The returned
+    //  cache is reused for every Z voxel in that column, making skyland evaluation cheap.
+    // ============================================================
+
 
     // ---------------------------------------------------------------
     //  SHARD SYSTEM: altitude-driven grid density
@@ -445,24 +517,40 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             + CurvedRough  * SC.RoughnessAltitudeBonus
             + (1.f - CellShardT) * SC.LowTerrainAltitudeBoost;
 
+
         // -------------------------------------------------------------------
+
         //  THICKNESS: shards are flat discs, islands are chunky
+
         //  Low shard ThicknessRatio: 0.10  (very thin, disc-like)
+
         //  High island ThicknessRatio: SC.ThicknessRatio (0.48 default)
+
         // -------------------------------------------------------------------
-        
-                const float EffThickness = FMath::Lerp(0.10f, SC.ThicknessRatio, CellShardT);
-
-                float HalfThick    = IslandSize * EffThickness;
 
         
 
-                // --- 🛡️ MAX THICKNESS RATIO: Prevent pillar formation ---
-                // Ensure aspect ratio (height/width) never exceeds 2×MaxThicknessRatio
-                const float MaxAllowedHalfThick = IslandSize * SC.MaxThicknessRatio;
-                HalfThick = FMath::Min(HalfThick, MaxAllowedHalfThick);
+        const float EffThickness = FMath::Lerp(0.10f, SC.ThicknessRatio, CellShardT);
+
+        float HalfThick = IslandSize * EffThickness;
+
+
+
+        // --- 🛡️ MAX THICKNESS RATIO: Prevent pillar formation ---
+
+        // Safety clamp to ensure aspect ratio never exceeds 2×MaxThicknessRatio
+
+        // (default 0.3 → max aspect 0.6). Protects against misconfigured parameters.
+        const float MaxAllowedHalfThick = IslandSize * SC.MaxThicknessRatio;
+
+        HalfThick = FMath::Min(HalfThick, MaxAllowedHalfThick);
+
         
-                // --- 🛡️ CLEARANCE PROTECTION: Prevent spikes bridging to ground ---
+
+        // --- 🛡️ CLEARANCE PROTECTION: Prevent islands intersecting terrain ---
+        // Note: This is a preliminary clamp based on AltitudeBase. A more accurate
+        // adjustment using the column's SurfaceHeight is applied after cell selection.
+
 
         const float Clearance = 200.f; // 2 meters above terrain minimum clearance
         const float MaxAllow  = AltitudeBase - Clearance;
@@ -475,10 +563,30 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             HalfThick = FMath::Min(HalfThick, MaxAllow);
         }
 
+
         // shape threshold
+
         const float ShardThresholdBoost = FMath::Lerp(0.20f, 0.0f, CellShardT);
-        const float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob)
+
+        float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob)
+
                                 + ShardThresholdBoost;
+        
+        // Ensure larger islands get lower threshold to merge noise features into a single disc
+        // Without this, large islands would be many small peaks instead of one coherent shape
+        if (CellShardT > 0.5f) {
+            const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
+            Threshold -= FMath::Log2(SizeRatio) * 0.05f;  // Lower threshold for larger islands
+
+        }
+
+        
+        // Ensure larger islands get lower threshold to merge noise features into a single disc
+        // Without this, large islands would be many small peaks instead of one coherent shape
+        if (CellShardT > 0.5f) {
+            const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
+            Threshold -= FMath::Log2(SizeRatio) * 0.05f;  // Lower threshold for larger islands
+        }
 
 
 
@@ -512,6 +620,10 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             const float IslandFreq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
             const float ShardFreq  = SC.ShapeFrequency * 6.0f;
             BestFreq = FMath::Lerp(ShardFreq, IslandFreq, CellShardT);
+
+            // FIX: Update the tracking ratio so it correctly selects the NEAREST cell 
+            // instead of falling back to the last cell in the grid loop iterator.
+            BestDistRatio = DistRatio; 
         }
     }
 
@@ -563,11 +675,22 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
     // Use the selected cell's island size (not blended) for consistent shape
 
+
     const float SizeRatio = FMath::Max(1.f, BestIslandSize / SC.BaseIslandSize);
 
-    const float IslandFreq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
+
+
+    // FIX: Linear scaling (was sqrt) to maintain consistent aspect ratio across island sizes.
+    // With sqrt scaling, large islands had disproportionately small horizontal extent,
+
+    // causing spikes. Linear scaling makes wavelength ∝ IslandSize, so solid region scales
+    // proportionally with thickness → flat discs at all sizes.
+    const float IslandFreq = SC.ShapeFrequency / SizeRatio;  // Linear scaling for consistent aspect ratio
+
+
 
     const float ShardFreq = SC.ShapeFrequency * 6.0f;
+
 
     Cache.Freq = FMath::Lerp(ShardFreq, IslandFreq, BestCellShardT);
 
@@ -575,25 +698,41 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
 
 
+
     Cache.Prob    = 0.5f;
+
+
+
 
 
     Cache.WX_base = X + Off.X;
 
+
+
     Cache.WY_base = Y + Off.Y;
+
+
 
     Cache.WX      = Cache.WX_base;
 
+
+
     Cache.WY      = Cache.WY_base;
+
+
 
     Cache.bHasSkyland = true;
 
+
+
     
-    // Debug logging to diagnose skyland parameters
-    UE_LOG(LogTemp, Warning, TEXT("Skyland Cache: X=%.1f Y=%.1f SkyAlt=%.1f HalfThick=%.1f IslandSize=%.1f CellShardT=%.3f Aspect=%.2f"), 
-        X, Y, Cache.SkyAlt, Cache.HalfThick, BestIslandSize, BestCellShardT, (Cache.HalfThick * 2 / BestIslandSize));
+
+    // Aspect Ratio logging removed for performance tuning (was UE_LOG spamming per column).
+
     
+
     return Cache;
+
 
 }
 
