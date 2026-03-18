@@ -567,7 +567,11 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         //  ThicknessRatio (islands, CellShardT=1): stays at SC.ThicknessRatio
         //  (default 0.2) so full skylands remain flat floating platforms.
         // -------------------------------------------------------------------
-        const float EffThickness = FMath::Lerp(0.65f, SC.ThicknessRatio, CellShardT);
+        // FIX: Add random aspect ratio for shards. Highly requested to break the 
+        // uniform elongated tall pillar problem on smaller radii.
+        const float HashAspect = (FastNoise3D(cnX * 0.005f, cnY * 0.005f, 300.f) + 1.f) * 0.5f;
+        const float ShardThickBase = FMath::Lerp(0.35f, 0.75f, HashAspect); // 35% to 75% wide ratio
+        const float EffThickness = FMath::Lerp(ShardThickBase, SC.ThicknessRatio, CellShardT);
 
         float HalfThick = IslandSize * EffThickness;
 

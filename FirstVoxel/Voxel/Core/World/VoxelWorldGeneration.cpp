@@ -687,10 +687,10 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
 	// Spawn chunks in a focused grid around the spawn position
 	// This ensures the player has solid ground without overwhelming the generation system
-	// FIX: Increased RadiusXY from 1 to 3 to wait for a 7x7 column. 
-	// This guarantees a much larger buffer zone are ready BEFORE releasing load bar, solving spawn lag.
+	// FIX: Set RadiusXY to RenderDistanceXY so the loading bar covers absolute FULL view 
+	// grid configured. Releasing only once all scenery is complete saves ambient traversal lag.
 	TArray<FIntVector> SpawnAreaCoords;
-	const int32 RadiusXY = FMath::Min(3, RenderDistanceXY); 
+	const int32 RadiusXY = RenderDistanceXY; 
 	for (int32 x = -RadiusXY; x <= RadiusXY; ++x)
 	{
 		for (int32 y = -RadiusXY; y <= RadiusXY; ++y)

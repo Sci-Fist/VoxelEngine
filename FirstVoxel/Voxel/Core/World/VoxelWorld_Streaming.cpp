@@ -124,14 +124,31 @@ void AVoxelWorld::UpdateChunkStreaming()
 
 	// 1. Ground area: Track local heightmap profile per-column
 	// This prevents mountain peaks/valleys from unloading when the player stands on the opposite altitude extremum.
-	for (int32 y = -RenderDistanceXY; y <= RenderDistanceXY; ++y)
-	for (int32 x = -RenderDistanceXY; x <= RenderDistanceXY; ++x)
+	const int32 GridDim = 2 * RenderDistanceXY + 1;
+	const int32 NumCols = GridDim * GridDim;
+
+	TArray<int32> GroundZCenters;
+	GroundZCenters.SetNumZeroed(NumCols);
+
+	// FIX: Parallelize heavy noise lookups to prevent GameThread stall during character movement.
+	ParallelFor(NumCols, [&](int32 Index)
 	{
+		const int32 x = -RenderDistanceXY + (Index % GridDim);
+		const int32 y = -RenderDistanceXY + (Index / GridDim);
+
 		const float ColX = (PlayerCoord.X + x + 0.5f) * ChunkWorldSize;
 		const float ColY = (PlayerCoord.Y + y + 0.5f) * ChunkWorldSize;
 
 		const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(ColX, ColY, Config);
-		const int32 GroundZCenter = FMath::RoundToInt(Wh.SurfaceHeight / ChunkWorldSize);
+		GroundZCenters[Index] = FMath::RoundToInt(Wh.SurfaceHeight / ChunkWorldSize);
+	});
+
+	// Populate Desired set sequentially on the GameThread from the parallel-built index array
+	for (int32 Index = 0; Index < NumCols; ++Index)
+	{
+		const int32 x = -RenderDistanceXY + (Index % GridDim);
+		const int32 y = -RenderDistanceXY + (Index / GridDim);
+		const int32 GroundZCenter = GroundZCenters[Index];
 
 		for (int32 z = -RenderDistanceZ; z <= RenderDistanceZ; ++z)
 		{

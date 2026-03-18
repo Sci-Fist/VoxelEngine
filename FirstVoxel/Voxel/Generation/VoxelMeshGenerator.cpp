@@ -110,6 +110,60 @@ FVector FVoxelMeshGenerator::ComputeNormal(
 //         bD0Solid determines winding so the quad faces into air.
 // ---------------------------------------------------------------------------
 
+// Post-processing: Flatten top-facing vertices to improve walkability.
+// Applied to the unified CellVertices array BEFORE mesh section splits 
+// to prevent tearing at boundary edges.
+static void FlattenCellTops(
+    float InVoxelSize, 
+    TArray<FVector>& CellVertices, 
+    TArray<FVector>& CellNormals, 
+    const TArray<int32>& VertexIndices, 
+    int32 S)
+{
+    const int32 S3 = S * S * S;
+    const float CellSize     = InVoxelSize * 1.5f; 
+    const float CellSizeInv  = 1.f / CellSize;
+
+    TMap<TPair<int32,int32>, float> CellMaxZ;
+    CellMaxZ.Reserve(S3);
+
+    for (int32 i = 0; i < S3; ++i)
+    {
+        if (VertexIndices[i] != 1) continue;
+        if (CellNormals[i].Z <= 0.9f) continue;
+
+        const int32 GX = FMath::FloorToInt(CellVertices[i].X * CellSizeInv);
+        const int32 GY = FMath::FloorToInt(CellVertices[i].Y * CellSizeInv);
+        const auto Key = TPair<int32,int32>(GX, GY);
+        float& MaxZ = CellMaxZ.FindOrAdd(Key, CellVertices[i].Z);
+        MaxZ = FMath::Max(MaxZ, CellVertices[i].Z);
+    }
+
+    for (int32 i = 0; i < S3; ++i)
+    {
+        if (VertexIndices[i] != 1) continue;
+        if (CellNormals[i].Z <= 0.9f) continue;
+
+        const int32 GX = FMath::FloorToInt(CellVertices[i].X * CellSizeInv);
+        const int32 GY = FMath::FloorToInt(CellVertices[i].Y * CellSizeInv);
+        float NeighMax = CellVertices[i].Z;
+
+        for (int32 dx = -1; dx <= 1; ++dx)
+        for (int32 dy = -1; dy <= 1; ++dy)
+        {
+            const auto Key = TPair<int32,int32>(GX + dx, GY + dy);
+            if (const float* Z = CellMaxZ.Find(Key))
+                NeighMax = FMath::Max(NeighMax, *Z);
+        }
+
+        if (FMath::Abs(NeighMax - CellVertices[i].Z) > KINDA_SMALL_NUMBER)
+        {
+            CellVertices[i].Z = NeighMax;
+            CellNormals[i]    = FVector(0.f, 0.f, 1.f);
+        }
+    }
+}
+
 void FVoxelMeshGenerator::GenerateMesh(
 	const TArray<float>& Densities,
 	int32                InChunkSize,
@@ -206,6 +260,10 @@ void FVoxelMeshGenerator::GenerateMesh(
 			VertexIndices[CellIndex] = 1;
 		}
 	});
+
+	// FIX: Apply top-flattening inline to unified list before splitting
+	// to prevent tearing against SlopeMesh boundaries.
+	FlattenCellTops(EffectiveVoxelSize, CellVertices, CellNormals, VertexIndices, S);
 
 	// ── Pre-compute biome vertex colours (O(n²), cached per XY column) ────
 	TArray<FColor> ColumnColors;
@@ -312,9 +370,20 @@ void FVoxelMeshGenerator::GenerateMesh(
 		// If D1 solid -> air is on the D0 side -> face points -Axis.
 		const FVector OutwardNormal = bD0Solid ? Axis : -Axis;
 
-		// Classify flat vs slope from the outward normal's Z component.
+		// FIX: Compute actual geometric normal (cross product of quad diagonals)
+		// for accurate flat vs slope classification. The old code used the uniform
+		// Axis vector, which classified ALL X/Y edge quads as Slopes regardless of orientation.
+		FVector GeoNormal = FVector::CrossProduct(v2 - v0, v3 - v1).GetSafeNormal();
+		
+		// Ensure GeoNormal points outward (same hemisphere as OutwardNormal)
+		if ((GeoNormal | OutwardNormal) < 0.f)
+		{
+			GeoNormal = -GeoNormal;
+		}
+
+		// Classify flat vs slope from the geometric normal's Z component.
 		const float SlopeThresh = Config.SlopeThreshold;
-		const bool  bIsFlat     = FMath::Abs(OutwardNormal.Z) >= SlopeThresh;
+		const bool  bIsFlat     = FMath::Abs(GeoNormal.Z) >= SlopeThresh;
 
 		FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
 		FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh : OutMesh.SlopeBackMesh;
@@ -393,61 +462,3 @@ void FVoxelMeshGenerator::GenerateMesh(
 	}
 }
 
-// Post-processing: Flatten top-facing vertices to improve walkability
-//
-// FIX: Old implementation was O(V²) — for each of V top-facing vertices it searched
-// all V vertices for neighbors, so a chunk with 2000 vertices did 4,000,000 comparisons.
-// With 12 concurrent background tasks that’s 48M comparisons happening simultaneously.
-//
-// New implementation is O(V) using a 2D spatial grid bucketed by (floor(x/cell), floor(y/cell)).
-// Each vertex only looks up the 9 grid cells around it — typically 2–10 vertices total.
-void FVoxelMeshGenerator::FlattenMeshTops(float InVoxelSize, FVoxelMeshOutput& OutMesh)
-{
-	TArray<FVector>& Verts = OutMesh.FlatMesh.Vertices;
-	TArray<FVector>& Norms = OutMesh.FlatMesh.Normals;
-	if (Verts.Num() == 0) return;
-
-	const float CellSize = InVoxelSize * 1.5f;  // grid cell ≈ one voxel
-	const float CellSizeInv = 1.f / CellSize;
-
-	// ─ Build grid: map (GX, GY) -> max Z among top-facing vertices in that cell ─
-	// We only need the max Z per cell, not per vertex — all vertices in a cell snap
-	// to the same max, so one pass over the grid is sufficient.
-	TMap<TPair<int32,int32>, float> CellMaxZ;
-	CellMaxZ.Reserve(Verts.Num());
-
-	for (int32 i = 0; i < Verts.Num(); ++i)
-	{
-		if (Norms[i].Z <= 0.9f) continue; // skip non-top-facing
-		const int32 GX = FMath::FloorToInt(Verts[i].X * CellSizeInv);
-		const int32 GY = FMath::FloorToInt(Verts[i].Y * CellSizeInv);
-		const auto Key = TPair<int32,int32>(GX, GY);
-		float& MaxZ = CellMaxZ.FindOrAdd(Key, Verts[i].Z);
-		MaxZ = FMath::Max(MaxZ, Verts[i].Z);
-	}
-
-	// ─ Second pass: for each top-facing vertex, look up the 3x3 cell neighbourhood ─
-	// and snap to the highest Z found in those 9 cells. This is O(9) per vertex.
-	for (int32 i = 0; i < Verts.Num(); ++i)
-	{
-		if (Norms[i].Z <= 0.9f) continue;
-
-		const int32 GX = FMath::FloorToInt(Verts[i].X * CellSizeInv);
-		const int32 GY = FMath::FloorToInt(Verts[i].Y * CellSizeInv);
-		float NeighMax = Verts[i].Z;
-
-		for (int32 dx = -1; dx <= 1; ++dx)
-		for (int32 dy = -1; dy <= 1; ++dy)
-		{
-			const auto Key = TPair<int32,int32>(GX + dx, GY + dy);
-			if (const float* Z = CellMaxZ.Find(Key))
-				NeighMax = FMath::Max(NeighMax, *Z);
-		}
-
-		if (FMath::Abs(NeighMax - Verts[i].Z) > KINDA_SMALL_NUMBER)
-		{
-			Verts[i].Z = NeighMax;
-			Norms[i]    = FVector(0.f, 0.f, 1.f);
-		}
-	}
-}

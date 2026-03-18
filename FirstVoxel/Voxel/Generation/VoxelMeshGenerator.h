@@ -163,17 +163,6 @@ struct FVoxelMeshGenerator
 		const struct FVoxelGenerationConfig& Config,
 		int32                         InStepSize = 1);
 
-	/**
-	 * Post-process FlatMesh to ensure top-facing surfaces are truly horizontal.
-	 * Vertices with normal.Z > 0.9 are considered "top" faces. Their Z position
-	 * is adjusted to match the highest Z in their local 3x3 neighborhood, and
-	 * normals are recomputed to point upward. This improves walkability on
-	 * voxel terrain by eliminating edge artifacts that cause non-walkable floor normals.
-	 *
-	 * @param InVoxelSize   World-space size of one voxel (for tolerance calculations)
-	 * @param OutMesh       Mesh data to post-process (modifies FlatMesh in-place)
-	 */
-	static void FlattenMeshTops(float InVoxelSize, FVoxelMeshOutput& OutMesh);
 
 private:
 	static FVector InterpolateEdge(

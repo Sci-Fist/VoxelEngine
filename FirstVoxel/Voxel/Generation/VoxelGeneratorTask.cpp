@@ -419,8 +419,6 @@ void FVoxelGeneratorTask::BuildMesh()
 
         
 
-        // Post-process: flatten top-facing vertices to improve walkability on voxel terrain
-        FVoxelMeshGenerator::FlattenMeshTops(VoxelSize, MeshOutput);
     
     	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: Chunk X=%d Y=%d Z=%d Verts=%d"),
 

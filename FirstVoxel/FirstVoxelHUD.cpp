@@ -475,4 +475,21 @@ void AFirstVoxelHUD::DrawHUD()
                 DrawLine(CenterX, CenterY, MouseX, MouseY, FLinearColor::Yellow, 2.f);
         }
     }
+
+    // ── FPS Counter (Top Right) ──────────────────────────────────────────
+    if (Canvas && GEngine)
+    {
+        const float Delta = GetWorld()->GetDeltaSeconds();
+        const float FPS = Delta > 0.f ? 1.0f / Delta : 0.f;
+        FString FPSText = FString::Printf(TEXT("FPS: %.1f"), FPS);
+        
+        float TextW, TextH;
+        GetTextSize(FPSText, TextW, TextH, SmallFont);
+        
+        const float DrawX = Canvas->SizeX - TextW - 20.f;
+        const float DrawY = 20.f;
+
+        DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), DrawX - 4.f, DrawY - 2.f, TextW + 8.f, TextH + 4.f);
+        DrawText(FPSText, FLinearColor(0.3f, 1.f, 0.3f, 1.f), DrawX, DrawY, SmallFont);
+    }
 }

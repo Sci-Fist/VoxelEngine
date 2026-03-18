@@ -222,6 +222,7 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 	// Initialize search with starting position
 	FVector BestPos = StartPos;
 	float BestWeight = -1.0f;
+	float BestSurfH = FLT_MAX; // Track minimal surface height
 
 	// Search in a grid pattern around the start position
 	// This provides comprehensive coverage while maintaining performance
@@ -235,12 +236,29 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 			// Get biome weights at this position to determine crater likelihood
 			FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(Candidate.X, Candidate.Y, Config);
 			float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
+			float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(Candidate.X, Candidate.Y, Weights, Config);
 
 			// Update best position if this candidate has higher crater weight
-			// and meets the minimum weight threshold
-			if (CraterWeight > BestWeight && CraterWeight >= MinWeight)
+			// and meets the minimum weight threshold.
+			// FIX: For tied max weights, favor candidates with lower SurfaceHeight
+			// to center the spawn neat the bottom of the crater bowl center rather than edge plateaus.
+			bool bBetter = false;
+			if (CraterWeight > BestWeight)
+			{
+				bBetter = true;
+			}
+			else if (FMath::Abs(CraterWeight - BestWeight) < 0.001f)
+			{
+				if (SurfH < BestSurfH)
+				{
+					bBetter = true;
+				}
+			}
+
+			if (bBetter && CraterWeight >= MinWeight)
 			{
 				BestWeight = CraterWeight;
+				BestSurfH = SurfH;
 				BestPos = Candidate;
 			}
 		}

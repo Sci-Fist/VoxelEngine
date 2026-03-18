@@ -92,7 +92,7 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     float CratersW = FMath::SmoothStep(
         Config.Craters.ImpactThreshold + 0.1f,
         Config.Craters.ImpactThreshold,
-        CraterNoise) * 0.45f;
+        CraterNoise);
 
     // FIX: Force crater weight at world origin so player always spawns in a crater.
     // This allows fully randomized seeds but re-introduces a smooth radial override 
