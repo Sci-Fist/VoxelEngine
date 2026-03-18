@@ -360,17 +360,17 @@ void FVoxelMeshGenerator::GenerateMesh(
 		{
 			const FVector Down(0, 0, -EffectiveVoxelSize * 1.2f); // drop slightly more than 1 voxel to cover rounding edges
 			
-			EmitTriangle(BackDest, v0, v1, v0 + Down, n0, n1, n0, GeomNormal, VC);
-			EmitTriangle(BackDest, v1, v1 + Down, v0 + Down, n1, n1, n0, GeomNormal, VC);
+			EmitTriangle(BackDest, v0, v1, v0 + Down, n0, n1, n0, OutwardNormal, VC);
+			EmitTriangle(BackDest, v1, v1 + Down, v0 + Down, n1, n1, n0, OutwardNormal, VC);
 
-			EmitTriangle(BackDest, v1, v2, v1 + Down, n1, n2, n1, GeomNormal, VC);
-			EmitTriangle(BackDest, v2, v2 + Down, v1 + Down, n2, n2, n1, GeomNormal, VC);
+			EmitTriangle(BackDest, v1, v2, v1 + Down, n1, n2, n1, OutwardNormal, VC);
+			EmitTriangle(BackDest, v2, v2 + Down, v1 + Down, n2, n2, n1, OutwardNormal, VC);
 
-			EmitTriangle(BackDest, v2, v3, v2 + Down, n2, n3, n2, GeomNormal, VC);
-			EmitTriangle(BackDest, v3, v3 + Down, v2 + Down, n3, n3, n2, GeomNormal, VC);
+			EmitTriangle(BackDest, v2, v3, v2 + Down, n2, n3, n2, OutwardNormal, VC);
+			EmitTriangle(BackDest, v3, v3 + Down, v2 + Down, n3, n3, n2, OutwardNormal, VC);
 
-			EmitTriangle(BackDest, v3, v0, v3 + Down, n3, n0, n3, GeomNormal, VC);
-			EmitTriangle(BackDest, v0, v0 + Down, v3 + Down, n0, n0, n3, GeomNormal, VC);
+			EmitTriangle(BackDest, v3, v0, v3 + Down, n3, n0, n3, OutwardNormal, VC);
+			EmitTriangle(BackDest, v0, v0 + Down, v3 + Down, n0, n0, n3, OutwardNormal, VC);
 		}
 	};
 

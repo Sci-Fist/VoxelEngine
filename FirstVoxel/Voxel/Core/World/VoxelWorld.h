@@ -486,8 +486,11 @@ private:
 
   /** Cached skyland altitude (world Z, cm). Recomputed only when player moves > SkyAltSnapDist. */
   float CachedSkyAltWorld = 0.f;
+  float CachedCurvedH = 0.f;
+  float CachedCurvedR = 0.f;
   FVector LastSkyAltPos   = FVector(1e9f); // force first compute
   static constexpr float SkyAltSnapDist = 1000.f; // recompute every 10m of movement
+
 
   bool bInitialized = false;
   FThreadSafeBool bShutdown{false};

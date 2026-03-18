@@ -85,13 +85,14 @@ void AVoxelWorld::UpdateChunkStreaming()
 		const float RoughnessNormSky = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
 		const float TerrainStrSky    = FMath::Clamp(HeightNormSky * 1.5f + RoughnessNormSky * 0.8f, 0.f, 1.f);
 		const float ShardFalloff     = FMath::Pow(TerrainStrSky, 2.2f);
-		const float CurvedH          = FMath::Pow(HeightNormSky,    2.5f);
-		const float CurvedR          = FMath::Pow(RoughnessNormSky, 2.0f);
+		CachedCurvedH               = FMath::Pow(HeightNormSky,    2.5f);
+		CachedCurvedR               = FMath::Pow(RoughnessNormSky, 2.0f);
 		const float AltBase          = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrSky);
 
+
 		CachedSkyAltWorld = RoundedSurfH + AltBase
-		                  + CurvedH * SC.HeightAltitudeBonus
-		                  + CurvedR * SC.RoughnessAltitudeBonus
+		                  + CachedCurvedH * SC.HeightAltitudeBonus
+		                  + CachedCurvedR * SC.RoughnessAltitudeBonus
 		                  + ShardFalloff * SC.LowTerrainAltitudeBoost;
 	}
 
@@ -100,7 +101,7 @@ void AVoxelWorld::UpdateChunkStreaming()
 
 	// Calculate skyland thickness in chunks with margin
 	const float IslandSize    = FMath::Max(SC.BaseIslandSize,
-		                          SC.BaseIslandSize + CurvedH * SC.HeightSizeBonus + CurvedR * SC.RoughnessSizeBonus);
+		                          SC.BaseIslandSize + CachedCurvedH * SC.HeightSizeBonus + CachedCurvedR * SC.RoughnessSizeBonus);
 	const float HalfThickCm   = FMath::Max(200.f, IslandSize * SC.ThicknessRatio);
 	const int32 SkyThickness  = FMath::CeilToInt(HalfThickCm / ChunkWorldSize) + 2;
 	const int32 SkyZCoordCenter = FMath::RoundToInt(SkyAltWorld / ChunkWorldSize);
