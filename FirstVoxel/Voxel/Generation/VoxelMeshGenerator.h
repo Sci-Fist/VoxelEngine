@@ -48,11 +48,19 @@
 //    East/West walls    → YZ projection
 //    North/South walls  → XZ projection
 //
+// -- MESH POST-PROCESSING -----------------------------------------------------
+//
+//  FlattenMeshTops() post-processes the generated mesh to ensure top-facing
+//  surfaces (FlatMesh vertices with normal.Z > 0.9) are truly horizontal.
+//  This improves walkability on voxel terrain by eliminating slight edge
+//  variations that cause non-walkable floor normals.
+//
 // -- THREAD SAFETY ------------------------------------------------------------
 //
 //  GenerateMesh() is fully stateless. Safe to call from multiple background
 //  threads simultaneously.
 // =============================================================================
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -134,6 +142,18 @@ struct FVoxelMeshGenerator
 		FVoxelMeshOutput&             OutMesh,
 		const struct FVoxelGenerationConfig& Config,
 		int32                         InStepSize = 1);
+
+	/**
+	 * Post-process FlatMesh to ensure top-facing surfaces are truly horizontal.
+	 * Vertices with normal.Z > 0.9 are considered "top" faces. Their Z position
+	 * is adjusted to match the highest Z in their local 3x3 neighborhood, and
+	 * normals are recomputed to point upward. This improves walkability on
+	 * voxel terrain by eliminating edge artifacts that cause non-walkable floor normals.
+	 *
+	 * @param InVoxelSize   World-space size of one voxel (for tolerance calculations)
+	 * @param OutMesh       Mesh data to post-process (modifies FlatMesh in-place)
+	 */
+	static void FlattenMeshTops(float InVoxelSize, FVoxelMeshOutput& OutMesh);
 
 private:
 	static FVector InterpolateEdge(

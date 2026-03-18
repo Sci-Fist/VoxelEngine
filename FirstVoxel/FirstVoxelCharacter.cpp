@@ -28,20 +28,41 @@ AFirstVoxelCharacter::AFirstVoxelCharacter()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = true;
 
-	bUseControllerRotationPitch = false;
-	bUseControllerRotationYaw   = false;
+
+
+	bUseControllerRotationYaw   = true;
+
 	bUseControllerRotationRoll  = false;
 
-	GetCharacterMovement()->bOrientRotationToMovement    = true;
-	GetCharacterMovement()->bUseControllerDesiredRotation = false;
+
+
+
+	GetCharacterMovement()->bUseControllerDesiredRotation = true;  // Face camera when standing still
+
+
+
 	GetCharacterMovement()->RotationRate                 = FRotator(0.f, 500.f, 0.f);
+	GetCharacterMovement()->bOrientRotationToMovement    = false;  // Don't override controller rotation with movement direction
+
+
 	GetCharacterMovement()->bUseFlatBaseForFloorChecks   = true; // FIX: prevents Rounded capsule Slip on Voxel wedges
+
 	GetCharacterMovement()->SetWalkableFloorAngle(60.0f);        // FIX: prevents slope slides from locking landing anims
+
 	GetCharacterMovement()->AirControl                   = 0.35f;
+
 	GetCharacterMovement()->MaxWalkSpeed                 = 500.f;
+
 	GetCharacterMovement()->MinAnalogWalkSpeed           = 20.f;
+
 	GetCharacterMovement()->BrakingDecelerationWalking   = 2000.f;
+
+
 	GetCharacterMovement()->BrakingDecelerationFalling   = 1500.f;
+
+	GetCharacterMovement()->MaxStepHeight                 = 100.f;  // Allow climbing 1m height differences (voxel size)
+
+
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
@@ -220,13 +241,24 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Left,  IE_Pressed, this, &AFirstVoxelCharacter::SelectToolFlatten);
 }
 
-// ---------------------------------------------------------------------------
+
 void AFirstVoxelCharacter::Tick(float DeltaTime)
+
 {
+
 	Super::Tick(DeltaTime);
 
+
+
+	// Custom floor detection fallback for voxel terrain
+
+	// This runs every tick when falling to ensure we don't get stuck in falling animation
+	CustomFloorCheck();
+
 	APlayerController* PC = Cast<APlayerController>(GetController());
+
 	if (!PC) return;
+
 
 	// ── Pause guard: skip all gameplay input while the pause menu is open ─────
 	// The pause menu uses FInputModeUIOnly which already blocks Enhanced Input
@@ -687,8 +719,92 @@ void AFirstVoxelCharacter::ToggleCameraMode()
 	{
 		// Switch to third person
 		FirstPersonCamera->SetVisibility(false);
-		FollowCamera->SetVisibility(true);
-		FollowCamera->Activate();
-		CameraBoom->TargetArmLength = 400.f; // Extend the boom
-	}
-}
+		
+				FollowCamera->SetVisibility(true);
+
+				FollowCamera->Activate();
+
+				CameraBoom->TargetArmLength = 400.f; // Extend the boom
+
+			}
+
+		}
+		
+		// ---------------------------------------------------------------------------
+		// Custom floor detection for voxel terrain
+		// Uses sphere sweep (like VoxelWorld spawn) for more reliable ground detection
+
+		// ---------------------------------------------------------------------------
+		void AFirstVoxelCharacter::CustomFloorCheck()
+		{
+			if (!GetCharacterMovement() || !GetCharacterMovement()->IsFalling())
+
+				return;
+		
+			// Only check if we're moving downward slowly or have been falling for a bit
+			const float VelZ = GetVelocity().Z;
+			if (VelZ > 100.f) // Still going up (jump apex)
+
+				return;
+		
+			// Perform sphere sweep downward (more robust than capsule on voxel edges)
+			const FVector Start = GetActorLocation();
+
+			const FVector End = Start - FVector(0.f, 0.f, 300.f); // Sweep down 3m
+			FCollisionShape Shape = FCollisionShape::MakeSphere(30.f); // 30cm radius
+
+			FHitResult Hit;
+			FCollisionQueryParams Params;
+			Params.AddIgnoredActor(this);
+			Params.bReturnPhysicalMaterial = false;
+		
+			if (GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity,
+				ECC_WorldStatic, Shape, Params))
+			{
+				// Use more lenient normal threshold for voxel terrain edge cases
+				if (Hit.Normal.Z >= 0.4f) // 0.4 = ~66° from vertical, quite steep but walkable
+				{
+					// Snap to ground position (capsule half-height + small clearance)
+					FVector NewLoc = GetActorLocation();
+					const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+					NewLoc.Z = Hit.ImpactPoint.Z + HalfHeight + 5.f; // 5cm clearance
+		
+					// Only snap if we're close to the ground (within 50cm) to avoid large jumps
+					if (FMath::Abs(NewLoc.Z - GetActorLocation().Z) < 50.f)
+					{
+						SetActorLocation(NewLoc);
+
+		
+
+						// Force walking mode
+						UCharacterMovementComponent* CMC = GetCharacterMovement();
+						CMC->Velocity = FVector::ZeroVector;
+						CMC->SetMovementMode(MOVE_Walking);
+
+						CMC->UpdateFloorFromAdjustment(); // Ensure animation state updates
+					}
+				}
+			}
+		}
+		
+		// ---------------------------------------------------------------------------
+		// Landing override - ensures animation state updates immediately
+
+		// ---------------------------------------------------------------------------
+		void AFirstVoxelCharacter::Landed(const FHitResult& Hit)
+		{
+			Super::Landed(Hit);
+		
+			if (UCharacterMovementComponent* CMC = GetCharacterMovement())
+			{
+				// Force immediate floor validation to update animation state
+				CMC->UpdateFloorFromAdjustment();
+		
+
+				// Debug logging (can be removed later)
+				// UE_LOG(LogTemplateCharacter, Warning, TEXT("Landed: Normal=%s, bWalkable=%d"),
+
+				// 	*Hit.Normal.ToString(), Hit.bWalkableFloor);
+			}
+		}
+

@@ -121,7 +121,13 @@ public:
 
 protected:
 
+
 	virtual void BeginPlay() override;
+
+
+	/** Override to ensure proper landing animation on voxel terrain */
+	virtual void Landed(const FHitResult& Hit) override;
+
 
 public:
 	// Called every frame
@@ -170,9 +176,18 @@ public:
 	/** Apply the currently selected terrain tool. */
 	void ApplyCurrentTool();
 
+
 	/** Handles jump pressed inputs from either controls or UI interfaces */
+
 	UFUNCTION(BlueprintCallable, Category="Input")
+
 	virtual void DoJumpStart();
+
+
+	/** Custom floor detection for voxel terrain - more robust than engine default */
+	UFUNCTION()
+	void CustomFloorCheck();
+
 
 	/** Handles jump pressed inputs from either controls or UI interfaces */
 	UFUNCTION(BlueprintCallable, Category="Input")

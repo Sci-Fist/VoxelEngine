@@ -86,6 +86,22 @@ eventually drains off open edges.
 - Tuned Skylands generation with sharper low-terrain falloff, updated altitude/size scaling, and new low-terrain altitude boosts for island shards.
 - Tightened skylands probability defaults and reduced cave/cavern carve strength for less over-carving.
 
+
 ### Fixed
+
 - Prevented the editor "Generate World" action from freezing by draining the generation queue with a non-blocking ticker instead of a tight loop.
+- **Player stuck in falling animation when landing on voxel terrain**: Fixed unreliable floor detection by implementing custom fallback landing detection, overriding Landed() to force immediate floor validation, and improving movement component settings.
+
+- **Voxel terrain edge artifacts causing non-walkable surfaces**: Added FlattenMeshTops() post-processing that flattens top-facing vertices (normal.Z > 0.9) to the highest point in their local neighborhood, eliminating edge variations that produced non-walkable floor normals.
+
+- **Flight mode transition leaving character in falling state**: Fixed ToggleFly() to use UpdateFloorFromAdjustment() after switching to MOVE_Walking, ensuring proper animation state transition.
+
+
+
+### Improved — Voxel Terrain Walkability & Climbing
+- **Character movement settings**: Increased MaxStepHeight to 100 cm (1 voxel) to allow climbing height differences, extended FloorSweepTestDistance to 250 cm for better ground detection on uneven terrain, enabled CCD to prevent tunneling, and adjusted MinFloorSweepTestDistance for improved edge detection.
+- **Terrain generation**: Added post-processing to flatten top-facing surfaces, ensuring truly horizontal walking surfaces with consistent upward normals. This eliminates subtle edge variations that caused the capsule floor sweep to fail.
+- **Landing detection**: Implemented CustomFloorCheck() using sphere sweep (like VoxelWorld initial spawn) as a fallback when physics-based landing is delayed. Called every Tick while falling to ensure prompt ground detection.
+- **Landed() override**: Forces immediate floor validation via UpdateFloorFromAdjustment() whenever physics detects a landing, ensuring animation state updates without delay.
+
 - Prevented skylands from blanketing low terrain by adding a low-terrain early-out and scaling skyland probability by terrain falloff.

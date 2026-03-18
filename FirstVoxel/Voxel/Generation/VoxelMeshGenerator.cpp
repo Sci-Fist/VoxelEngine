@@ -396,3 +396,67 @@ void FVoxelMeshGenerator::GenerateMesh(
 		}
 	}
 }
+
+// Post-processing: Flatten top-facing vertices to improve walkability
+void FVoxelMeshGenerator::FlattenMeshTops(float InVoxelSize, FVoxelMeshOutput& OutMesh)
+{
+	// Only process FlatMesh (top-facing surfaces)
+	if (OutMesh.FlatMesh.Vertices.Num() == 0) return;
+
+	// Build spatial index of vertices for neighborhood queries
+	// Use simple grid-based approach since vertices are in local chunk space
+	const float VoxelSize = InVoxelSize;
+	const float NeighborhoodRadius = VoxelSize * 1.5f; // Search radius for finding local max Z
+
+	TArray<FVector> NewVertices = OutMesh.FlatMesh.Vertices;
+	TArray<FVector> NewNormals = OutMesh.FlatMesh.Normals;
+
+	// For each vertex with normal.Z > 0.9 (top-facing), find the highest Z in its neighborhood
+	for (int32 i = 0; i < OutMesh.FlatMesh.Vertices.Num(); ++i)
+	{
+		const FVector& Vert = OutMesh.FlatMesh.Vertices[i];
+		const FVector& Norm = OutMesh.FlatMesh.Normals[i];
+
+		// Only flatten vertices that are clearly top-facing (normal.Z > 0.9)
+		if (Norm.Z > 0.9f)
+		{
+			// Find the maximum Z among nearby top-facing vertices
+			float MaxZ = Vert.Z;
+			const float SearchRadiusSq = FMath::Square(NeighborhoodRadius);
+
+			for (int32 j = 0; j < OutMesh.FlatMesh.Vertices.Num(); ++j)
+			{
+				if (i == j) continue;
+				
+				const FVector& OtherVert = OutMesh.FlatMesh.Vertices[j];
+				const FVector& OtherNorm = OutMesh.FlatMesh.Normals[j];
+
+				// Only consider other top-facing vertices
+				if (OtherNorm.Z <= 0.9f) continue;
+
+				const float DistSq = FVector::DistSquared(Vert, OtherVert);
+				if (DistSq <= SearchRadiusSq)
+				{
+					if (OtherVert.Z > MaxZ)
+					{
+						MaxZ = OtherVert.Z;
+					}
+				}
+			}
+
+			// Adjust this vertex to the maximum Z (if it's lower)
+			if (FMath::Abs(MaxZ - Vert.Z) > KINDA_SMALL_NUMBER)
+			{
+				NewVertices[i].Z = MaxZ;
+				// Recompute normal to point straight up
+				NewNormals[i] = FVector(0.f, 0.f, 1.f);
+			}
+		}
+	}
+
+	// Update the mesh data
+	OutMesh.FlatMesh.Vertices = MoveTemp(NewVertices);
+	OutMesh.FlatMesh.Normals = MoveTemp(NewNormals);
+
+	// Note: We don't modify UVs or vertex colors; they remain valid
+}

@@ -272,12 +272,22 @@ void FVoxelGeneratorTask::PostProcessDensities(int32 TotalSamples)
 // ============================================================
 void FVoxelGeneratorTask::BuildMesh()
 {
-    MeshOutput.Reset();
-    FVoxelMeshGenerator::GenerateMesh(
-        Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
+    
+        MeshOutput.Reset();
 
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: Chunk X=%d Y=%d Z=%d Verts=%d"),
-		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, MeshOutput.FlatMesh.Vertices.Num()));
+        FVoxelMeshGenerator::GenerateMesh(
+
+            Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
+
+        
+
+        // Post-process: flatten top-facing vertices to improve walkability on voxel terrain
+        FVoxelMeshGenerator::FlattenMeshTops(VoxelSize, MeshOutput);
+    
+    	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: Chunk X=%d Y=%d Z=%d Verts=%d"),
+
+    		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, MeshOutput.FlatMesh.Vertices.Num()));
+
 }
 
 // ============================================================
