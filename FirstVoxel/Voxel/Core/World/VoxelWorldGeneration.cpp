@@ -62,7 +62,7 @@ void AVoxelWorld::GenerateWorldDeferred()
 		}
 	}
 
-	// 0. Reconcile existing chunks to avoid "stacking"
+	// 0. Reconcile existing chunks to avoid "stacking" - MUST run on game thread
 	DiscoverExistingChunks();
 
 	// 1. Integrated Smart Area Search - moved to async task
