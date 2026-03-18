@@ -641,6 +641,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	// since we don't freeze or hide the player anymore
 
 	Pos.Z = TargetZ;
+	TargetCoordsZ = TargetZ; // FIX: Ensure Loading Wait Screen parks player above ground
 	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
 	
 	// FIXED: Initialize spawn tracking with proper coordinate alignment

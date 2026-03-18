@@ -444,10 +444,10 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float HeightNorm    = FMath::Clamp(CenterHeight / SC.MaxTerrainReference, 0.f, 1.f);
         const float RoughnessNorm = FMath::Clamp(CenterWeights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
 
-        const float CurvedHeight  = FMath::Pow(HeightNorm, 2.5f);
-        const float CurvedRough   = FMath::Pow(RoughnessNorm, 2.0f);
+        const float CurvedHeight  = FMath::Pow(FMath::Max(0.f, HeightNorm), 2.5f);
+        const float CurvedRough   = FMath::Pow(FMath::Max(0.f, RoughnessNorm), 2.0f);
         const float TerrainStr    = FMath::Clamp(HeightNorm * 1.5f + RoughnessNorm * 0.8f, 0.f, 1.f);
-        const float ShardFalloff  = FMath::Pow(TerrainStr, 2.2f);
+        const float ShardFalloff  = FMath::Pow(FMath::Max(0.f, TerrainStr), 2.2f);
 
         // CellShardT: same altitude ramp but per-cell so size/thickness are
         // evaluated against the cell's own terrain, not the query column.
@@ -467,11 +467,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         //  CurvedHeight applies a power curve so probability rises steeply
         //  only over genuinely tall terrain, not gradual plains.
         // -------------------------------------------------------------------
-        float Prob = FMath::Clamp(
-            SC.BaseProbability
-            + CurvedHeight * SC.HeightProbabilityBonus
-            + CurvedRough  * SC.RoughnessProbabilityBonus,
-            0.02f, 1.f);
+        float Prob = FMath::Lerp(SC.BaseProbability, SC.BaseProbability + SC.HeightProbabilityBonus, CellShardT);
         if (HashProb > Prob) continue;
 
         // -------------------------------------------------------------------
@@ -488,7 +484,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         // Base size at this altitude: lerp from tiny shard to full island.
         float IslandSize = FMath::Lerp(
             SC.BaseIslandSize * ShardMinScale,
-            SC.BaseIslandSize + CurvedHeight * SC.HeightSizeBonus + CurvedRough * SC.RoughnessSizeBonus,
+            SC.BaseIslandSize + SC.HeightSizeBonus,
             CellShardT);
 
         // Apply per-cell size noise (±50% at low altitude, ±25% at high).
@@ -510,9 +506,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float DecoupledHeight = FMath::Lerp(AbsoluteSkyAnchor, CenterHeight, CellShardT);
 
         const float SkyAlt = DecoupledHeight + AltitudeBase
-            + CurvedHeight * SC.HeightAltitudeBonus
-            + CurvedRough  * SC.RoughnessAltitudeBonus
-            + (1.f - CellShardT) * SC.LowTerrainAltitudeBoost;
+            + (CellShardT * SC.HeightAltitudeBonus);
 
 
         // -------------------------------------------------------------------
@@ -565,8 +559,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
         const float ShardThresholdBoost = FMath::Lerp(0.20f, 0.0f, CellShardT);
 
-        float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob)
-
+        float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CellShardT)
                                 + ShardThresholdBoost;
         
         // Ensure larger islands get lower threshold to merge noise features into a single disc
