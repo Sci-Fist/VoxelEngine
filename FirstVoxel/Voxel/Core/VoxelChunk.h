@@ -182,6 +182,13 @@ public:
 		return ProceduralMesh->GetBodyInstance() != nullptr
 			&& ProceduralMesh->GetBodyInstance()->IsValidBodyInstance();
 	}
+
+	bool IsEmpty() const
+	{
+		return MeshOutput.FlatMesh.Vertices.Num() == 0 && 
+		       MeshOutput.SlopeMesh.Vertices.Num() == 0 && 
+		       !WaterData.HasAnyWater();
+	}
 	
 	FORCEINLINE UProceduralMeshComponent* GetProceduralMesh() const { return ProceduralMesh; }
 

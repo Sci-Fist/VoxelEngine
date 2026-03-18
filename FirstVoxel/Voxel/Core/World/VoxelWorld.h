@@ -453,7 +453,19 @@ private:
   FVoxelDataMap DataMap;
 
   TMap<FIntVector, AVoxelChunk *> LoadedChunks;
+  TSet<FIntVector> EmptyChunks;
   FVoxelChunkPool ChunkPool;
+
+  /**
+   * Dirty-chunk rebuild queue.
+   * Chunks added here (via MarkChunkDirty) are rebuilt next tick when a
+   * concurrency slot is free.  Replaces the O(N) full LoadedChunks scan that
+   * previously ran every single frame regardless of whether anything was dirty.
+   */
+  TArray<FIntVector> DirtyRebuildQueue;
+
+  /** Mark a chunk as needing a mesh rebuild. Thread-safe: call from game thread only. */
+  void MarkChunkDirty(const FIntVector& Coord);
 
   TArray<FIntVector> GenerationQueue;
   /**
@@ -471,6 +483,11 @@ private:
 
   float StreamingTimer = 0.f;
   static constexpr float StreamingInterval = 0.25f;
+
+  /** Cached skyland altitude (world Z, cm). Recomputed only when player moves > SkyAltSnapDist. */
+  float CachedSkyAltWorld = 0.f;
+  FVector LastSkyAltPos   = FVector(1e9f); // force first compute
+  static constexpr float SkyAltSnapDist = 1000.f; // recompute every 10m of movement
 
   bool bInitialized = false;
   FThreadSafeBool bShutdown{false};

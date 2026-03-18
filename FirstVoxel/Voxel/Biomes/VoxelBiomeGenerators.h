@@ -58,6 +58,14 @@ struct FSkylandColumnCache
     float HeightNorm = 0.f;
     float ShardFalloff = 0.f;
 
+    /**
+     * ShardT: 0 = pure sky-shard (rock), 1 = full floating island.
+     * Used in GetSkylandDensityFromCache to blend between:
+     *   Rock falloff  (ShardT=0): spherical, no flat top, strong 3D noise
+     *   Island falloff(ShardT=1): flat-top plateau, low Z noise, organic taper
+     */
+    float ShardT = 0.f;
+
     // Cache dimensions
     float WX = 0.f;
     float WY = 0.f;

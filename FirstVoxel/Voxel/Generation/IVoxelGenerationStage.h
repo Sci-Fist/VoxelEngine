@@ -14,6 +14,7 @@ struct FColumnContext
 	float                SurfaceHeight = 0.f;
 	float                NeutralSurfaceHeight = 0.f;
 	float                BedrockHeight = -20000.f;
+	float                MaxWorldZ = 0.f;
 
 	FVoxelBiomeWeightMap BiomeWeights;
 	FSkylandColumnCache  SkylandCache;

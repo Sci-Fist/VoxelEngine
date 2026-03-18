@@ -221,9 +221,13 @@ float FVoxelDensityGenerator::GetDensityFull(
     // ---- ☁️ CLEARANCE GATE: Force absolute air gap above local terrain ----
     // This solves cell-center averaging overlaps by enforcing SC.MinAltitudeAboveTerrain
     // continuously against the local height coordinate.
-    if (Z < SurfaceHeight + SC.MinAltitudeAboveTerrain)
+    const float HeightCutoff = SurfaceHeight + SC.MinAltitudeAboveTerrain;
+    const float FadeDist = 400.f; // 4 meters smooth fade
+    if (Z < HeightCutoff)
     {
-        SkyD = -2.f; // Force Skyland to Air
+        const float t = FMath::Clamp((HeightCutoff - Z) / FadeDist, 0.f, 1.f);
+        const float SmoothT = FMath::SmoothStep(0.f, 1.f, t);
+        SkyD = FMath::Lerp(SkyD, -2.f, SmoothT);
     }
 
     // Final composition: Terrain takes precedence, skylands override air above.
@@ -353,6 +357,20 @@ float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos, const FColumnContex
 
 void FVoxelSkylandPass::PrepareColumn(float WorldX, float WorldY, const FVoxelGenerationConfig& Config, FColumnContext& OutContext) const
 {
+	const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+	
+	const float SkyLowerBound = OutContext.SurfaceHeight 
+		+ SC.MinAltitudeAboveTerrain 
+		- (SC.BaseIslandSize * SC.ThicknessRatio) 
+		- 1000.f; // safety margin
+
+	if (OutContext.MaxWorldZ < SkyLowerBound)
+	{
+		// Column is safely below the skyland belt; skip heavy neighbor cells list sampling
+		OutContext.SkylandCache.bHasSkyland = false;
+		return;
+	}
+
 	OutContext.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(WorldX, WorldY, OutContext.SurfaceHeight, OutContext.BiomeWeights, Config);
 }
 
@@ -375,7 +393,14 @@ float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos, const FColumnCon
 		}
 	}
 
-	if (Z < Context.SurfaceHeight + SC.MinAltitudeAboveTerrain) SkyD = -2.f;
+	const float HeightCutoff = Context.SurfaceHeight + SC.MinAltitudeAboveTerrain;
+	const float FadeDist = 400.f; // 4 meters smooth fade
+	if (Z < HeightCutoff)
+	{
+		const float t = FMath::Clamp((HeightCutoff - Z) / FadeDist, 0.f, 1.f);
+		const float SmoothT = FMath::SmoothStep(0.f, 1.f, t);
+		SkyD = FMath::Lerp(SkyD, -2.f, SmoothT);
+	}
 
 	return FMath::Max(SkyD, CurrentDensity);
 }

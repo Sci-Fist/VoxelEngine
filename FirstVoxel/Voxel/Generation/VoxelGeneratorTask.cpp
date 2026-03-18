@@ -160,9 +160,9 @@ void FVoxelGeneratorTask::BuildDensityField()
     if (Config.Performance.bEnableSkylands)
         Pipeline.Add(MakeShared<FVoxelSkylandPass>());
 
-    // Allocate column weight cache without zero-constructing -- every entry will
-    // be overwritten in the parallel loop below.
+    // Allocate column caches — every entry is overwritten in the parallel loop.
     ColumnWeights.SetNumUninitialized(EffCS * EffCS);
+    ColumnSurfaceH.SetNumUninitialized(EffCS * EffCS);
 
     // ---- Main density loop ----
     // Parallelized across both X and Y dimensions to fully utilize multi-core CPUs.
@@ -201,19 +201,24 @@ void FVoxelGeneratorTask::BuildDensityField()
         CavernWeights.Normalize();
         const float NeutralSurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(WorldX, WorldY, CavernWeights, Config);
 
-        // Cache Skyland data for the column to avoid running 2D cellular lists for every Z step.
-        const FSkylandColumnCache SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(
-            WorldX, WorldY, SurfaceHeight, Weights, Config);
-
-        // Cache weights for foliage pass (inner non-padding columns only).
+        // Cache weights AND surface height for foliage pass (inner non-padding columns only).
+        // Storing SurfaceHeight here avoids calling GetSurfaceHeightStatic() again in
+        // CalculateFoliage, which previously re-evaluated the same noise per column.
         const int32 LX = X - 1, LY = Y - 1;
         if (LX >= 0 && LX < EffCS && LY >= 0 && LY < EffCS)
-            ColumnWeights[LX + LY * EffCS] = Weights;
+        {
+            const int32 CIdx = LX + LY * EffCS;
+            ColumnWeights[CIdx]  = Weights;
+            ColumnSurfaceH[CIdx] = SurfaceHeight;
+        }
 
         // ---- Per-column preparation (O(N²)) ----
+        const float MaxWorldZ = WorldOrigin.Z + (EffectiveSize + 1) * EffVoxelSize;
+
         FColumnContext Context;
         Context.SurfaceHeight = SurfaceHeight;
         Context.BiomeWeights  = Weights;
+        Context.MaxWorldZ     = MaxWorldZ;
 
         for (const auto& Pass : Pipeline)
         {
@@ -222,7 +227,6 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         // ---- Column Range Checks for Early-Out (Area 2 Optimization) ----
         const float MinWorldZ = WorldOrigin.Z - EffVoxelSize;
-        const float MaxWorldZ = WorldOrigin.Z + (EffectiveSize + 1) * EffVoxelSize;
 
         // 1. Bedrock fully solid check
         if (MaxWorldZ < Config.CaveTunnels.BedrockDepth)
@@ -368,8 +372,13 @@ void FVoxelGeneratorTask::CalculateFoliage()
         if (!ColumnWeights.IsValidIndex(CacheIdx)) continue;
 
         const FVoxelBiomeWeightMap& weights = ColumnWeights[CacheIdx];
-        const float SurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(
-            WorldOrigin.X + LX * EffVoxelSize, WorldOrigin.Y + LY * EffVoxelSize, weights, Config);
+        // FIX: Use cached surface height from BuildDensityField instead of re-evaluating
+        // the full biome noise stack. Previously this called GetSurfaceHeightStatic per
+        // column in the foliage pass — doubling the noise evaluation work for every chunk.
+        const float SurfaceHeight = ColumnSurfaceH.IsValidIndex(CacheIdx)
+            ? ColumnSurfaceH[CacheIdx]
+            : FVoxelBiomeManager::GetSurfaceHeightStatic(
+                WorldOrigin.X + LX * EffVoxelSize, WorldOrigin.Y + LY * EffVoxelSize, weights, Config);
 
         // Map height to local cell Z for normal lookup
         const int32 CellZ = FMath::Clamp(FMath::RoundToInt((SurfaceHeight - WorldOrigin.Z) / EffVoxelSize) + 1, 1, EffectiveSize + 1);

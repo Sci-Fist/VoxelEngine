@@ -303,7 +303,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 	// bD0Solid: true when the voxel on the D0 side of the edge is solid.
 	//           Determines which winding produces an outward-facing front-face.
 	auto EmitQuad = [&](int32 i0, int32 i1, int32 i2, int32 i3,
-	                    int32 ColX, int32 ColY, bool bD0Solid, bool bBorder)
+	                    int32 ColX, int32 ColY, bool bD0Solid, bool bBorder, const FVector& Axis)
 	{
 		if (VertexIndices[i0] < 0 || VertexIndices[i1] < 0 ||
 		    VertexIndices[i2] < 0 || VertexIndices[i3] < 0) return;
@@ -313,46 +313,47 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const FVector& v2 = CellVertices[i2]; const FVector& n2 = CellNormals[i2];
 		const FVector& v3 = CellVertices[i3]; const FVector& n3 = CellNormals[i3];
 
-		// FIX 3: Geometric face normal via cross-product of quad diagonals.
-		// This is the actual direction the quad's surface faces in world space.
-		// We choose the diagonal order that matches the front-face winding below.
-		FVector GeomNormal;
-		if (!bD0Solid)
-			GeomNormal = FVector::CrossProduct(v2 - v0, v3 - v1).GetSafeNormal();
-		else
-			GeomNormal = FVector::CrossProduct(v1 - v3, v0 - v2).GetSafeNormal();
+		// FIX 3: Outward normal is forced based on solid side and edge axis.
+		// D0 is at lower coordinate, D1 at higher.
+		// If D0 is solid (bD0Solid=true), air is at D1 -> normal is +Axis.
+		// If D1 is solid (bD0Solid=false), air is at D0 -> normal is -Axis.
+		const FVector OutwardNormal = bD0Solid ? Axis : -Axis;
 
-		// Classify flat vs slope using the geometric normal, not gradient normals.
-		// Config.SlopeThreshold default = 0.7 (~45°). Faces more vertical than this
-		// go to SlopeMesh and get the cliff/rock material.
+		// Classify flat vs slope using the geometric normal vector's Z component.
 		const float   SlopeThresh = Config.SlopeThreshold;
-		const bool    bIsFlat     = FMath::Abs(GeomNormal.Z) >= SlopeThresh;
+		const bool    bIsFlat     = FMath::Abs(OutwardNormal.Z) >= SlopeThresh;
 
 		FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh  : OutMesh.SlopeMesh;
 		FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh  : OutMesh.SlopeBackMesh;
 
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
-		if (!bD0Solid)
-		{
-			// D1 is solid → normal faces toward D0 (air) → CCW: v0,v1,v2 + v0,v2,v3
-			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, GeomNormal, VC);
-			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, GeomNormal, VC);
+		// Determine if the triangulation (v0, v1, v2) is Counter-Clockwise
+		// with respect to the OutwardNormal.
+		const FVector TriNormal = FVector::CrossProduct(v1 - v0, v2 - v0).GetSafeNormal();
+		const bool bIsCCW = FVector::DotProduct(TriNormal, OutwardNormal) > 0.0f;
 
-			// FIX 4: Backface — flip winding ONLY; normals stay (now point inward = correct for underside)
-			EmitTriangle(BackDest, v2, v1, v0, n2, n1, n0, -GeomNormal, VC);
-			EmitTriangle(BackDest, v3, v2, v0, n3, n2, n0, -GeomNormal, VC);
+		if (bIsCCW)
+		{
+			// Triangle order is already Counter-Clockwise (front-facing)
+			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, OutwardNormal, VC);
+			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, OutwardNormal, VC);
+
+			// Backface — flip winding for backface mesh (no collision)
+			EmitTriangle(BackDest, v2, v1, v0, n2, n1, n0, -OutwardNormal, VC);
+			EmitTriangle(BackDest, v3, v2, v0, n3, n2, n0, -OutwardNormal, VC);
 		}
 		else
 		{
-			// D0 is solid → normal faces toward D1 (air) → CW flip: v2,v1,v0 + v3,v2,v0
-			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, GeomNormal, VC);
-			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, GeomNormal, VC);
+			// Triangle order is Clockwise (back-facing) -> reverse winding to make CCW
+			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, OutwardNormal, VC);
+			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, OutwardNormal, VC);
 
-			// FIX 4: Backface — flip winding ONLY
-			EmitTriangle(BackDest, v0, v1, v2, n0, n1, n2, -GeomNormal, VC);
-			EmitTriangle(BackDest, v0, v2, v3, n0, n2, n3, -GeomNormal, VC);
+			// Backface — flip winding
+			EmitTriangle(BackDest, v0, v1, v2, n0, n1, n2, -OutwardNormal, VC);
+			EmitTriangle(BackDest, v0, v2, v3, n0, n2, n3, -OutwardNormal, VC);
 		}
+
 
 		// Area 1: LOD Seams Improvement — Curtain Skirts for border quads
 		if (bBorder && bIsFlat)
@@ -385,7 +386,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 			const bool bBorder = (X == 1 || X == EffectiveSize || Y == 1 || Y == EffectiveSize);
 			EmitQuad(Idx(X, Y,   Z,   S), Idx(X, Y,   Z-1, S),
 			         Idx(X, Y-1, Z-1, S), Idx(X, Y-1, Z,   S),
-			         X, Y, D0 > 0.f, bBorder);
+			         X, Y, D0 > 0.f, bBorder, FVector(1.f, 0.f, 0.f));
 		}
 	}
 
@@ -401,7 +402,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 			const bool bBorder = (X == 1 || X == EffectiveSize || Y == 1 || Y == EffectiveSize);
 			EmitQuad(Idx(X,   Y, Z,   S), Idx(X-1, Y, Z,   S),
 			         Idx(X-1, Y, Z-1, S), Idx(X,   Y, Z-1, S),
-			         X, Y, D0 > 0.f, bBorder);
+			         X, Y, D0 > 0.f, bBorder, FVector(0.f, 1.f, 0.f));
 		}
 	}
 
@@ -417,71 +418,72 @@ void FVoxelMeshGenerator::GenerateMesh(
 			const bool bBorder = (X == 1 || X == EffectiveSize || Y == 1 || Y == EffectiveSize);
 			EmitQuad(Idx(X,   Y,   Z, S), Idx(X,   Y-1, Z, S),
 			         Idx(X-1, Y-1, Z, S), Idx(X-1, Y,   Z, S),
-			         X, Y, D0 > 0.f, bBorder);
+			         X, Y, D0 > 0.f, bBorder, FVector(0.f, 0.f, 1.f));
 		}
 	}
 }
 
 // Post-processing: Flatten top-facing vertices to improve walkability
+//
+// FIX: Old implementation was O(V²) — for each of V top-facing vertices it searched
+// all V vertices for neighbors, so a chunk with 2000 vertices did 4,000,000 comparisons.
+// With 12 concurrent background tasks that’s 48M comparisons happening simultaneously.
+//
+// New implementation is O(V) using a 2D spatial grid bucketed by (floor(x/cell), floor(y/cell)).
+// Each vertex only looks up the 9 grid cells around it — typically 2–10 vertices total.
 void FVoxelMeshGenerator::FlattenMeshTops(float InVoxelSize, FVoxelMeshOutput& OutMesh)
 {
-	// Only process FlatMesh (top-facing surfaces)
-	if (OutMesh.FlatMesh.Vertices.Num() == 0) return;
+	const TArray<FVector>& Verts = OutMesh.FlatMesh.Vertices;
+	const TArray<FVector>& Norms = OutMesh.FlatMesh.Normals;
+	if (Verts.Num() == 0) return;
 
-	// Build spatial index of vertices for neighborhood queries
-	// Use simple grid-based approach since vertices are in local chunk space
-	const float VoxelSize = InVoxelSize;
-	const float NeighborhoodRadius = VoxelSize * 1.5f; // Search radius for finding local max Z
+	const float CellSize = InVoxelSize * 1.5f;  // grid cell ≈ one voxel
+	const float CellSizeInv = 1.f / CellSize;
 
-	TArray<FVector> NewVertices = OutMesh.FlatMesh.Vertices;
-	TArray<FVector> NewNormals = OutMesh.FlatMesh.Normals;
+	// ─ Build grid: map (GX, GY) -> max Z among top-facing vertices in that cell ─
+	// We only need the max Z per cell, not per vertex — all vertices in a cell snap
+	// to the same max, so one pass over the grid is sufficient.
+	TMap<TPair<int32,int32>, float> CellMaxZ;
+	CellMaxZ.Reserve(Verts.Num());
 
-	// For each vertex with normal.Z > 0.9 (top-facing), find the highest Z in its neighborhood
-	for (int32 i = 0; i < OutMesh.FlatMesh.Vertices.Num(); ++i)
+	for (int32 i = 0; i < Verts.Num(); ++i)
 	{
-		const FVector& Vert = OutMesh.FlatMesh.Vertices[i];
-		const FVector& Norm = OutMesh.FlatMesh.Normals[i];
+		if (Norms[i].Z <= 0.9f) continue; // skip non-top-facing
+		const int32 GX = FMath::FloorToInt(Verts[i].X * CellSizeInv);
+		const int32 GY = FMath::FloorToInt(Verts[i].Y * CellSizeInv);
+		const auto Key = TPair<int32,int32>(GX, GY);
+		float& MaxZ = CellMaxZ.FindOrAdd(Key, Verts[i].Z);
+		MaxZ = FMath::Max(MaxZ, Verts[i].Z);
+	}
 
-		// Only flatten vertices that are clearly top-facing (normal.Z > 0.9)
-		if (Norm.Z > 0.9f)
+	// ─ Second pass: for each top-facing vertex, look up the 3x3 cell neighbourhood ─
+	// and snap to the highest Z found in those 9 cells. This is O(9) per vertex.
+	TArray<FVector> NewVertices = Verts;
+	TArray<FVector> NewNormals  = Norms;
+
+	for (int32 i = 0; i < Verts.Num(); ++i)
+	{
+		if (Norms[i].Z <= 0.9f) continue;
+
+		const int32 GX = FMath::FloorToInt(Verts[i].X * CellSizeInv);
+		const int32 GY = FMath::FloorToInt(Verts[i].Y * CellSizeInv);
+		float NeighMax = Verts[i].Z;
+
+		for (int32 dx = -1; dx <= 1; ++dx)
+		for (int32 dy = -1; dy <= 1; ++dy)
 		{
-			// Find the maximum Z among nearby top-facing vertices
-			float MaxZ = Vert.Z;
-			const float SearchRadiusSq = FMath::Square(NeighborhoodRadius);
+			const auto Key = TPair<int32,int32>(GX + dx, GY + dy);
+			if (const float* Z = CellMaxZ.Find(Key))
+				NeighMax = FMath::Max(NeighMax, *Z);
+		}
 
-			for (int32 j = 0; j < OutMesh.FlatMesh.Vertices.Num(); ++j)
-			{
-				if (i == j) continue;
-				
-				const FVector& OtherVert = OutMesh.FlatMesh.Vertices[j];
-				const FVector& OtherNorm = OutMesh.FlatMesh.Normals[j];
-
-				// Only consider other top-facing vertices
-				if (OtherNorm.Z <= 0.9f) continue;
-
-				const float DistSq = FVector::DistSquared(Vert, OtherVert);
-				if (DistSq <= SearchRadiusSq)
-				{
-					if (OtherVert.Z > MaxZ)
-					{
-						MaxZ = OtherVert.Z;
-					}
-				}
-			}
-
-			// Adjust this vertex to the maximum Z (if it's lower)
-			if (FMath::Abs(MaxZ - Vert.Z) > KINDA_SMALL_NUMBER)
-			{
-				NewVertices[i].Z = MaxZ;
-				// Recompute normal to point straight up
-				NewNormals[i] = FVector(0.f, 0.f, 1.f);
-			}
+		if (FMath::Abs(NeighMax - Verts[i].Z) > KINDA_SMALL_NUMBER)
+		{
+			NewVertices[i].Z = NeighMax;
+			NewNormals[i]    = FVector(0.f, 0.f, 1.f);
 		}
 	}
 
-	// Update the mesh data
 	OutMesh.FlatMesh.Vertices = MoveTemp(NewVertices);
-	OutMesh.FlatMesh.Normals = MoveTemp(NewNormals);
-
-	// Note: We don't modify UVs or vertex colors; they remain valid
+	OutMesh.FlatMesh.Normals  = MoveTemp(NewNormals);
 }

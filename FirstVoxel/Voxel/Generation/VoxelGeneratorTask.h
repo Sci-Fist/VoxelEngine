@@ -145,7 +145,8 @@ private:
 	bool bHasPerBiomeFoliage = false;
 
 	TArray<float> Densities;
-	TArray<FVoxelBiomeWeightMap> ColumnWeights; // Cache for foliage speedups
+	TArray<FVoxelBiomeWeightMap> ColumnWeights;  // Cache for foliage speedups
+	TArray<float>               ColumnSurfaceH;  // Surface height per column, same indexing as ColumnWeights
 
 	// Water source positions (world-voxel coords) detected during generation.
 	TArray<FIntVector> WaterSources;

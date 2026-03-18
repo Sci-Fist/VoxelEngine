@@ -1,0 +1,38 @@
+﻿Using bundled DotNet SDK version: 8.0.412 win-x64
+Running UnrealBuildTool: dotnet "..\..\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll" FirstVoxelEditor Win64 Development "C:\Users\Butch\Documents\Unreal Projects\FirstVoxel\FirstVoxel.uproject" -waitmutex
+Log file: C:\Users\Butch\AppData\Local\UnrealBuildTool\Log.txt
+Building FirstVoxelEditor...
+Using Visual Studio 2022 14.44.35223 toolchain (C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207) and Windows 10.0.22621.0 SDK (C:\Program Files (x86)\Windows Kits\10).
+[Adaptive Build] Excluded from FirstVoxel unity file: FirstVoxel.cpp, FirstVoxelCharacter.cpp, FirstVoxelGameMode.cpp, FirstVoxelHUD.cpp, FirstVoxelPlayerController.cpp, VoxelMapWidget.cpp, VoxelPauseMenu.cpp, VoxelLogger.cpp, VoxelMapGenerator.cpp, VoxelBiomeGenerators.cpp, VoxelBiomeManager.cpp, VoxelWaterComponent.cpp, VoxelWaterSimulator.cpp, VoxelChunk.cpp, VoxelChunkPool.cpp, VoxelDataMap.cpp, VoxelWorld.cpp, VoxelWorldGeneration.cpp, VoxelWorldModification.cpp, VoxelWorld_Streaming.cpp, VoxelWorldWater.cpp, VoxelDensityGenerator.cpp, VoxelGeneratorTask.cpp, VoxelMeshGenerator.cpp, MapVoxelGenerator.cpp, WaterVoxelComponent.cpp, WaterVoxelSimulator.cpp
+Determining max actions to execute in parallel (6 physical cores, 12 logical cores)
+  Executing up to 6 processes, one per physical core
+Using Unreal Build Accelerator local executor to run 19 action(s)
+  Storage capacity 40Gb
+---- Starting trace: 260318_072319 ----
+UbaServer - Listening on 0.0.0.0:1345
+[1/19] Compile [x64] VoxelBiomeGenerators.cpp
+[2/19] Compile [x64] VoxelDensityGenerator.cpp
+[3/19] Compile [x64] VoxelGeneratorTask.cpp
+[4/19] Compile [x64] VoxelChunk.cpp
+[5/19] Compile [x64] FirstVoxelHUD.cpp
+[6/19] Compile [x64] Module.FirstVoxel.2.cpp
+[7/19] Compile [x64] VoxelMeshGenerator.cpp
+[8/19] Compile [x64] FirstVoxelCharacter.cpp
+[9/19] Compile [x64] FirstVoxelPlayerController.cpp
+[10/19] Compile [x64] VoxelMapWidget.cpp
+[11/19] Compile [x64] VoxelPauseMenu.cpp
+[12/19] Compile [x64] VoxelWorld.cpp
+[13/19] Compile [x64] VoxelWorldModification.cpp
+[14/19] Compile [x64] VoxelWorldGeneration.cpp
+[15/19] Compile [x64] VoxelWorldWater.cpp
+[16/19] Compile [x64] VoxelWorld_Streaming.cpp
+[17/19] Link [x64] UnrealEditor-FirstVoxel.lib
+   Bibliothek "C:/Users/Butch/Documents/Unreal Projects/FirstVoxel/Intermediate/Build/Win64/x64/UnrealEditor/Development/FirstVoxel/UnrealEditor-FirstVoxel.lib" und Objekt "C:/Users/Butch/Documents/Unreal Projects/FirstVoxel/Intermediate/Build/Win64/x64/UnrealEditor/Development/FirstVoxel/UnrealEditor-FirstVoxel.exp" werden erstellt.
+[18/19] Link [x64] UnrealEditor-FirstVoxel.dll
+[19/19] WriteMetadata FirstVoxelEditor.target [NoUba]
+
+Trace written to file C:/Users/Butch/AppData/Local/UnrealBuildTool/Log.uba with size 7.1kb
+Total time in Unreal Build Accelerator local executor: 7.60 seconds
+
+Result: Succeeded
+Total execution time: 8.54 seconds

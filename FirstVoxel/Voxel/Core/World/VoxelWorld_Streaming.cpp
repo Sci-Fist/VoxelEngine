@@ -45,9 +45,9 @@ void AVoxelWorld::UpdateChunkStreaming()
 		return;
 	}
 
-	// Throttle streaming updates to prevent excessive CPU usage
-	StreamingTimer += GetWorld()->GetDeltaSeconds();
-	if (StreamingTimer < StreamingInterval) return;
+	// FIX: StreamingTimer is already incremented in AVoxelWorld::Tick.
+	// Double-incrementing here caused streaming to fire at half the intended interval.
+	// This function is only called when the timer has already elapsed — just reset it.
 	StreamingTimer = 0.f;
 
 	// --- ⚡ Optimization: Skip building streaming volumes if player is stationary ---
@@ -69,30 +69,34 @@ void AVoxelWorld::UpdateChunkStreaming()
 	const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
 	const float ChunkWorldSize = ChunkSize * VoxelSize;
 
-	// Compute skyland altitude based on current terrain height
-	// This ensures skylands are properly positioned above varying terrain elevations
-	const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(
-		PlayerPos.X, PlayerPos.Y, Config);
-	const float PlayerSurfH = Wh.SurfaceHeight;
+	// FIX: Cache SkyAlt and only recompute when player moves > SkyAltSnapDist.
+	// Previously this ran full biome noise every 0.25s even when the player was
+	// standing still on flat terrain.
+	if (FVector::DistSquared(PlayerPos, LastSkyAltPos) > SkyAltSnapDist * SkyAltSnapDist)
+	{
+		LastSkyAltPos = PlayerPos;
 
-	// FIX: GridSnap the height to 1000cm discrete steps so the SkyZCoordCenter
-	// does not shift continuously on slight slope movements, avoiding lag spikes.
-	const float RoundedSurfH     = FMath::GridSnap(PlayerSurfH, 1000.f);
+		const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(
+			PlayerPos.X, PlayerPos.Y, Config);
+		const float PlayerSurfH   = Wh.SurfaceHeight;
+		const float RoundedSurfH  = FMath::GridSnap(PlayerSurfH, 1000.f);
 
-	// Calculate normalized terrain parameters for skyland positioning
-	const float HeightNormSky    = FMath::Clamp(PlayerSurfH / SC.MaxTerrainReference, 0.f, 1.f);
-	const float RoughnessNormSky = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
-	const float TerrainStrSky    = FMath::Clamp(HeightNormSky * 1.5f + RoughnessNormSky * 0.8f, 0.f, 1.f);
-	const float ShardFalloff     = FMath::Pow(TerrainStrSky, 2.2f); // Match GetSkylandColumnCache()
-	const float CurvedH          = FMath::Pow(HeightNormSky,    2.5f);
-	const float CurvedR          = FMath::Pow(RoughnessNormSky, 2.0f);
-	const float AltBase          = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrSky);
-	
-	// Calculate final skyland altitude with terrain-based adjustments
-	const float SkyAltWorld      = RoundedSurfH + AltBase
-		                           + CurvedH * SC.HeightAltitudeBonus
-		                           + CurvedR * SC.RoughnessAltitudeBonus
-		                           + ShardFalloff * SC.LowTerrainAltitudeBoost;
+		const float HeightNormSky    = FMath::Clamp(PlayerSurfH / SC.MaxTerrainReference, 0.f, 1.f);
+		const float RoughnessNormSky = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
+		const float TerrainStrSky    = FMath::Clamp(HeightNormSky * 1.5f + RoughnessNormSky * 0.8f, 0.f, 1.f);
+		const float ShardFalloff     = FMath::Pow(TerrainStrSky, 2.2f);
+		const float CurvedH          = FMath::Pow(HeightNormSky,    2.5f);
+		const float CurvedR          = FMath::Pow(RoughnessNormSky, 2.0f);
+		const float AltBase          = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrSky);
+
+		CachedSkyAltWorld = RoundedSurfH + AltBase
+		                  + CurvedH * SC.HeightAltitudeBonus
+		                  + CurvedR * SC.RoughnessAltitudeBonus
+		                  + ShardFalloff * SC.LowTerrainAltitudeBoost;
+	}
+
+	// Use the cached sky altitude (recomputed above if player moved enough)
+	const float SkyAltWorld = CachedSkyAltWorld;
 
 	// Calculate skyland thickness in chunks with margin
 	const float IslandSize    = FMath::Max(SC.BaseIslandSize,
@@ -127,7 +131,13 @@ void AVoxelWorld::UpdateChunkStreaming()
 	{
 		if (!Desired.Contains(It.Key)) ToRemove.Add(It.Key);
 	}
-	for (const FIntVector& C : ToRemove) DestroyChunk(C);
+	for (const FIntVector& C : ToRemove)
+	{
+		DestroyChunk(C);
+		// FIX: Prune EmptyChunks when chunks leave range so the set doesn't grow unboundedly.
+		// Previously EmptyChunks was only cleared on ClearWorld(), leaking memory over long sessions.
+		EmptyChunks.Remove(C);
+	}
 
 	// --- 3. DYNAMIC LOD MULTIPLIERS FOR EXISTING CHUNKS ---
 	// Update LOD levels for existing chunks based on distance from player
@@ -136,25 +146,24 @@ void AVoxelWorld::UpdateChunkStreaming()
 		AVoxelChunk* Chunk = It.Value;
 		if (IsValid(Chunk))
 		{
-			// Calculate distance to chunk center for LOD determination
+			// Calculate distance to chunk center for LOD determination.
+			// FIX: Compare DistSq against squared thresholds directly — eliminates
+			// sqrt() per loaded chunk per streaming update (was ~500 sqrts every 0.25s).
 			FVector ChunkPos = ChunkCoordToWorld(It.Key) + FVector(ChunkSize * VoxelSize * 0.5f);
-			float DistSq = FVector::DistSquared(PlayerPos, ChunkPos);
+			const float DistSq = FVector::DistSquared(PlayerPos, ChunkPos);
 
-			// Hysteresis bands prevent LOD flip-flopping at borders.
-			// Upgrade (lower LOD number = higher detail) only when inside the INNER threshold.
-			// Downgrade (higher LOD number = lower detail) only when outside the OUTER threshold.
+			// Hysteresis bands (pre-squared) prevent LOD flip-flopping at borders.
 			static constexpr float HysteresisFactor = 1.10f;
-			const float L1I = LOD1Distance;
-			const float L1O = LOD1Distance * HysteresisFactor;
-			const float L2I = LOD2Distance;
-			const float L2O = LOD2Distance * HysteresisFactor;
-			const float D   = FMath::Sqrt(DistSq); // single sqrt here, not per-comparison
+			const float L1ISq = LOD1Distance * LOD1Distance;
+			const float L1OSq = LOD1Distance * LOD1Distance * HysteresisFactor * HysteresisFactor;
+			const float L2ISq = LOD2Distance * LOD2Distance;
+			const float L2OSq = LOD2Distance * LOD2Distance * HysteresisFactor * HysteresisFactor;
 
 			int32 TargetLOD = Chunk->LOD;
-			if      (Chunk->LOD < 2 && D > L2O) TargetLOD = 2;  // downgrade to LOD2
-			else if (Chunk->LOD > 1 && D < L2I) TargetLOD = 1;  // upgrade from LOD2
-			else if (Chunk->LOD < 1 && D > L1O) TargetLOD = 1;  // downgrade to LOD1
-			else if (Chunk->LOD > 0 && D < L1I) TargetLOD = 0;  // upgrade to full res
+			if      (Chunk->LOD < 2 && DistSq > L2OSq) TargetLOD = 2;
+			else if (Chunk->LOD > 1 && DistSq < L2ISq) TargetLOD = 1;
+			else if (Chunk->LOD < 1 && DistSq > L1OSq) TargetLOD = 1;
+			else if (Chunk->LOD > 0 && DistSq < L1ISq) TargetLOD = 0;
 
 			if (TargetLOD != Chunk->LOD)
 			{
@@ -172,7 +181,7 @@ void AVoxelWorld::UpdateChunkStreaming()
 	// 1. Add newly desired (not yet loaded) chunks
 	for (const FIntVector& C : Desired)
 	{
-		if (!LoadedChunks.Contains(C))
+		if (!LoadedChunks.Contains(C) && !EmptyChunks.Contains(C))
 		{
 			UniqueMerged.Add(C);
 		}

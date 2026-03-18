@@ -187,10 +187,13 @@ void AVoxelWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	// Brief spin to let queued game-thread callbacks drain (max 3 s).
 	const double Deadline = FPlatformTime::Seconds() + 3.0;
 	while (ActiveGenerations > 0 && FPlatformTime::Seconds() < Deadline)
+	{
 		FPlatformProcess::Sleep(0.01f);
+	}
 
 	LoadedChunks.Empty();
 	GenerationQueue.Empty();
+	EmptyChunks.Empty();
 	QueueHead = 0;
 	ActiveGenerations = 0;
 
@@ -417,33 +420,51 @@ void AVoxelWorld::Tick(float DeltaTime)
 		}
 	}
 
-	// Rebuild any chunks dirtied by player edits.
-	// FIX: Must increment ActiveGenerations and wire OnGenerationComplete BEFORE
-	// calling GenerateAsync(), otherwise the counter saturates after ~12 digs
-	// and all future async generation (both tools AND streaming) silently stops.
+	// ── Dirty-chunk rebuild — O(DirtyQueue) not O(LoadedChunks) ──────────────
+	// DirtyRebuildQueue is populated by MarkChunkDirty() (called from SetVoxelSphere etc.).
+	// Scanning all LoadedChunks every frame was O(N) even when nothing was dirty.
+	for (int32 i = DirtyRebuildQueue.Num() - 1; i >= 0; --i)
+	{
+		const FIntVector Coord = DirtyRebuildQueue[i];
+		AVoxelChunk** ChunkPtr = LoadedChunks.Find(Coord);
+		if (!ChunkPtr || !(*ChunkPtr))
+		{
+			DirtyRebuildQueue.RemoveAtSwap(i);
+			continue;
+		}
+		AVoxelChunk* Chunk = *ChunkPtr;
+		if (Chunk->IsGenerating()) continue; // still busy — retry next tick
+
+		DirtyRebuildQueue.RemoveAtSwap(i);
+		if (ActiveGenerations >= MaxConcurrentGenerations)
+		{
+			// Re-queue for next tick
+			DirtyRebuildQueue.Add(Coord);
+			break;
+		}
+		Chunk->bMeshDirty = false;
+		ActiveGenerations++;
+		TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+		Chunk->OnGenerationComplete = [WeakThis]()
+		{
+			if (AVoxelWorld* W = WeakThis.Get())
+				W->ActiveGenerations = FMath::Max(0, W->ActiveGenerations - 1);
+		};
+		Chunk->GenerateAsync();
+	}
+
+	// Legacy bMeshDirty fallback: any chunk dirtied by code that hasn't been
+	// updated to call MarkChunkDirty() yet gets caught here at O(N) but
+	// only if it actually has the flag set (short-circuit on false).
 	for (auto& It : LoadedChunks)
 	{
 		if (AVoxelChunk* Chunk = It.Value)
 		{
 			if (Chunk->bMeshDirty && !Chunk->IsGenerating())
 			{
+				// Migrate to proper queue going forward
 				Chunk->bMeshDirty = false;
-				if (ActiveGenerations < MaxConcurrentGenerations)
-				{
-					ActiveGenerations++;
-					TWeakObjectPtr<AVoxelWorld> WeakThis(this);
-					Chunk->OnGenerationComplete = [WeakThis]()
-					{
-						if (AVoxelWorld* W = WeakThis.Get())
-							W->ActiveGenerations = FMath::Max(0, W->ActiveGenerations - 1);
-					};
-					Chunk->GenerateAsync();
-				}
-				else
-				{
-					// Re-flag dirty so it retries next tick when a slot frees up
-					Chunk->bMeshDirty = true;
-				}
+				DirtyRebuildQueue.AddUnique(It.Key);
 			}
 		}
 	}
@@ -467,6 +488,15 @@ void AVoxelWorld::OnConstruction(const FTransform& Transform)
 // ============================================================
 //  ClearWorld
 // ============================================================
+void AVoxelWorld::MarkChunkDirty(const FIntVector& Coord)
+{
+	if (AVoxelChunk** Ptr = LoadedChunks.Find(Coord))
+	{
+		if (*Ptr) (*Ptr)->bMeshDirty = true;
+	}
+	DirtyRebuildQueue.AddUnique(Coord);
+}
+
 void AVoxelWorld::ClearWorld()
 {
 	TArray<FIntVector> Keys;
@@ -476,6 +506,8 @@ void AVoxelWorld::ClearWorld()
 
 	LoadedChunks.Empty();
 	GenerationQueue.Empty();
+	EmptyChunks.Empty();
+	DirtyRebuildQueue.Empty();
 	QueueHead = 0;
 	ActiveGenerations = 0;
 

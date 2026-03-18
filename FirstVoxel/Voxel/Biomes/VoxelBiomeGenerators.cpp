@@ -508,31 +508,43 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float SkyAlt = DecoupledHeight + AltitudeBase
             + (CellShardT * SC.HeightAltitudeBonus);
 
+        // SIZE BY ALTITUDE: shards that float higher above local terrain are bigger.
+        // A shard barely clearing a hillside = small pebble.
+        // A shard soaring 150m above flat plains = dramatic sky boulder.
+        // Islands (CellShardT=1) are unaffected (factor lerps to 1.0).
+        {
+            const float AltGap        = FMath::Max(0.f, SkyAlt - CenterHeight);
+            const float RefGap        = FMath::Max(1.f, SC.MinAltitudeAboveTerrain);
+            const float AltSizeScale  = FMath::Clamp(AltGap / RefGap, 0.4f, 3.0f);
+            IslandSize *= FMath::Lerp(AltSizeScale, 1.0f, CellShardT);
+            IslandSize  = FMath::Max(IslandSize, 150.f);         // 1.5m minimum
+            IslandSize  = FMath::Min(IslandSize, GridSize * 0.48f); // never overlap cells
+        }
+
 
         // -------------------------------------------------------------------
 
-        //  THICKNESS: shards are flat discs, islands are chunky
-
-        //  Low shard ThicknessRatio: 0.10  (very thin, disc-like)
-
-        //  High island ThicknessRatio: SC.ThicknessRatio (0.48 default)
-
+        //  THICKNESS: shards are chunky rocks, islands are flat discs
+        //
+        //  ROCK SHAPE FIX:
+        //  Old: EffThickness=0.10 for shards → razor-thin pancake → looks like
+        //       a vertical slab/pillar from the side. Surface Nets generates a
+        //       1-voxel-thin quad that reads as a pillar.
+        //  New: EffThickness=0.65 for shards → near-spherical boulder aspect.
+        //       With IslandSize=625cm → HalfThick≈406cm → proper 3D rock shape.
+        //
+        //  ThicknessRatio (islands, CellShardT=1): stays at SC.ThicknessRatio
+        //  (default 0.2) so full skylands remain flat floating platforms.
         // -------------------------------------------------------------------
-
-        
-
-        const float EffThickness = FMath::Lerp(0.10f, SC.ThicknessRatio, CellShardT);
+        const float EffThickness = FMath::Lerp(0.65f, SC.ThicknessRatio, CellShardT);
 
         float HalfThick = IslandSize * EffThickness;
 
-
-
-        // --- 🛡️ MAX THICKNESS RATIO: Prevent pillar formation ---
-
-        // Safety clamp to ensure aspect ratio never exceeds 2×MaxThicknessRatio
-
-        // (default 0.3 → max aspect 0.6). Protects against misconfigured parameters.
-        const float MaxAllowedHalfThick = IslandSize * SC.MaxThicknessRatio;
+        // --- 🪨 MAX THICKNESS RATIO: per-type limits ---
+        // Shards (rocks):  allow near-spherical aspect (0.75 → height = 75% of radius)
+        // Islands (discs): keep SC.MaxThicknessRatio (default 0.3 → flat floating platform)
+        const float EffMaxThicknessRatio = FMath::Lerp(0.75f, SC.MaxThicknessRatio, CellShardT);
+        const float MaxAllowedHalfThick  = IslandSize * EffMaxThicknessRatio;
 
         HalfThick = FMath::Min(HalfThick, MaxAllowedHalfThick);
 
@@ -641,6 +653,9 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
     Cache.ShardFalloff = BestShardFalloff;
 
+    // ShardT drives falloff shape and noise in GetSkylandDensityFromCache.
+    Cache.ShardT      = BestCellShardT;
+
 
     // Adjust island bottom to clear local terrain using the column's SurfaceHeight
     const float Clearance = 200.f; // 2 meters above terrain minimum clearance
@@ -740,25 +755,54 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     const float Margin = HalfThick * 0.4f;
     if (Z < Cache.SkyAlt - HalfThick - Margin || Z > Cache.SkyAlt + HalfThick + Margin) return -2.f;
 
-    const float tCenter = FMath::Clamp((Z - Cache.SkyAlt) / (HalfThick + 1.f), -1.f, 1.f);
+    const float FullRange = HalfThick + Margin;
+    const float tCenter = FMath::Clamp((Z - Cache.SkyAlt) / (FullRange + 1.f), -1.f, 1.f);
 
-    float Falloff;
-    if (tCenter >= 0.f) {
-      const float FlatZone = 0.35f;
-      if (tCenter < FlatZone) {
-        Falloff = 1.0f;
-      } else {
-        const float nt = (tCenter - FlatZone) / (1.f - FlatZone);
-        Falloff = FMath::SmoothStep(0.f, 1.f, 1.f - nt);
-      }
-    } else {
-      const float t = FMath::Clamp(-tCenter, 0.f, 1.f);
-      Falloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(t, 0.85f));
+    // FALLOFF SHAPE: blend between rock (spherical) and island (flat-top plateau).
+    //
+    // Island falloff (ShardT=1): flat top zone (35%) + smooth underside taper.
+    //   Creates the "floating platform" look — flat on top, tapered underneath.
+    //
+    // Rock falloff  (ShardT=0): symmetric spherical — equal taper in all Z directions.
+    //   No flat zone → looks like a boulder/rock, not a platform.
+    //   Uses pow(|t|, 0.6) for a slightly boxy rock profile (flatter than a perfect
+    //   sphere at center, sharper at the edges).
+
+    // --- Island falloff (flat-top) ---
+    float IslandFalloff;
+    {
+        if (tCenter >= 0.f) {
+            const float FlatZone = 0.35f;
+            if (tCenter < FlatZone) {
+                IslandFalloff = 1.0f;
+            } else {
+                const float nt = (tCenter - FlatZone) / (1.f - FlatZone);
+                IslandFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - nt);
+            }
+        } else {
+            const float t = FMath::Clamp(-tCenter, 0.f, 1.f);
+            IslandFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(t, 0.85f));
+        }
     }
+
+    // --- Rock falloff (spherical, no flat zone) ---
+    const float tAbs      = FMath::Abs(tCenter);
+    const float RockFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(tAbs, 0.6f));
+
+    // Blend: ShardT=0 → pure rock sphere, ShardT=1 → island flat-top
+    const float Falloff = FMath::Lerp(RockFalloff, IslandFalloff, Cache.ShardT);
 
     const float WX_base = X + Off.X;
     const float WY_base = Y + Off.Y;
     const float WZ = Z + Off.Z;
+
+    if (Falloff < 0.001f)
+    {
+        const float MaxBreakUpEO    = FMath::Lerp(0.50f, 2.80f, Cache.HeightNorm);
+        const float BreakUpStrengthEO = FMath::Lerp(0.10f, MaxBreakUpEO, Cache.ShardT);
+        const float BreakUp = FMath::Max(0.f, FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f)) * BreakUpStrengthEO;
+        return FMath::Clamp(-1.8f - BreakUp, -2.f, 2.f);
+    }
 
     float WX = WX_base;
     float WY = WY_base;
@@ -769,9 +813,23 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
       WY += FastNoise3D(WX * WF + 50.f, WY * WF + 10.f, 0.f) * SC.DomainWarpStrength;
     }
 
+    // 3D SHAPE NOISE:
+    // Islands (ShardT=1): very low Z frequency (0.05x) keeps island interior solid —
+    //   prevents swiss-cheese vertical holes through large platforms.
+    // Rocks  (ShardT=0): higher Z frequency (0.50x) gives irregular 3D boulder surface.
+    //   Strength also raised (0.55) so the rock surface is visibly lumpy/craggy.
+    //   3D noise is ALWAYS evaluated for shards regardless of bEnable3DSkylandNoise flag.
     float ShapeDetail = 0.f;
-    if (Config.Performance.bEnable3DSkylandNoise) {
-      ShapeDetail = FastNoise3D(WX * Cache.Freq * 0.6f, WY * Cache.Freq * 0.6f, WZ * Cache.Freq * 0.05f) * 0.25f;
+    {
+        const float ZFreqScale     = FMath::Lerp(0.50f, 0.05f, Cache.ShardT);
+        const float DetailStrength = FMath::Lerp(0.55f, 0.25f, Cache.ShardT);
+        if (Config.Performance.bEnable3DSkylandNoise || Cache.ShardT < 0.5f)
+        {
+            ShapeDetail = FastNoise3D(
+                WX * Cache.Freq * 0.6f,
+                WY * Cache.Freq * 0.6f,
+                WZ * Cache.Freq * ZFreqScale) * DetailStrength;
+        }
     }
 
     // Point-wise ShapeXY prevents absolute grid-cell fractures on cell boundaries
@@ -790,7 +848,14 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     const float HorizStrength = FMath::SmoothStep(Cache.Threshold, Cache.Threshold + 0.4f, Shape);
     float D = HorizStrength * Falloff * 2.5f - (1.f - Falloff) * 1.8f + RootDensity;
 
-    const float BreakUpStrength = FMath::Lerp(0.50f, 2.80f, Cache.HeightNorm);
+    // BREAKUP STRENGTH FIX for shards:
+    // Old: BreakUpStrength based only on HeightNorm → shards get 0.50, which strips
+    //      material from all sides of a thin shape → leaves thin spike tips (pillar artifact).
+    // New: Shards (ShardT=0) get minimal breakup (0.10) — they are rocks with irregular
+    //      surface from 3D noise, not eroded islands. The ShardT lerp means only high-terrain
+    //      islands get the full HeightNorm-scaled breakup for their organic eroded look.
+    const float MaxBreakUp     = FMath::Lerp(0.50f, 2.80f, Cache.HeightNorm);
+    const float BreakUpStrength = FMath::Lerp(0.10f, MaxBreakUp, Cache.ShardT);
     const float BreakUp = FMath::Max(0.f, FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f)) * BreakUpStrength;
     D -= BreakUp;
 

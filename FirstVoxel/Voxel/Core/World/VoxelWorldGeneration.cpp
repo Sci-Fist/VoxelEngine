@@ -127,6 +127,7 @@ void AVoxelWorld::GenerateWorldDeferred()
 	// RESET active generations for editor calls. 
 	ActiveGenerations = 0;
 	GenerationQueue.Empty();
+	EmptyChunks.Empty();
 	QueueHead = 0;
 
 	// 4. Calculate generation bounds
@@ -403,11 +404,20 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
 	// Async generation enabled for both games and Editor runs
 	ActiveGenerations++;
 	TWeakObjectPtr<AVoxelWorld> WeakThis(this);
-	Chunk->OnGenerationComplete = [WeakThis]() 
+	Chunk->OnGenerationComplete = [WeakThis, Coord]() 
 	{ 
 		if (AVoxelWorld* StrongThis = WeakThis.Get())
 		{
 			StrongThis->ActiveGenerations--; 
+
+			if (AVoxelChunk** ChunkPtr = StrongThis->LoadedChunks.Find(Coord))
+			{
+				if ((*ChunkPtr)->IsEmpty())
+				{
+					StrongThis->EmptyChunks.Add(Coord);
+					StrongThis->DestroyChunk(Coord); // Safely returns to pool
+				}
+			}
 		}
 	};
 
@@ -471,9 +481,12 @@ void AVoxelWorld::DrainGenerationQueue()
 		ProcessedThisTick++;
 	}
 
-	// Compact the queue periodically to reclaim memory.
-	// Threshold lowered to 50 to keep the compaction cost small per-tick.
-	if (QueueHead > 50)
+	// Compact the queue when the consumed head grows large.
+	// FIX: old threshold was 50, causing an O(N) RemoveAt every ~6 ticks (at 8/tick).
+	// Raised to 256 so compaction runs ~every 32 ticks instead.
+	// UpdateChunkStreaming rebuilds the queue from scratch every 0.25s anyway,
+	// so we only need this as a memory safety net during initial load.
+	if (QueueHead > 256)
 	{
 		GenerationQueue.RemoveAt(0, QueueHead);
 		QueueHead = 0;
@@ -668,9 +681,11 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
 	// Spawn chunks in a focused 3x3x3 cube around the spawn position
 	// This ensures the player has solid ground without overwhelming the generation system
-	// Expand spawn dimensions to wait for a larger safe landing area (roughly 16x16 chunks)
+	// Spawn wait area: only wait for a tight 3x3 column around the player.
+	// FIX: old code used RadiusXY=8 (-> 867 chunks) causing 30+ second load screens.
+	// 3x3x3 = 27 chunks gives solid ground immediately; the rest stream in normally.
 	TArray<FIntVector> SpawnAreaCoords;
-	const int32 RadiusXY = FMath::Min(8, RenderDistanceXY); // Match stream limits to avoid waiting for missing coords
+	const int32 RadiusXY = FMath::Min(1, RenderDistanceXY); // Only wait for 3x3 immediate area
 	for (int32 x = -RadiusXY; x <= RadiusXY; ++x)
 	{
 		for (int32 y = -RadiusXY; y <= RadiusXY; ++y)
