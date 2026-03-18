@@ -21,7 +21,7 @@
 #include "Voxel/Core/World/Water/VoxelWorldWater.h"
 #include "Voxel/Water/VoxelWaterSimulator.h"
 #include "Voxel/Core/VoxelChunk.h"
-#include "Voxel/Core/VoxelChunkPool.a
+#include "Voxel/Core/VoxelChunkPool.h"
 #include "Voxel/Generation/VoxelGeneratorTask.h"
 #include "Voxel/Generation/VoxelDensityGenerator.h"
 #include "Voxel/Biomes/VoxelBiomeManager.h"
