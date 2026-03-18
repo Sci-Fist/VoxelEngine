@@ -228,41 +228,48 @@ struct FCraterBiomeConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
     float Frequency = 0.00002f;
 
+    // FIX: Old Depth=-4000 got multiplied by 8.0 in GetCraterHeight = -32000cm deep (320m!)
+    // Reduced to -1200 so with the corrected *1.0 multiplier craters are 12m deep.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float Depth = -4000.f;  // Increased from -1500 to -4000 for deeper craters
+    float Depth = -1200.f;
+
+    // FIX: Old RimHeight=6000 + RimNoiseAmplitude=4000 = up to 100m rim walls.
+    // These were the direct source of the tall thin pillar artifacts at spawn.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float RimHeight = 1800.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimHeight = 6000.f;  // Doubled from 3000 to 6000 for much higher rims
+    float ImpactThreshold = -0.8f;
+
+    // FIX: Was 4000 — 40m of rim noise variation guarantees pillar spikes at zone boundaries.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float RimNoiseAmplitude = 500.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float ImpactThreshold = -0.8f;  // Lowered from -0.7 to -0.8 for more frequent impacts
+    float FloorNoiseAmplitude = 400.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimNoiseAmplitude = 4000.f;  // Doubled from 2000 for more rugged rims
+    float RimWidth = 0.55f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float FloorNoiseAmplitude = 1600.f;  // Doubled from 800 for more detailed crater floors
+    float FloorSlope = 0.60f;
+
+    // FIX: Was 0.5 — high distortion + high border irregularity creates chaotic
+    // height jumps that become pillars when blended with adjacent biomes.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    float ShapeDistortion = 0.20f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimWidth = 0.65f;  // Increased from 0.45 for much wider rims
+    float BorderIrregularity = 0.30f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float FloorSlope = 0.65f;  // Reduced from 0.85 to 0.65 for gentler crater walls (better for building)
+    float BuildingNoiseFrequency = 0.0015f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float ShapeDistortion = 0.5f;  // Increased from 0.3 for more irregular shapes
+    float BuildingNoiseAmplitude = 200.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float BorderIrregularity = 0.8f;  // Increased from 0.6 for more irregular borders
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float BuildingNoiseFrequency = 0.0015f;  // New: frequency for organic building-friendly noise inside craters
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float BuildingNoiseAmplitude = 300.f;  // New: amplitude for organic building-friendly noise inside craters
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float CraterSizeMultiplier = 2.0f;  // New: multiplier for overall crater size
+    float CraterSizeMultiplier = 2.0f;
 };
 
 // ============================================================

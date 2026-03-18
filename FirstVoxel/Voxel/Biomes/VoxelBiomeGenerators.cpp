@@ -180,76 +180,90 @@ float FVoxelBiomeGenerators::GetMesaHeight(
 
 // ============================================================
 //  CRATERS - impact basins with raised rims
-//  FIXED: Improved crater generation with better noise blending and detail
+//
+//  REWRITE: The old implementation had three hard if/else zone switches
+//  (NormalizedDepth > 0.45 / > 0.30 / > 0.15) that created step-function
+//  discontinuities in the height field.  Surface Nets generates a thin
+//  vertical column at every discontinuity -> the pillar forest seen at spawn.
+//
+//  Additional bugs fixed:
+//  - Depth * 8.0 multiplier: Depth=-4000 * 8 = -32000cm (320m deep craters).
+//    Replaced with Depth * 1.0 and sensible config defaults.
+//  - RimNoiseAmplitude=4000: 40m of rim noise guarantees pillar spikes.
+//    Config now defaults to 500cm.
+//  - ShapeDistortion=0.5 + BorderIrregularity=0.8: excessive chaos in Impact
+//    created chaotic height jumps that blended badly with adjacent biomes.
+//
+//  New approach: all zone transitions use SmoothStep / cubic easing so the
+//  height field is C1-continuous everywhere -> no pillar artifacts.
 // ============================================================
 float FVoxelBiomeGenerators::GetCraterHeight(
     float X, float Y, const FVoxelGenerationConfig &Config) {
   const FCraterBiomeConfig &CRC = Config.Craters;
   const FVector Off = Config.GetSeedOffset();
   const float nX = X + Off.X, nY = Y + Off.Y;
-  
-  // Domain warp for organic crater walls with shape distortion
-  const float CenterWarp = FastNoise3D(nX * 0.004f, nY * 0.004f, 100.f) * 0.25f;
-  
-  // Shape distortion for irregular crater borders
-  const float ShapeDistortion = FastNoise3D(nX * 0.006f, nY * 0.006f, 400.f) * CRC.ShapeDistortion;
-  
-  // Border irregularity for non-perfect circular craters
-  const float BorderNoise = FastNoise3D(nX * 0.003f, nY * 0.003f, 500.f) * CRC.BorderIrregularity;
 
-  // Crater size multiplier for larger craters (DIVIDE for wider peaks)
-  const float ModifiedFrequency = CRC.CraterSizeMultiplier > 0.f ? CRC.Frequency / CRC.CraterSizeMultiplier : CRC.Frequency;
+  // Crater placement field (low-frequency, matches biome weight field)
+  const float ModifiedFrequency = CRC.CraterSizeMultiplier > 0.f
+      ? CRC.Frequency / CRC.CraterSizeMultiplier : CRC.Frequency;
 
   float Impact = FastNoise3D(nX * (ModifiedFrequency * 0.5f),
                              nY * (ModifiedFrequency * 0.5f), 200.f);
-  Impact += CenterWarp;
-  Impact += ShapeDistortion;
-  Impact += BorderNoise;
 
-  // Secondary noise layer for crater complexity
-  const float SecondaryNoise = FastNoise3D(nX * 0.002f, nY * 0.002f, 300.f) * 0.3f;
-  Impact += SecondaryNoise;
+  // Subtle organic distortion - kept small to avoid chaotic height jumps
+  // that blended with adjacent biomes were the direct cause of pillars.
+  const float Distort = FastNoise3D(nX * 0.004f, nY * 0.004f, 400.f) * CRC.ShapeDistortion;
+  const float Border  = FastNoise3D(nX * 0.003f, nY * 0.003f, 500.f) * CRC.BorderIrregularity;
+  Impact += Distort + Border;
+
+  // Map Impact into [0, 1] where 0 = flat plains, 1 = crater centre
+  const float Denominator = 1.f - CRC.ImpactThreshold;
+  const float NormDepth = (Denominator > 0.001f)
+      ? FMath::Clamp((Impact - CRC.ImpactThreshold) / Denominator, 0.f, 1.f)
+      : 0.f;
+
+  // If NormDepth == 0 we are outside the crater entirely -> plain terrain
+  if (NormDepth <= 0.f) return Config.SeaLevel + 1000.f;
 
   const float BasePlains = Config.SeaLevel + 1000.f;
 
-  // Abrupt cut-off removed to prevent tall pillars/cones forming due to noise peaks inside the basin.
+  // --- Rim peak (sits between plains and floor) --------------------------
+  // RimPeak is at NormDepth ~ 0.25.  Use a bell curve (smooth quadratic)
+  // centred there so the rim rises and falls with no hard edges.
+  const float RimCenter = 0.25f;
+  const float RimWidth  = 0.22f; // half-width of the bell
+  const float RimT      = FMath::Max(0.f, 1.f - FMath::Square((NormDepth - RimCenter) / RimWidth));
+  const float RimNoise  = FastNoise3D(nX * 0.008f, nY * 0.008f, 0.f) * CRC.RimNoiseAmplitude;
+  const float RimPeak   = BasePlains + CRC.RimHeight + RimNoise * RimT;
 
-  const float Denominator = 1.f - CRC.ImpactThreshold;
-  float NormalizedDepth = 0.f;
-  if (Denominator > 0.001f) {
-    NormalizedDepth = (Impact - CRC.ImpactThreshold) / Denominator;
+  // --- Floor (deep centre of the crater) --------------------------------
+  // DepthCurve: 0 at rim, 1 at centre.  Use smoothstep so descent is gradual.
+  const float FloorStart = 0.40f; // NormDepth where floor begins
+  const float FloorT     = FMath::SmoothStep(FloorStart, 1.0f, NormDepth);
+  const float FloorNoise = FBM(nX * CRC.BuildingNoiseFrequency,
+                               nY * CRC.BuildingNoiseFrequency, 0.f,
+                               2, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves)
+                           * CRC.BuildingNoiseAmplitude;
+  // FIX: was Depth * 8.0 -> absurd depth.  Now Depth is used directly (1:1).
+  const float FloorDepth = BasePlains + CRC.Depth * FloorT + FloorNoise * FloorT;
+
+  // --- Smooth blend across three zones -----------------------------------
+  // Zone 1: plains -> rim  (NormDepth 0 .. RimCenter)
+  // Zone 2: rim -> floor   (NormDepth RimCenter .. 1)
+  // Both use SmoothStep so the height field has no kinks.
+
+  float Height;
+  if (NormDepth <= RimCenter)
+  {
+      // Approach to the rim from the plains side
+      const float t = FMath::SmoothStep(0.f, RimCenter, NormDepth);
+      Height = FMath::Lerp(BasePlains, RimPeak, t);
   }
-  NormalizedDepth = FMath::Clamp(NormalizedDepth, 0.f, 1.f);
-  
-    // FIXED: Better depth calculation with exponential curve and increased multiplier for deeper craters
-    const float DepthCurve = FMath::Pow(NormalizedDepth, 1.5f);
-    const float BottomDepth = BasePlains + FMath::Min(0.f, CRC.Depth) * 8.0f * DepthCurve;
-  
-  // FIXED: Better rim calculation with noise detail
-  const float RimHeight = BasePlains + CRC.RimHeight * 1.0f;
-  const float RimNoise = FastNoise3D(nX * 0.008f, nY * 0.008f, 0.f) * CRC.RimNoiseAmplitude * 0.8f;
-
-  float Height = BasePlains;
-  
-  // FIXED: Smoother transitions with better blending and building-friendly noise
-  if (NormalizedDepth > 0.45f) {
-    // Deep crater floor with organic building-friendly noise
-    const float BuildingNoise = FBM(nX * CRC.BuildingNoiseFrequency, nY * CRC.BuildingNoiseFrequency, 0.f, 3, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves) * CRC.BuildingNoiseAmplitude;
-    Height = BottomDepth + BuildingNoise;
-  } else if (NormalizedDepth > 0.30f) {
-    // Crater slope with gentler terracing for building
-    float t = (NormalizedDepth - 0.30f) / 0.15f;
-    const float Terrace = FMath::Floor(t * 4.0f) / 4.0f; // Reduced terrace steps for gentler slopes
-    t = FMath::Lerp(t, Terrace, 0.4f); // Reduced terrace strength for smoother building surfaces
-    Height = FMath::Lerp(RimHeight + RimNoise, BottomDepth, t);
-  } else if (NormalizedDepth > 0.15f) {
-    // Rim area with noise for organic look
-    float t = (NormalizedDepth - 0.15f) / 0.15f;
-    Height = FMath::Lerp(BasePlains, RimHeight + RimNoise, t);
-  } else {
-    // Transition zone to plains with gentle slope
-    float t = NormalizedDepth / 0.15f;
-    Height = FMath::Lerp(BasePlains, RimHeight + RimNoise * 0.3f, t);
+  else
+  {
+      // Descent from the rim into the floor
+      const float t = FMath::SmoothStep(RimCenter, 1.0f, NormDepth);
+      Height = FMath::Lerp(RimPeak, FloorDepth, t);
   }
 
   return Height;

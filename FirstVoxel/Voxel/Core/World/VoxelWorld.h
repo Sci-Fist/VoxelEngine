@@ -238,9 +238,11 @@ public:
             meta = (ClampMin = "0.0", ClampMax = "1.0"))
   float CraterSpawnMinWeight = 0.25f;
 
-  /** Minimum height above terrain when snapping the player to ground (cm). */
+  /** Minimum height above terrain when snapping the player to ground (cm).
+   *  Raised to 8000cm (80m) so the player always drops in from above terrain
+   *  rather than spawning inside it on steep peaks or high craters. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn")
-  float SafeSpawnHeightOffset = 3000.f;
+  float SafeSpawnHeightOffset = 8000.f;
 
   /**
    * Randomizes the seed and regenerates the world from scratch.
