@@ -220,7 +220,8 @@ void AVoxelChunk::GenerateAsync()
 		DensityProvider,               // Terrain density provider
 		FoliageDensity,                // Foliage placement density
 		MaxFoliageSlope,               // Maximum slope for foliage placement
-		LocalMap                       // Local terrain modifications
+		LocalMap,                       // Local terrain modifications
+		DenseChunk                      // Dense density node grid manager cache
 	);
 
 	// Capture task and this pointer for async execution
@@ -279,7 +280,8 @@ void AVoxelChunk::GenerateSync()
 		&GlobalDensityGeneratorSync,   // Synchronous density provider
 		FoliageDensity,                // Foliage placement density
 		MaxFoliageSlope,               // Maximum slope for foliage placement
-		LocalMap                       // Local terrain modifications
+		LocalMap,                       // Local terrain modifications
+		DenseChunk                      // Dense density node grid manager cache
 	);
 	
 	// Execute generation task synchronously on current thread

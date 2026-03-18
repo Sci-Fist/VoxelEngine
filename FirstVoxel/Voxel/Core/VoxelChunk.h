@@ -108,6 +108,9 @@ public:
 
 	FVoxelDataMap* DataMap = nullptr;
 
+	/** Shared data node cache for dense density float grids. */
+	TSharedPtr<struct FVoxelDensityChunk> DenseChunk;
+
 	/** Internal pointer to tree mesh. */
 	UPROPERTY(BlueprintReadWrite, Category = "Voxel|Internal|Foliage")
 	UStaticMesh* TreeMesh = nullptr;

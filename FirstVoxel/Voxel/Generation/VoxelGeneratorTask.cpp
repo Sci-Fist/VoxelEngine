@@ -46,7 +46,8 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     IVoxelDensityProvider*        InProvider,
     float                         InFoliageDensity,
     float                         InMaxFoliageSlope,
-    const TMap<int32, float>&     InLocalDataCache)
+    const TMap<int32, float>&     InLocalDataCache,
+    TSharedPtr<struct FVoxelDensityChunk> InDenseChunk)
     : ChunkCoord     (InChunkCoord)
     , WorldOrigin    (InWorldOrigin)
     , ChunkSize      (InChunkSize)
@@ -57,6 +58,7 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     , FoliageDensity (InFoliageDensity)
     , MaxFoliageSlope(InMaxFoliageSlope)
     , LocalDataCache (InLocalDataCache)
+    , DenseChunk     (InDenseChunk)
 {
     // Pre-cache the foliage slot schema from the config.
     // Doing this in the constructor means CalculateFoliage() iterates a flat
@@ -96,7 +98,7 @@ void FVoxelGeneratorTask::Execute()
 
 // ============================================================
 //  BuildDensityField
-//  Fills the flat Densities array for every voxel in the padded grid.
+//  Fills the flat DenseChunk->Densities array for every voxel in the padded grid.
 //  Inner loop structure:
 //    ParallelFor(Y)          -- one job per row, each job processes all X in that row
 //      for X                 -- per-column: get biome weights + surface height (O(n^2) noise)
@@ -115,7 +117,7 @@ void FVoxelGeneratorTask::BuildDensityField()
     const int32 VoxelCS = ChunkSize;
     const int32 EffCS   = ChunkSize / StepSize;
 
-    Densities.SetNumUninitialized(TotalSamples);
+    DenseChunk->Densities.SetNumUninitialized(TotalSamples);
 
     // ---- Player voxel edits: sparse TMap -> flat dense array ----
     // This allows the inner Z loop to do a constant-time array read instead
@@ -226,7 +228,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             for (int32 Z = 0; Z < EffectiveSize; ++Z)
             {
                 const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
-                Densities[Idx] = 2.0f;
+                DenseChunk->Densities[Idx] = 2.0f;
             }
             return;
         }
@@ -246,7 +248,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             for (int32 Z = 0; Z < EffectiveSize; ++Z)
             {
                 const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
-                Densities[Idx] = -2.0f; // constant air
+                DenseChunk->Densities[Idx] = -2.0f; // constant air
             }
             return;
         }
@@ -277,7 +279,7 @@ void FVoxelGeneratorTask::BuildDensityField()
                                          : FMath::Max(D, Override);
                 }
             }
-            Densities[Idx] = D;
+            DenseChunk->Densities[Idx] = D;
         }
     });
 
@@ -287,7 +289,7 @@ void FVoxelGeneratorTask::BuildDensityField()
 
 void FVoxelGeneratorTask::PostProcessDensities(int32 TotalSamples)
 {
-    // FIX: The old implementation clamped extreme densities to ±1.5 when a chunk
+    // FIX: The old implementation clamped extreme DenseChunk->Densities to ±1.5 when a chunk
     // was >90% solid or air. This was harmful:
     //   - Clamping high-density values shifts the isosurface position — terrain
     //     appears to thin or inflate depending on gradient direction.
@@ -314,7 +316,7 @@ void FVoxelGeneratorTask::BuildMesh()
 
         FVoxelMeshGenerator::GenerateMesh(
 
-            Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
+            DenseChunk->Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
 
         
 
@@ -378,7 +380,7 @@ void FVoxelGeneratorTask::CalculateFoliage()
 
         // Map height to local cell Z for normal lookup
         const int32 CellZ = FMath::Clamp(FMath::RoundToInt((SurfaceHeight - WorldOrigin.Z) / EffVoxelSize) + 1, 1, EffectiveSize + 1);
-        const FVector Normal = FVoxelMeshGenerator::ComputeNormal(Densities, LX + 1, LY + 1, CellZ, EffectiveSize);
+        const FVector Normal = FVoxelMeshGenerator::ComputeNormal(DenseChunk->Densities, LX + 1, LY + 1, CellZ, EffectiveSize);
         const float SlopeZ = Normal.Z;
 
         const FVector ColumnWorldPos(WorldOrigin.X + LX * EffVoxelSize, WorldOrigin.Y + LY * EffVoxelSize, SurfaceHeight);
@@ -489,7 +491,7 @@ void FVoxelGeneratorTask::PlaceWaterSources()
         const int32 px = FMath::Clamp(lx + 1, 0, S - 1);
         const int32 py = FMath::Clamp(ly + 1, 0, S - 1);
         const int32 pz = FMath::Clamp(lz + 1, 0, S - 1);
-        return Densities[px + py * S + pz * S * S];
+        return DenseChunk->Densities[px + py * S + pz * S * S];
     };
 
     auto IsSolid = [&](int32 lx, int32 ly, int32 lz) -> bool { return Dens(lx, ly, lz) > 0.f; };
@@ -605,7 +607,7 @@ void FVoxelGeneratorTask::CountDensityStates(int32 TotalSamples)
 
     for (int32 i = 0; i < TotalSamples; ++i)
     {
-        if (Densities[i] > 0.0f) SolidCount++;
+        if (DenseChunk->Densities[i] > 0.0f) SolidCount++;
         else AirCount++;
     }
 
@@ -649,3 +651,4 @@ void FVoxelGeneratorTask::TrimFoliageToCap(const int32 MaxMeshesPerChunk)
         }
     }
 }
+

@@ -508,6 +508,7 @@ void AVoxelWorld::ClearWorld()
 	GenerationQueue.Empty();
 	EmptyChunks.Empty();
 	DirtyRebuildQueue.Empty();
+	ChunkManager.Clear();
 	QueueHead = 0;
 	ActiveGenerations = 0;
 

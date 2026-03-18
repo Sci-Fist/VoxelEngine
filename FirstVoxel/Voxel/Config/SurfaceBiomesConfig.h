@@ -273,6 +273,10 @@ struct FCraterBiomeConfig
     /** If true, forces a crater biome boost at the world origin so players always spawn in a crater basin. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
     bool bForceCraterAtOrigin = false;
+
+    /** Coordinate offset anchor location to center the forced crater boost over (e.g., spawn coordinates). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    FVector2D ForcedCraterCenter = FVector2D(0.f, 0.f);
 };
 
 // ============================================================

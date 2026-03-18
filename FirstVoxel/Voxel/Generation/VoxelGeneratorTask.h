@@ -71,7 +71,8 @@ public:
 		IVoxelDensityProvider*        InProvider,
 		float                         InFoliageDensity,   // legacy fallback density
 		float                         InMaxFoliageSlope,  // legacy fallback slope
-		const TMap<int32, float>&     InLocalDataCache
+		const TMap<int32, float>&     InLocalDataCache,
+		TSharedPtr<struct FVoxelDensityChunk> InDenseChunk
 	);
 
 	/** Runs BuildDensityField -> BuildMesh -> CalculateFoliage on a background thread. */
@@ -112,7 +113,7 @@ public:
 	 * Raw terrain density field, size = (ChunkSize/StepSize + 3)^3.
 	 * Exposed so AVoxelChunk can build FVoxelWaterData::SolidCells without re-running noise.
 	 */
-	const TArray<float>& GetDensities() const { return Densities; }
+	const TArray<float>& GetDensities() const { return DenseChunk ? DenseChunk->Densities : Densities; }
 
 private:
 	// --- Inputs ---
@@ -125,7 +126,9 @@ private:
 	IVoxelDensityProvider* DensityProvider;
 	float                  FoliageDensity;   // legacy
 	float                  MaxFoliageSlope;  // legacy
+	TMap<int32, float>&    LocalDataCache;   // Wait, was this a ref or copy? Let's keep existing.
 	TMap<int32, float>     LocalDataCache;
+	TSharedPtr<struct FVoxelDensityChunk> DenseChunk;
 
 	// --- Outputs ---
 	FVoxelMeshOutput            MeshOutput;

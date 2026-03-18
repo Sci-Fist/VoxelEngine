@@ -74,9 +74,9 @@ void AVoxelWorld::GenerateWorldDeferred()
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering GenerateWorld on PlayerStart %s"), *CandidatePos.ToString());
 	}
 
-	// FIX: Prioritize Crater Spawn by searching for a high-weight crater zone nearby.
-	CandidatePos = FindCraterSpawnLocation(CandidatePos, Config);
-	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Relocated candidate pos to crater spawn at %s"), *CandidatePos.ToString());
+	// FIX: Prioritize Crater Spawn is handled mathematically inside VoxelBiomeManager.cpp
+	// boosting crater weights around the Actor location anchor instead of hardcoded 0,0.
+	// No coordinate relocation Search is needed here anymore.
 	
 	// FIX: Only search for conflicts in standalone game builds, not in PIE
 	// In PIE mode, we want to generate terrain exactly where the VoxelWorld actor is placed
@@ -540,11 +540,11 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 	Chunk->FoliageDensity     = FoliageDensity;
 	Chunk->MaxFoliageSlope    = MaxFoliageSlope;
 
-	// CRITICAL: Inject the world-level density generator so the chunk uses
-	// the full 3-layer pipeline (Surface + Skylands + Caves).
-	// Without this the chunk falls back to a plain static FVoxelDensityGenerator
-	// which is functionally equivalent but skips any future per-world overrides.
 	Chunk->DensityGenerator   = DensityGenerator.Get();
+	
+	// FIX: Inject absolute anchor offsets to center the mathematical Crater spawn basin
+	// relative to where the world actor stands flawlessly.
+	Chunk->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(GetActorLocation().X, GetActorLocation().Y);
 
 	// FIX: Propagate world-level SlopeThreshold into the generation config so
 	// VoxelMeshGenerator uses the right cutoff for flat vs slope classification.
@@ -554,6 +554,9 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 
 	// Wire water material from the world-level config.
 	Chunk->WaterMaterial      = GenerationConfig.Water.OceanMaterial.Get();
+
+	// FIX: Inject dense nodes grid cache from parent ChunkManager.
+	Chunk->DenseChunk = const_cast<AVoxelWorld*>(this)->ChunkManager.GetOrCreateChunk(Chunk->ChunkCoord, Chunk->ChunkSize);
 }
 
 // ============================================================

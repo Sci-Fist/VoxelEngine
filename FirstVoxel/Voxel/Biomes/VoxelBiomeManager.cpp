@@ -99,7 +99,9 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     // at coordinate (0,0) to guarantee a crater basin on any initial layout.
     if (Config.Craters.bForceCraterAtOrigin)
     {
-        const float DistSq = X * X + Y * Y;
+        const float dx = X - Config.Craters.ForcedCraterCenter.X;
+        const float dy = Y - Config.Craters.ForcedCraterCenter.Y;
+        const float DistSq = dx * dx + dy * dy;
         const float Radius = 6400.f; // ~64 meters (approx 4 chunks width total)
         if (DistSq < Radius * Radius)
         {

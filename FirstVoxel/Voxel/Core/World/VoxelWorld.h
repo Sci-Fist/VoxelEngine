@@ -456,8 +456,14 @@ public:
 private:
   FVoxelDataMap DataMap;
 
+#include "Core/VoxelChunkManager.h"
+
   TMap<FIntVector, AVoxelChunk *> LoadedChunks;
   TSet<FIntVector> EmptyChunks;
+
+  /** Decoupled Dense density node grid manager buffer cache structures. */
+  FVoxelChunkManager ChunkManager;
+
   FVoxelChunkPool ChunkPool;
 
   /**
