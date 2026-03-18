@@ -57,7 +57,10 @@ AVoxelChunk::AVoxelChunk()
 	ProceduralMesh->SetCollisionProfileName(TEXT("BlockAll"));
 	ProceduralMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	ProceduralMesh->bUseComplexAsSimpleCollision = true;
-	ProceduralMesh->bUseAsyncCooking = true;
+	
+	// FIX: Disable AsyncCooking to remove the timing race where IsCollisionReady() 
+	// triggers before baking actually completes on background threads. 
+	ProceduralMesh->bUseAsyncCooking = false; 
 
 	// Initialize visual-only backface mesh component (no collision)
 	BackfaceMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("BackfaceMesh"));

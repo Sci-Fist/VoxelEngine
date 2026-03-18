@@ -75,6 +75,10 @@ void AVoxelWorld::UpdateChunkStreaming()
 		PlayerPos.X, PlayerPos.Y, Config);
 	const float PlayerSurfH = Wh.SurfaceHeight;
 
+	// FIX: GridSnap the height to 1000cm discrete steps so the SkyZCoordCenter
+	// does not shift continuously on slight slope movements, avoiding lag spikes.
+	const float RoundedSurfH     = FMath::GridSnap(PlayerSurfH, 1000.f);
+
 	// Calculate normalized terrain parameters for skyland positioning
 	const float HeightNormSky    = FMath::Clamp(PlayerSurfH / SC.MaxTerrainReference, 0.f, 1.f);
 	const float RoughnessNormSky = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
@@ -85,7 +89,7 @@ void AVoxelWorld::UpdateChunkStreaming()
 	const float AltBase          = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrSky);
 	
 	// Calculate final skyland altitude with terrain-based adjustments
-	const float SkyAltWorld      = PlayerSurfH + AltBase
+	const float SkyAltWorld      = RoundedSurfH + AltBase
 		                           + CurvedH * SC.HeightAltitudeBonus
 		                           + CurvedR * SC.RoughnessAltitudeBonus
 		                           + ShardFalloff * SC.LowTerrainAltitudeBoost;
