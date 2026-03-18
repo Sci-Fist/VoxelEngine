@@ -89,7 +89,10 @@ eventually drains off open edges.
 
 ### Fixed
 
+
 - Prevented the editor "Generate World" action from freezing by draining the generation queue with a non-blocking ticker instead of a tight loop.
+- **Skylands generation producing elongated pillars and missing islands**: Refactored `GetSkylandColumnCache()` to use nearest-cell selection (normalized distance ratio) instead of biased weighted averaging. This ensures each XY column samples properties from the actually nearest skyland cell, not distant large islands. Removed blended size calculation that caused shape distortion. Skylands now appear correctly with proper proportions and altitude placement.
+
 - **Player stuck in falling animation when landing on voxel terrain**: Fixed unreliable floor detection by implementing custom fallback landing detection, overriding Landed() to force immediate floor validation, and improving movement component settings.
 
 - **Voxel terrain edge artifacts causing non-walkable surfaces**: Added FlattenMeshTops() post-processing that flattens top-facing vertices (normal.Z > 0.9) to the highest point in their local neighborhood, eliminating edge variations that produced non-walkable floor normals.

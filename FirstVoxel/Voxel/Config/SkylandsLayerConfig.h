@@ -132,6 +132,12 @@ struct FSkylandsLayerConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size")
     float ThicknessRatio = 0.48f;
 
+    /** Maximum allowed thickness ratio (HalfThick / IslandSize). Prevents pillar formation. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
+        meta=(ClampMin="0.1", ClampMax="0.5", UIMin="0.1", UIMax="0.5",
+              ToolTip="Maximum thickness as fraction of island diameter. 0.3 = max 60% aspect ratio."))
+    float MaxThicknessRatio = 0.3f;
+
     // --- Shape ---
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shape")
     float ShapeFrequency = 0.0004f;

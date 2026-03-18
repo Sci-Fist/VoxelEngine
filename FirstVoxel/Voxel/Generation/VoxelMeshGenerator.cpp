@@ -241,24 +241,49 @@ void FVoxelMeshGenerator::GenerateMesh(
 		return FVector2D(VWorld.X / s, VWorld.Z / s);        // north/south wall
 	};
 
-	// Emit one triangle into the correct destination buffer
+
 	auto EmitTriangle = [&](FVoxelMeshData& Dest,
+
 		const FVector& V0, const FVector& V1, const FVector& V2,
+
 		const FVector& N0, const FVector& N1, const FVector& N2,
+
 		const FVector& FaceNorm,
+
 		const FColor&  VC)
+
 	{
+
+		// Validate face normal - must be normalized and non-zero
+
+		if (!FaceNorm.IsNormalized() || FaceNorm.Size() < 0.1f) return;
+
+		// Check for degenerate triangle (zero or near-zero area)
+		const float Area = FVector::CrossProduct(V1 - V0, V2 - V0).Size();
+		if (Area < 0.1f) return; // Skip triangles with area < 0.1 cm²
+
 		const int32 Base = Dest.Vertices.Num();
+
 		Dest.Vertices.Add(V0); Dest.Vertices.Add(V1); Dest.Vertices.Add(V2);
+
 		Dest.Normals.Add(N0);  Dest.Normals.Add(N1);  Dest.Normals.Add(N2);
+
 		Dest.UVs.Add(MakeUV(V0, FaceNorm));
+
 		Dest.UVs.Add(MakeUV(V1, FaceNorm));
+
 		Dest.UVs.Add(MakeUV(V2, FaceNorm));
+
 		Dest.VertexColors.Add(VC); Dest.VertexColors.Add(VC); Dest.VertexColors.Add(VC);
+
 		static const FProcMeshTangent T(1, 0, 0);
+
 		Dest.Tangents.Add(T); Dest.Tangents.Add(T); Dest.Tangents.Add(T);
+
 		Dest.Triangles.Add(Base); Dest.Triangles.Add(Base+1); Dest.Triangles.Add(Base+2);
+
 	};
+
 
 	// ── PASS 2: quad emission ─────────────────────────────────────────────
 	//
