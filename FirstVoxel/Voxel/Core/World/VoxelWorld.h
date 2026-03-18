@@ -12,6 +12,7 @@
 #include "Voxel/Generation/VoxelDensityGenerator.h" // Required: TUniquePtr<FVoxelDensityGenerator> needs complete type
 #include "Voxel/Core/VoxelChunkPool.h"
 #include "Voxel/VoxelLogger.h"
+#include "Voxel/Core/VoxelChunkManager.h"
 #include "VoxelWorld.generated.h"
 
 class AVoxelChunk;
@@ -456,7 +457,6 @@ public:
 private:
   FVoxelDataMap DataMap;
 
-#include "Core/VoxelChunkManager.h"
 
   TMap<FIntVector, AVoxelChunk *> LoadedChunks;
   TSet<FIntVector> EmptyChunks;
