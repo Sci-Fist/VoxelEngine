@@ -50,7 +50,7 @@ struct FVoxelWaterData
 
     /** Per-voxel solid flag derived from the terrain density field.
      *  true where density > 0.  Blocks water flow. */
-    TBitArray<>   SolidCells;
+    TBitArray<FDefaultBitArrayAllocator>   SolidCells;
 
     /** Set when Cells changed since the last water mesh build. */
     bool bMeshDirty = false;
