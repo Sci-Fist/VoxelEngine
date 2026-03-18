@@ -506,7 +506,7 @@ float CraterSizeMultiplier = 1.0f;
 
 /** If true, forces a crater biome boost at the world origin so players always spawn in a crater basin. */
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-bool bForceCraterAtOrigin = false;
+bool bForceCraterAtOrigin = true;
 
 /** Coordinate offset anchor location to center the forced crater boost over (e.g., spawn coordinates). */
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
