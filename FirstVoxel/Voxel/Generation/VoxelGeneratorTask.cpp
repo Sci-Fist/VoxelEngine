@@ -190,10 +190,6 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (!Config.Performance.bEnableMesa)    Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
         if (!Config.Performance.bEnableCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
 
-        if (Weights.GetSum() <= 0.001f)
-        {
-            Weights.SetWeight(EVoxelBiome::Forest, 1.0f);
-        }
         Weights.Normalize();
 
         const float               SurfaceHeight  = FVoxelBiomeManager::GetSurfaceHeightStatic(
