@@ -529,12 +529,15 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         //  ALTITUDE: low shards float just above terrain, high islands soar
         // -------------------------------------------------------------------
         const float AltitudeBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStr);
-        // Decouple shards from ground to form a separate absolute layer
-        const float AbsoluteSkyAnchor = 15000.f; // 150 meters absolute sky tier
-        const float DecoupledHeight = FMath::Lerp(AbsoluteSkyAnchor, CenterHeight, CellShardT);
+        // FIX: Removed 150m absolute anchor that forced shards sky-high.
+        // Setting DecoupledHeight directly to CenterHeight allows shards to hover contextually just above ground.
+        const float DecoupledHeight = CenterHeight; 
 
+        // FIX: Match altitude formula in VoxelWorld_Streaming.cpp exactly.
+        // Previously missing the CurvedHeight/Rough curve factors, causing
+        // islands and streamed Volumes to drift apart by up to 20 meters.
         const float SkyAlt = DecoupledHeight + AltitudeBase
-            + (CellShardT * SC.HeightAltitudeBonus);
+            + CellShardT * (CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus);
 
         // SIZE BY ALTITUDE: shards that float higher above local terrain are bigger.
         // A shard barely clearing a hillside = small pebble.
@@ -886,7 +889,14 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     const float MaxBreakUp     = FMath::Lerp(0.50f, 2.80f, Cache.HeightNorm);
     const float BreakUpStrength = FMath::Lerp(0.10f, MaxBreakUp, Cache.ShardT);
     const float BreakUp = FMath::Max(0.f, FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f)) * BreakUpStrength;
-    D -= BreakUp;
+    
+    // FIX: Mask breakup on island tops to protect flat plates from forming vertical swiss-cheese holes.
+    float PlateauMask = 1.0f;
+    if (Cache.ShardT > 0.5f && tCenter > 0.0f) {
+        // Safe taper range: fully protects core top center (tCenter -> 1.0) 
+        PlateauMask = FMath::SmoothStep(0.15f, 0.45f, 1.0f - tCenter);
+    }
+    D -= BreakUp * PlateauMask;
 
     return FMath::Clamp(D, -2.f, 2.f);
 }

@@ -465,7 +465,9 @@ void AVoxelWorld::DrainGenerationQueue()
 	if (!GetWorld()) return;
 
 	const bool bIsEditor = !GetWorld()->IsGameWorld();
-	const int32 Limit = bIsEditor ? 2 : 6; // Increased from 3 to 6 to balance streaming speed with frame rate
+	// FIX: Boost limit during wait screen (InitialSpawn) to saturate thread pool faster, 
+	// since frame rate doesn't matter during a load screen.
+	const int32 Limit = bIsEditor ? 2 : (bWaitingForInitialSpawn ? 24 : 6); 
 
 	int32 ProcessedThisTick = 0;
 	while (ProcessedThisTick < Limit && QueueHead < GenerationQueue.Num())
@@ -683,13 +685,12 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawning spawn area chunks around position %s (Z=%.2f)"), 
 	       *FVector(Pos.X, Pos.Y, TargetZ).ToString(), TargetZ);
 
-	// Spawn chunks in a focused 3x3x3 cube around the spawn position
+	// Spawn chunks in a focused grid around the spawn position
 	// This ensures the player has solid ground without overwhelming the generation system
-	// Spawn wait area: only wait for a tight 3x3 column around the player.
-	// FIX: old code used RadiusXY=8 (-> 867 chunks) causing 30+ second load screens.
-	// 3x3x3 = 27 chunks gives solid ground immediately; the rest stream in normally.
+	// FIX: Increased RadiusXY from 1 to 3 to wait for a 7x7 column. 
+	// This guarantees a much larger buffer zone are ready BEFORE releasing load bar, solving spawn lag.
 	TArray<FIntVector> SpawnAreaCoords;
-	const int32 RadiusXY = FMath::Min(1, RenderDistanceXY); // Only wait for 3x3 immediate area
+	const int32 RadiusXY = FMath::Min(3, RenderDistanceXY); 
 	for (int32 x = -RadiusXY; x <= RadiusXY; ++x)
 	{
 		for (int32 y = -RadiusXY; y <= RadiusXY; ++y)

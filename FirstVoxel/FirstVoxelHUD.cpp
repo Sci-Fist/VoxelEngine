@@ -160,6 +160,7 @@ void AFirstVoxelHUD::DrawHUD()
             bool bSurf = true; bool bSky = true; bool bCave = true;
             bool bFor = true; bool bDes = true; bool bPk = true;
             bool bClf = true; bool bMsa = true; bool bCrat = true;
+            bool bForceCrat = false;
 
             if (TitleWorld)
             {
@@ -173,6 +174,7 @@ void AFirstVoxelHUD::DrawHUD()
                 bClf  = Perf.bEnableCliffs;
                 bMsa  = Perf.bEnableMesa;
                 bCrat = Perf.bEnableCraters;
+                bForceCrat = TitleWorld->bForceCraterSpawn;
             }
 
             Items.Add({ FString::Printf(TEXT("Surface:   %s"), bSurf ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
@@ -184,6 +186,7 @@ void AFirstVoxelHUD::DrawHUD()
             Items.Add({ FString::Printf(TEXT("Cliffs:    %s"), bClf  ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
             Items.Add({ FString::Printf(TEXT("Mesa:      %s"), bMsa  ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
             Items.Add({ FString::Printf(TEXT("Craters:   %s"), bCrat ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Force Crater Spawn: %s"), bForceCrat ? TEXT("YES") : TEXT("NO")), FColor(150,150,220) });
         }
 
         const int32 ItemCount = Items.Num();
@@ -350,6 +353,7 @@ void AFirstVoxelHUD::DrawHUD()
                         else if (TitleSelection == 7) Perf.bEnableCliffs = !Perf.bEnableCliffs;
                         else if (TitleSelection == 8) Perf.bEnableMesa = !Perf.bEnableMesa;
                         else if (TitleSelection == 9) Perf.bEnableCraters = !Perf.bEnableCraters;
+                        else if (TitleSelection == 10) TitleWorld->bForceCraterSpawn = !TitleWorld->bForceCraterSpawn;
                     }
                 }
             }

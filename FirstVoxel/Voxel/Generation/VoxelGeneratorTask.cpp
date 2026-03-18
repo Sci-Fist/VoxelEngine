@@ -136,34 +136,37 @@ void FVoxelGeneratorTask::BuildDensityField()
 
     // Precompute skyland caches at full resolution (actual voxel grid) for LOD-independent generation.
     // This ensures skylands appear consistently across all LODs.
+    // FIX: Parallelized to avoid O(N^2) stall of the sequential loop before main mesh computations.
     SkylandColumnCaches.SetNum(ChunkSize);
-
     for (int32 i = 0; i < ChunkSize; ++i)
     {
         SkylandColumnCaches[i].SetNum(ChunkSize);
-        for (int32 j = 0; j < ChunkSize; ++j)
-        {
-            const float CacheX = WorldOrigin.X + i * VoxelSize;
-            const float CacheY = WorldOrigin.Y + j * VoxelSize;
-            
-            FVoxelBiomeWeightMap Weights = Provider->GetBiomeWeights(CacheX, CacheY, Config);
-
-            // Apply performance toggles to match main generation pipeline
-            if (!Config.Performance.bEnableForest)  Weights.SetWeight(EVoxelBiome::Forest,  0.f);
-            if (!Config.Performance.bEnableDesert)  Weights.SetWeight(EVoxelBiome::Desert,  0.f);
-            if (!Config.Performance.bEnablePeaks)   Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
-
-            if (!Config.Performance.bEnableCliffs)  Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
-            if (!Config.Performance.bEnableMesa)    Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
-            if (!Config.Performance.bEnableCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
-            Weights.Normalize();
-            
-            const float SurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(CacheX, CacheY, Weights, Config);
-            
-            SkylandColumnCaches[i][j] = FVoxelBiomeGenerators::GetSkylandColumnCache(
-                CacheX, CacheY, SurfaceHeight, Weights, Config);
-        }
     }
+
+    ParallelFor(ChunkSize * ChunkSize, [&](int32 Index)
+    {
+        const int32 i = Index / ChunkSize;
+        const int32 j = Index % ChunkSize;
+
+        const float CacheX = WorldOrigin.X + i * VoxelSize;
+        const float CacheY = WorldOrigin.Y + j * VoxelSize;
+        
+        FVoxelBiomeWeightMap Weights = Provider->GetBiomeWeights(CacheX, CacheY, Config);
+
+        // Apply performance toggles to match main generation pipeline
+        if (!Config.Performance.bEnableForest)  Weights.SetWeight(EVoxelBiome::Forest,  0.f);
+        if (!Config.Performance.bEnableDesert)  Weights.SetWeight(EVoxelBiome::Desert,  0.f);
+        if (!Config.Performance.bEnablePeaks)   Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
+        if (!Config.Performance.bEnableCliffs)  Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
+        if (!Config.Performance.bEnableMesa)    Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
+        if (!Config.Performance.bEnableCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
+        Weights.Normalize();
+        
+        const float SurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(CacheX, CacheY, Weights, Config);
+        
+        SkylandColumnCaches[i][j] = FVoxelBiomeGenerators::GetSkylandColumnCache(
+            CacheX, CacheY, SurfaceHeight, Weights, Config);
+    });
 
     // ---- Main density loop ----
     // Parallelized across both X and Y dimensions to fully utilize multi-core CPUs.

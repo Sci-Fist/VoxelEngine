@@ -116,6 +116,24 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     // generation on that XY — so the player always spawns inside a genuine
     // crater without any biome map corruption at world origin.
 
+    // --- Crater Override Mask ---
+    // Make craters subtract other biome weights so they punch through at 100%
+    const float SafeCraterFactor = 1.0f - CratersW;
+    ForestW *= SafeCraterFactor;
+    DesertW *= SafeCraterFactor;
+    PeaksW  *= SafeCraterFactor;
+    CliffsW *= SafeCraterFactor;
+    MesaW   *= SafeCraterFactor;
+
+    // --- Toggle Enforcement ---
+    // zero out globally if disabled in options (e.g. Title Menu toggles)
+    if (!Config.Performance.bEnableForest)  ForestW  = 0.f;
+    if (!Config.Performance.bEnableDesert)  DesertW  = 0.f;
+    if (!Config.Performance.bEnablePeaks)   PeaksW   = 0.f;
+    if (!Config.Performance.bEnableCliffs)  CliffsW  = 0.f;
+    if (!Config.Performance.bEnableMesa)    MesaW    = 0.f;
+    if (!Config.Performance.bEnableCraters) CratersW = 0.f;
+
     Map.SetWeight(EVoxelBiome::Forest,  ForestW);
     Map.SetWeight(EVoxelBiome::Peaks,   PeaksW);
     Map.SetWeight(EVoxelBiome::Cliffs,  CliffsW);
