@@ -29,7 +29,7 @@ class USceneComponent;
 // LOD transitions, water simulation, player spawn, and persistence.
 //
 // -- IMPLEMENTATION FILES -----------------------------------------------------
-//
+// 
 //   VoxelWorld.cpp               Constructor, BeginPlay, Tick, ClearWorld,
 //                                SnapPlayerToGround, preset helpers, utils
 //   VoxelWorldGeneration.cpp     GenerateWorldDeferred, SpawnChunk,
@@ -565,4 +565,8 @@ private:
 #endif
 
   void ConfigureChunk(AVoxelChunk *Chunk) const;
+  
+  // Async generation helpers to prevent editor freeze
+  void PerformWorldDiscoveryAndBoundsCalculation();
+  void FinalizeGenerationSetup();
 };

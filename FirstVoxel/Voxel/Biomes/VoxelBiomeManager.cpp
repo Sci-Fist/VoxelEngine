@@ -117,13 +117,26 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     // crater without any biome map corruption at world origin.
 
     // --- Crater Override Mask ---
-    // Make craters subtract other biome weights so they punch through at 100%
-    const float SafeCraterFactor = 1.0f - CratersW;
-    ForestW *= SafeCraterFactor;
-    DesertW *= SafeCraterFactor;
-    PeaksW  *= SafeCraterFactor;
-    CliffsW *= SafeCraterFactor;
-    MesaW   *= SafeCraterFactor;
+    // Make craters completely override other biomes when active
+    // If crater weight is significant, suppress all other biomes
+    if (CratersW > 0.01f)
+    {
+        ForestW = 0.f;
+        DesertW = 0.f;
+        PeaksW  = 0.f;
+        CliffsW = 0.f;
+        MesaW   = 0.f;
+    }
+    else
+    {
+        // Gradual suppression for weak crater influence
+        const float SafeCraterFactor = 1.0f - CratersW;
+        ForestW *= SafeCraterFactor;
+        DesertW *= SafeCraterFactor;
+        PeaksW  *= SafeCraterFactor;
+        CliffsW *= SafeCraterFactor;
+        MesaW   *= SafeCraterFactor;
+    }
 
     // --- Toggle Enforcement ---
     // zero out globally if disabled in options (e.g. Title Menu toggles)

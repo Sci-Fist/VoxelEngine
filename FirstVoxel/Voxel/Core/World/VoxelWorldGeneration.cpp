@@ -21,7 +21,7 @@
 #include "Voxel/Core/World/Water/VoxelWorldWater.h"
 #include "Voxel/Water/VoxelWaterSimulator.h"
 #include "Voxel/Core/VoxelChunk.h"
-#include "Voxel/Core/VoxelChunkPool.h"
+#include "Voxel/Core/VoxelChunkPool.a
 #include "Voxel/Generation/VoxelGeneratorTask.h"
 #include "Voxel/Generation/VoxelDensityGenerator.h"
 #include "Voxel/Biomes/VoxelBiomeManager.h"
@@ -52,10 +52,46 @@ void AVoxelWorld::GenerateWorldDeferred()
 	UVoxelLogger::LogVoxelEvent(TEXT("VoxelWorld: GenerateWorldDeferred started."));
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: GenerateWorldDeferred started at location %s"), *GetActorLocation().ToString());
 
+	// FIX: Show progress feedback to prevent editor freeze perception
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+		{
+			HUD->bShowLoadBar = true;
+			HUD->LoadProgress = 0.05f; // Start at 5% to show immediate feedback
+		}
+	}
+
 	// 0. Reconcile existing chunks to avoid "stacking"
 	DiscoverExistingChunks();
 
-	// 1. Integrated Smart Area Search
+	// 1. Integrated Smart Area Search - moved to async task
+	TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+	
+	// Use async task to prevent main thread blocking
+	Async(EAsyncExecution::ThreadPool, [WeakThis]()
+	{
+		AVoxelWorld* Self = WeakThis.Get();
+		if (!Self || Self->bShutdown) return;
+
+		// Heavy computation moved to background thread
+		Self->PerformWorldDiscoveryAndBoundsCalculation();
+		
+		// Return to game thread to finalize setup
+		AsyncTask(ENamedThreads::GameThread, [WeakThis]()
+		{
+			AVoxelWorld* Self = WeakThis.Get();
+			if (!Self || Self->bShutdown) return;
+			
+			Self->FinalizeGenerationSetup();
+		});
+	});
+}
+
+void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
+{
+	if (!GetWorld() || bShutdown) return;
+
 	// Distance to jump between world seeds to avoid overlap
 	float WorldRadius = RenderDistanceXY * ChunkSize * VoxelSize;
 	float JumpStep = WorldRadius * 3.f; 
@@ -74,10 +110,6 @@ void AVoxelWorld::GenerateWorldDeferred()
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering GenerateWorld on PlayerStart %s"), *CandidatePos.ToString());
 	}
 
-	// FIX: Prioritize Crater Spawn is handled mathematically inside VoxelBiomeManager.cpp
-	// boosting crater weights around the Actor location anchor instead of hardcoded 0,0.
-	// No coordinate relocation Search is needed here anymore.
-	
 	// FIX: Only search for conflicts in standalone game builds, not in PIE
 	// In PIE mode, we want to generate terrain exactly where the VoxelWorld actor is placed
 	// to avoid creating terrain far away from the intended location
@@ -276,19 +308,24 @@ void AVoxelWorld::GenerateWorldDeferred()
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d new chunks to extend the world."), GenerationQueue.Num());
 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Queued %d chunks."), GenerationQueue.Num()));
 
+	if (GenerationQueue.Num() == 0)
+	{
+		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: No chunks were queued for generation. This may indicate an issue with world bounds or chunk coordinates."));
+	}
+}
+
+void AVoxelWorld::FinalizeGenerationSetup()
+{
+	if (!GetWorld() || bShutdown) return;
+
 	// FIX: Update load bar progress during main world generation
 	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
 	{
 		if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
 		{
 			HUD->bShowLoadBar = true;
-			HUD->LoadProgress = 0.0f;
+			HUD->LoadProgress = 0.1f; // Set to 10% after bounds calculation
 		}
-	}
-
-	if (GenerationQueue.Num() == 0)
-	{
-		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: No chunks were queued for generation. This may indicate an issue with world bounds or chunk coordinates."));
 	}
 
 	// 5. Editor generation should never block the game thread.
@@ -687,10 +724,10 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
 	// Spawn chunks in a focused grid around the spawn position
 	// This ensures the player has solid ground without overwhelming the generation system
-	// FIX: Set RadiusXY to RenderDistanceXY so the loading bar covers absolute FULL view 
-	// grid configured. Releasing only once all scenery is complete saves ambient traversal lag.
+	// FIX: Set RadiusXY to 7 to create a 15x15 area (from -7 to +7 = 15 chunks total)
+	// This gives us approximately 16x16 chunks around the spawn point for proper crater coverage
 	TArray<FIntVector> SpawnAreaCoords;
-	const int32 RadiusXY = RenderDistanceXY; 
+	const int32 RadiusXY = 7; 
 	for (int32 x = -RadiusXY; x <= RadiusXY; ++x)
 	{
 		for (int32 y = -RadiusXY; y <= RadiusXY; ++y)
@@ -704,7 +741,24 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	}
 
 	// Sort spawn area chunks by distance from player to generate closest first
-	SpawnAreaCoords.Sort([SpawnCoord](const FIntVector& A, const FIntVector& B) {
+	// FIX: Prioritize chunks that are in crater biome to ensure crater generation
+	SpawnAreaCoords.Sort([SpawnCoord, this](const FIntVector& A, const FIntVector& B) {
+		// Check if chunks are in crater biome
+		const FVector WorldPosA = ChunkCoordToWorld(A);
+		const FVector WorldPosB = ChunkCoordToWorld(B);
+		
+		const FVoxelGenerationConfig& Config = GetEffectiveConfig();
+		const FVoxelBiomeWeightMap WeightsA = FVoxelBiomeManager::GetBiomeWeightsStatic(WorldPosA.X, WorldPosA.Y, Config);
+		const FVoxelBiomeWeightMap WeightsB = FVoxelBiomeManager::GetBiomeWeightsStatic(WorldPosB.X, WorldPosB.Y, Config);
+		
+		const bool bIsCraterA = WeightsA.GetWeight(EVoxelBiome::Craters) > 0.1f;
+		const bool bIsCraterB = WeightsB.GetWeight(EVoxelBiome::Craters) > 0.1f;
+		
+		// Prioritize crater chunks first
+		if (bIsCraterA && !bIsCraterB) return true;
+		if (!bIsCraterA && bIsCraterB) return false;
+		
+		// If both or neither are craters, sort by distance
 		int32 DistA = FMath::Abs(A.X - SpawnCoord.X) + FMath::Abs(A.Y - SpawnCoord.Y) + FMath::Abs(A.Z - SpawnCoord.Z);
 		int32 DistB = FMath::Abs(B.X - SpawnCoord.X) + FMath::Abs(B.Y - SpawnCoord.Y) + FMath::Abs(B.Z - SpawnCoord.Z);
 		return DistA < DistB;

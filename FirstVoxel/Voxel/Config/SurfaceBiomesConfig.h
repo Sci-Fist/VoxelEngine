@@ -455,33 +455,33 @@ struct FCraterBiomeConfig
     GENERATED_BODY()
 
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float Frequency = 0.00002f;
-
-// REALISTIC CRATER CONFIGURATION: Natural impact craters
-// Depth: 25-45m deep for realistic impact basins
-// RimHeight: 30-50m high walls for natural crater rims
-// RimWidth: 20-30% transition zone for gentle slopes
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float Depth = -2500.f;
+float Frequency = 0.00002f;
 
-// Natural rim walls for realistic crater appearance
+// IMPACT CRATER CONFIGURATION: Dramatic impact basins with high rims
+// Depth: 45m deep for substantial impact basins
+// RimHeight: 55m high walls for dramatic crater rims
+// RimWidth: 22% transition zone for visible, steep walls
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float RimHeight = 3500.f;
+float Depth = -4500.f;
 
+// High rim walls for dramatic crater appearance
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float ImpactThreshold = -0.7f;
-
-// Reduced noise amplitude to prevent pillar artifacts while maintaining rim detail
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float RimNoiseAmplitude = 100.f;
+float RimHeight = 5500.f;
 
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float FloorNoiseAmplitude = 200.f;
+float ImpactThreshold = -0.5f;
 
-// Wider transition zone for gentle crater slopes
+// Moderate noise amplitude for natural rim detail without artifacts
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float RimWidth = 0.25f;
+float RimNoiseAmplitude = 150.f;
+
+UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+float FloorNoiseAmplitude = 300.f;
+
+// Better transition zone for visible crater walls
+UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+float RimWidth = 0.22f;
 
 
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
@@ -498,11 +498,11 @@ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
 float BuildingNoiseFrequency = 0.0015f;
 
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float BuildingNoiseAmplitude = 150.f;
+float BuildingNoiseAmplitude = 350.f;
 
 // Default size multiplier for appropriately sized craters
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float CraterSizeMultiplier = 1.0f;
+float CraterSizeMultiplier = 3.0f;
 
 /** If true, forces a crater biome boost at the world origin so players always spawn in a crater basin. */
 UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
