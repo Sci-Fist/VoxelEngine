@@ -148,17 +148,10 @@ void FVoxelGeneratorTask::BuildDensityField()
     static FVoxelDensityGenerator FallbackGenerator;
     IVoxelDensityProvider* Provider = DensityProvider ? DensityProvider : &FallbackGenerator;
 
-    // --- 🏗️ Pipeline initialization ---
-    TArray<TSharedPtr<IVoxelGenerationStage>> Pipeline;
-
-    if (Config.Performance.bEnableSurface)
-        Pipeline.Add(MakeShared<FVoxelSurfacePass>());
-
-    if (Config.Performance.bEnableCaves)
-        Pipeline.Add(MakeShared<FVoxelCavePass>());
-
-    if (Config.Performance.bEnableSkylands)
-        Pipeline.Add(MakeShared<FVoxelSkylandPass>());
+    // --- 🏗️ Static Pipeline stages ---
+    const FVoxelSurfacePass SurfacePass;
+    const FVoxelCavePass    CavePass;
+    const FVoxelSkylandPass SkylandPass;
 
     // Allocate column caches — every entry is overwritten in the parallel loop.
     ColumnWeights.SetNumUninitialized(EffCS * EffCS);
@@ -220,10 +213,9 @@ void FVoxelGeneratorTask::BuildDensityField()
         Context.BiomeWeights  = Weights;
         Context.MaxWorldZ     = MaxWorldZ;
 
-        for (const auto& Pass : Pipeline)
-        {
-            Pass->PrepareColumn(WorldX, WorldY, Config, Context);
-        }
+        if (Config.Performance.bEnableSurface)  SurfacePass.PrepareColumn(WorldX, WorldY, Config, Context);
+        if (Config.Performance.bEnableCaves)    CavePass.PrepareColumn(WorldX, WorldY, Config, Context);
+        if (Config.Performance.bEnableSkylands) SkylandPass.PrepareColumn(WorldX, WorldY, Config, Context);
 
         // ---- Column Range Checks for Early-Out (Area 2 Optimization) ----
         const float MinWorldZ = WorldOrigin.Z - EffVoxelSize;
@@ -266,10 +258,14 @@ void FVoxelGeneratorTask::BuildDensityField()
             const int32 Idx    = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
 
             float D = -2.0f; // Start with Air
-            for (const auto& Pass : Pipeline)
-            {
-                D = Pass->EvaluateVoxel(FVector(WorldX, WorldY, WorldZ), Context, Config, D);
-            }
+            if (Config.Performance.bEnableSurface)
+                D = SurfacePass.EvaluateVoxel(FVector(WorldX, WorldY, WorldZ), Context, Config, D);
+
+            if (Config.Performance.bEnableCaves)
+                D = CavePass.EvaluateVoxel(FVector(WorldX, WorldY, WorldZ), Context, Config, D);
+
+            if (Config.Performance.bEnableSkylands)
+                D = SkylandPass.EvaluateVoxel(FVector(WorldX, WorldY, WorldZ), Context, Config, D);
 
             // Apply player edits (constant-time dense array lookup).
             if (bHasEdits)

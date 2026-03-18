@@ -122,7 +122,25 @@ void AVoxelWorld::UpdateChunkStreaming()
 	// Build desired chunk set for streaming
 	TSet<FIntVector> Desired;
 
-	// 1. Ground area: Standard 3D volume around player
+	// 1. Ground area: Track local heightmap profile per-column
+	// This prevents mountain peaks/valleys from unloading when the player stands on the opposite altitude extremum.
+	for (int32 y = -RenderDistanceXY; y <= RenderDistanceXY; ++y)
+	for (int32 x = -RenderDistanceXY; x <= RenderDistanceXY; ++x)
+	{
+		const float ColX = (PlayerCoord.X + x + 0.5f) * ChunkWorldSize;
+		const float ColY = (PlayerCoord.Y + y + 0.5f) * ChunkWorldSize;
+
+		const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(ColX, ColY, Config);
+		const int32 GroundZCenter = FMath::RoundToInt(Wh.SurfaceHeight / ChunkWorldSize);
+
+		for (int32 z = -RenderDistanceZ; z <= RenderDistanceZ; ++z)
+		{
+			Desired.Add(FIntVector(PlayerCoord.X + x, PlayerCoord.Y + y, GroundZCenter + z));
+		}
+	}
+
+	// 2. Play space fallback: centered on Player altitude
+	// This guarantees any player-placed structures or items high above are streaming properly.
 	for (int32 z = -RenderDistanceZ; z <= RenderDistanceZ; ++z)
 	for (int32 y = -RenderDistanceXY; y <= RenderDistanceXY; ++y)
 	for (int32 x = -RenderDistanceXY; x <= RenderDistanceXY; ++x)

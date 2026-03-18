@@ -73,6 +73,10 @@ void AVoxelWorld::GenerateWorldDeferred()
 		CandidatePos = PlayerStarts[0]->GetActorLocation();
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering GenerateWorld on PlayerStart %s"), *CandidatePos.ToString());
 	}
+
+	// FIX: Prioritize Crater Spawn is now handled mathematically inside VoxelBiomeManager.cpp
+	// boosting crater weights around coordinate (0,0) smoothly for any seed.
+	// No coordinate relocation Search is needed here anymore.
 	
 	// FIX: Only search for conflicts in standalone game builds, not in PIE
 	// In PIE mode, we want to generate terrain exactly where the VoxelWorld actor is placed
@@ -410,14 +414,9 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
 		{
 			StrongThis->ActiveGenerations--; 
 
-			if (AVoxelChunk** ChunkPtr = StrongThis->LoadedChunks.Find(Coord))
-			{
-				if ((*ChunkPtr)->IsEmpty())
-				{
-					StrongThis->EmptyChunks.Add(Coord);
-					StrongThis->DestroyChunk(Coord); // Safely returns to pool
-				}
-			}
+			// Optimization removed: Destroying empty chunks (e.g. at high LOD) sets them into EmptyChunks
+			// and locks them forever, preventing LOD Transitions from re-evaluating detail layers correctly.
+			// Keeping them in LoadedChunks naturally limits draw overhead without breaking LOD detail updates.
 		}
 	};
 
@@ -466,7 +465,7 @@ void AVoxelWorld::DrainGenerationQueue()
 	if (!GetWorld()) return;
 
 	const bool bIsEditor = !GetWorld()->IsGameWorld();
-	const int32 Limit = bIsEditor ? 2 : 8; // Editor: 2 per tick, Game: up to 8
+	const int32 Limit = bIsEditor ? 2 : 3; // Throttled from 8 to 3 to prevent frame budget overrun
 
 	int32 ProcessedThisTick = 0;
 	while (ProcessedThisTick < Limit && QueueHead < GenerationQueue.Num())
@@ -672,7 +671,9 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
 	// FIXED: Use consistent coordinate system - spawn chunks around the actual spawn position
 	// This ensures the hover-lock waits for the same chunks that were actually generated
-	const FIntVector SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, TargetZ));
+	// FIX: Center wait area bounds around actual Surface height instead of TargetZ (park position above ground)
+	// This ensures the hover-lock is held for the actual terrain mesh chunks, and their collision, before releasing the player.
+	const FIntVector SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, Surface));
 	const float ChunkHeight = ChunkSize * VoxelSize;
 	const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
 
@@ -707,11 +708,16 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
 	for (const FIntVector& Coord : SpawnAreaCoords)
 	{
-		// FIX: DO NOT call SpawnChunk(Coord, true) for all 289+ coordinates inside a single frame.
-		// Directly spawning hundreds of actors will freeze the main thread.
-		// These chunks are already ordered and queued inside GenerationQueue, and will be Rate-Limited 
-		// and spawned over the next several ticks while the load progress bar tracks them safely.
 		InitialSpawnCoords.Add(Coord);
+
+		// FIX: Explicitly call SpawnChunk for the wait zone. Because GenerateWorldDeferred 
+		// centers main generation bounds height on the high-parked player elevation, the 
+		// ground chunks might have been skipped there. Spawning them here triggers async 
+		// background tasks immediately for safe release tracking.
+		if (!LoadedChunks.Contains(Coord))
+		{
+			SpawnChunk(Coord);
+		}
 	}
 
 	// Safety: ensure the two chunks directly below the player exist and

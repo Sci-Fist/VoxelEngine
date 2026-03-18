@@ -94,6 +94,20 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
         Config.Craters.ImpactThreshold,
         CraterNoise) * 0.45f;
 
+    // FIX: Force crater weight at world origin so player always spawns in a crater.
+    // This allows fully randomized seeds but re-introduces a smooth radial override 
+    // at coordinate (0,0) to guarantee a crater basin on any initial layout.
+    if (Config.Craters.bForceCraterAtOrigin)
+    {
+        const float DistSq = X * X + Y * Y;
+        const float Radius = 6400.f; // ~64 meters (approx 4 chunks width total)
+        if (DistSq < Radius * Radius)
+        {
+            float Factor = 1.0f - (FMath::Sqrt(DistSq) / Radius);
+            CratersW += Factor * 0.85f; // ensure dominance after scale normalization
+        }
+    }
+
     // NOTE: The old hard-coded origin crater boost was removed.
     // AVoxelWorld::GenerateWorldDeferred() uses FindCraterSpawnLocation() to
     // search the noise field for a real crater and centres the entire world

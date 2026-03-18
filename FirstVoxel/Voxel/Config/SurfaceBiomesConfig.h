@@ -231,12 +231,11 @@ struct FCraterBiomeConfig
     // FIX: Old Depth=-4000 got multiplied by 8.0 in GetCraterHeight = -32000cm deep (320m!)
     // Reduced to -1200 so with the corrected *1.0 multiplier craters are 12m deep.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float Depth = -1200.f;
+    float Depth = -4500.f;
 
-    // FIX: Old RimHeight=6000 + RimNoiseAmplitude=4000 = up to 100m rim walls.
-    // These were the direct source of the tall thin pillar artifacts at spawn.
+    // FIX: raised to 4000 for dramatic comet impact borders
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-    float RimHeight = 1800.f;
+    float RimHeight = 4000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
     float ImpactThreshold = -0.8f;
@@ -270,6 +269,10 @@ struct FCraterBiomeConfig
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
     float CraterSizeMultiplier = 2.0f;
+
+    /** If true, forces a crater biome boost at the world origin so players always spawn in a crater basin. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
+    bool bForceCraterAtOrigin = false;
 };
 
 // ============================================================

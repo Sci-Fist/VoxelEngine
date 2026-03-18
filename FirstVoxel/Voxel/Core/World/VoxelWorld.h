@@ -201,6 +201,8 @@ public:
       MergedConfig.SkylandsWater = SkylandsWater;
     }
     MergedConfig.Seed = GenerationConfig.Seed;
+    MergedConfig.Craters.bForceCraterAtOrigin = bForceCraterSpawn;
+
     return MergedConfig;
   }
 

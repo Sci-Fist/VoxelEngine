@@ -169,13 +169,27 @@ float FVoxelBiomeGenerators::GetMesaHeight(
 
   const float StepScale = (float)MC.PlateauSteps;
   const float Plateau = FMath::Floor(Base * StepScale) / StepScale;
-  const float EdgeBlend =
-      FMath::SmoothStep(0.f, 1.f, (Base - Plateau) * MC.EdgeSharpness);
-  const float Shape = Plateau + (EdgeBlend / StepScale);
+  
+  // 1. Sharpen edge cliff falloff profile for flat plateaus
+  const float Sharpness = MC.EdgeSharpness + 4.0f;
+  float EdgeBlend = FMath::SmoothStep(0.f, 1.f, (Base - Plateau) * Sharpness);
+  const float Shape = Plateau + (FMath::Pow(EdgeBlend, 1.5f) / StepScale);
 
   const float Normalized = (Shape + 1.f) * 0.5f;
-  return Config.SeaLevel + MC.HeightBase +
-         Normalized * (MC.HeightMax - MC.HeightBase);
+  float Height = Config.SeaLevel + MC.HeightBase +
+                 Normalized * (MC.HeightMax - MC.HeightBase);
+
+  // 2. Add Horizontal Strata Layering (layered sandstone shelves)
+  // Operates strictly on height coordinates output for continuous flat ledge breaks.
+  const float LayerFreq = 0.005f;  // Approx 1 shelf every 20m 
+  const float LayerStrength = 180.f; // 1.8m ledge depth
+  float Stratification = FMath::Sin(Height * LayerFreq);
+  Stratification = 1.0f - FMath::Abs(Stratification); // ridged sharp peaks
+
+  // 3. High frequency crack detail to break smooth FBM faces
+  float Crackle = FastNoise3D(nX * 0.008f, nY * 0.008f, 0.f) * 160.f;
+
+  return Height + (Stratification * LayerStrength) + Crackle;
 }
 
 // ============================================================
