@@ -241,17 +241,17 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   const float BasePlains = Config.SeaLevel + 1000.f;
 
   // --- Rim peak (sits between plains and floor) --------------------------
-  const float RimCenter = 0.25f;
-  const float RimWidth  = 0.22f; 
+  const float RimCenter = 0.12f;
+  const float RimWidth  = 0.05f; 
   const float RimT      = FMath::Max(0.f, 1.f - FMath::Square((NormDepth - RimCenter) / RimWidth));
   // FIX: lowered frequency to 0.0012f to prevent sawtooth jagged artifacts (was 0.008f)
   const float RimNoise  = FastNoise3D(nX * 0.0012f, nY * 0.0012f, 0.f) * CRC.RimNoiseAmplitude;
   const float RimPeak   = BasePlains + CRC.RimHeight + RimNoise * RimT;
 
   // --- Floor (deep centre of the crater) --------------------------------
-  // DepthCurve: 0 at rim, 1 at centre.  Use smoothstep so descent is gradual.
-  const float FloorStart = 0.28f; 
-  const float WallEnd    = 0.50f; // Wall drops fully by 50% radius index
+  // DepthCurve: 0 at rim, 1 at centre.
+  const float FloorStart = 0.17f; 
+  const float WallEnd    = 0.25f; // Wall drops fully by 25% radius index
   const float FloorT     = FMath::SmoothStep(FloorStart, WallEnd, FMath::Min(NormDepth, WallEnd));
   const float FloorNoise = FBM(nX * CRC.BuildingNoiseFrequency,
                                nY * CRC.BuildingNoiseFrequency, 0.f,
@@ -526,7 +526,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         // FIX: Match altitude formula in VoxelWorld_Streaming.cpp exactly.
         // Previously missing the CurvedHeight/Rough curve factors, causing
         // islands and streamed Volumes to drift apart by up to 20 meters.
-        const float SkyAlt = DecoupledHeight + AltitudeBase
+        float SkyAlt = DecoupledHeight + AltitudeBase
             + CellShardT * (CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus);
 
         // SIZE BY ALTITUDE: shards that float higher above local terrain are bigger.
@@ -571,6 +571,11 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float MaxAllowedHalfThick  = IslandSize * EffMaxThicknessRatio;
 
         HalfThick = FMath::Min(HalfThick, MaxAllowedHalfThick);
+
+        // FIX: Ensure the bottom of the island doesn't penetrate below ground!
+        // Instead of squashing thickness (which alters shape), we push the altitude center UPWARDS.
+        const float MinSafeSkyAlt = CenterHeight + HalfThick + 200.f; // 2m clearance from ground
+        SkyAlt = FMath::Max(SkyAlt, MinSafeSkyAlt);
 
         
 

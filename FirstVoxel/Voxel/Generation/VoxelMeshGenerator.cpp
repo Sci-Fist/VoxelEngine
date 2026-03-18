@@ -439,8 +439,8 @@ void FVoxelMeshGenerator::GenerateMesh(
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
 			const bool bBorder = (X == 1 || X == EffectiveSize || Y == 1 || Y == EffectiveSize);
-			EmitQuad(Idx(X,   Y, Z,   S), Idx(X-1, Y, Z,   S),
-			         Idx(X-1, Y, Z-1, S), Idx(X,   Y, Z-1, S),
+			EmitQuad(Idx(X,   Y, Z,   S), Idx(X,   Y, Z-1, S),
+			         Idx(X-1, Y, Z-1, S), Idx(X-1, Y, Z,   S),
 			         X, Y, D0 > 0.f, bBorder, FVector(0.f, 1.f, 0.f));
 		}
 	}
