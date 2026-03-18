@@ -550,21 +550,18 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
         
 
-        // --- 🛡️ CLEARANCE PROTECTION: Prevent islands intersecting terrain ---
-        // Note: This is a preliminary clamp based on AltitudeBase. A more accurate
-        // adjustment using the column's SurfaceHeight is applied after cell selection.
-
-
-        const float Clearance = 200.f; // 2 meters above terrain minimum clearance
-        const float MaxAllow  = AltitudeBase - Clearance;
-        if (MaxAllow <= 0.f)
-        {
-            HalfThick = 0.01f; // Too close to ground, defuse bottom to air
-        }
-        else
-        {
-            HalfThick = FMath::Min(HalfThick, MaxAllow);
-        }
+        // --- CLEARANCE PROTECTION: commented out per user request ---
+        // The 200cm buffer was clamping HalfThick down too aggressively,
+        // causing shards to lose thickness and appear as thin pillar slabs.
+        // Island altitude is already set well above terrain via AltitudeBase;
+        // the post-selection column-height adjustment below handles real clipping.
+        //
+        // const float Clearance = 200.f;
+        // const float MaxAllow  = AltitudeBase - Clearance;
+        // if (MaxAllow <= 0.f)
+        //     HalfThick = 0.01f;
+        // else
+        //     HalfThick = FMath::Min(HalfThick, MaxAllow);
 
 
         // shape threshold
@@ -657,17 +654,21 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     Cache.ShardT      = BestCellShardT;
 
 
-    // Adjust island bottom to clear local terrain using the column's SurfaceHeight
-    const float Clearance = 200.f; // 2 meters above terrain minimum clearance
-    const float MinBottom = SurfaceHeight + Clearance;
-    const float CurrentBottom = Cache.SkyAlt - Cache.HalfThick;
-    if (CurrentBottom < MinBottom)
-
-    {
-        // Raise the entire island to ensure clearance above local terrain
-        const float NeededRise = MinBottom - CurrentBottom;
-        Cache.SkyAlt += NeededRise;
-    }
+    // Post-selection terrain clearance adjustment: commented out per user request.
+    // The 200cm forced-rise was pushing islands upward even when they were already
+    // correctly placed, which combined with MinAltitudeAboveTerrain was double-offsetting
+    // the altitude and causing islands to clip into high terrain on the way up.
+    // AltitudeBase already guarantees separation; let the density gate in
+    // GetSkylandDensityFromCache (HeightCutoff fade) handle the isosurface boundary.
+    //
+    // const float Clearance = 200.f;
+    // const float MinBottom = SurfaceHeight + Clearance;
+    // const float CurrentBottom = Cache.SkyAlt - Cache.HalfThick;
+    // if (CurrentBottom < MinBottom)
+    // {
+    //     const float NeededRise = MinBottom - CurrentBottom;
+    //     Cache.SkyAlt += NeededRise;
+    // }
 
 
 
