@@ -333,10 +333,18 @@ void AVoxelWorld::Tick(float DeltaTime)
 			FCollisionQueryParams QP;
 			QP.AddIgnoredActor(SpawnPlayer);
 
-			const bool bHit = GetWorld()->LineTraceSingleByChannel(
-				GroundHit, TraceOrigin,
-				TraceOrigin + FVector(0.f, 0.f, -150000.f),
-				ECC_WorldStatic, QP);
+			// FIX: Start the trace high above the player to avoid starting INSIDE the mesh.
+			// Starting inside a collision volume causes a single Raycast to ignore it completely.
+			const FVector StartPos = TraceOrigin + FVector(0.f, 0.f, 1000.f); 
+			const FVector EndPos   = TraceOrigin + FVector(0.f, 0.f, -150000.f);
+
+			// FIX: Sweep with a Sphere (radius 30 cm) to ensure the landing support covers 
+			// the entire capsule width instead of a single point that could slip between mesh vertices.
+			FCollisionShape SweepCap = FCollisionShape::MakeSphere(30.f);
+
+			const bool bHit = GetWorld()->SweepSingleByChannel(
+				GroundHit, StartPos, EndPos, FQuat::Identity,
+				ECC_WorldStatic, SweepCap, QP);
 
 			if (bHit || bTimedOut)
 			{

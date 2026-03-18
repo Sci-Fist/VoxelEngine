@@ -35,7 +35,8 @@ AFirstVoxelCharacter::AFirstVoxelCharacter()
 	GetCharacterMovement()->bOrientRotationToMovement    = true;
 	GetCharacterMovement()->bUseControllerDesiredRotation = false;
 	GetCharacterMovement()->RotationRate                 = FRotator(0.f, 500.f, 0.f);
-	GetCharacterMovement()->JumpZVelocity                = 500.f;
+	GetCharacterMovement()->bUseFlatBaseForFloorChecks   = true; // FIX: prevents Rounded capsule Slip on Voxel wedges
+	GetCharacterMovement()->SetWalkableFloorAngle(60.0f);        // FIX: prevents slope slides from locking landing anims
 	GetCharacterMovement()->AirControl                   = 0.35f;
 	GetCharacterMovement()->MaxWalkSpeed                 = 500.f;
 	GetCharacterMovement()->MinAnalogWalkSpeed           = 20.f;
@@ -90,6 +91,21 @@ void AFirstVoxelCharacter::BeginPlay()
 	// Without this, PIE restart leaves a stale pointer to the destroyed actor
 	// from the previous session, causing all tool raycasts to silently fail.
 	CachedVoxelWorld = nullptr;
+
+	// ── FIX: Disable Collision for Visual Attachment components ──────────
+	// If a brush radius sphere or wireframe is added in Blueprints, it can
+	// support the actor's weight and suspend the capsule in air, causing
+	// continuous falling animation locks.
+	TArray<UPrimitiveComponent*> PrimitiveComps;
+	GetComponents<UPrimitiveComponent>(PrimitiveComps);
+	for (UPrimitiveComponent* Comp : PrimitiveComps)
+	{
+		if (Comp && Comp != GetCapsuleComponent() && Comp != GetMesh())
+		{
+			Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			UE_LOG(LogTemplateCharacter, Log, TEXT("Disabled landing collision on widget: %s"), *Comp->GetName());
+		}
+	}
 }
 
 void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)

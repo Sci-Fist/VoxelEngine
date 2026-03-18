@@ -669,7 +669,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	// This ensures the player has solid ground without overwhelming the generation system
 	// Expand spawn dimensions to wait for a larger safe landing area (roughly 16x16 chunks)
 	TArray<FIntVector> SpawnAreaCoords;
-	const int32 RadiusXY = 8;
+	const int32 RadiusXY = FMath::Min(8, RenderDistanceXY); // Match stream limits to avoid waiting for missing coords
 	for (int32 x = -RadiusXY; x <= RadiusXY; ++x)
 	{
 		for (int32 y = -RadiusXY; y <= RadiusXY; ++y)
@@ -689,14 +689,12 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 		return DistA < DistB;
 	});
 
-	// All spawn-area chunks use bSyncCollision=true so their physics collision
-	// body is cooked synchronously. This prevents IsCollisionReady() from
-	// staying false after the mesh upload, which would keep the player in
-	// the hover-lock indefinitely.
 	for (const FIntVector& Coord : SpawnAreaCoords)
 	{
-		if (!LoadedChunks.Contains(Coord))
-			SpawnChunk(Coord, /*bSyncCollision=*/true);
+		// FIX: DO NOT call SpawnChunk(Coord, true) for all 289+ coordinates inside a single frame.
+		// Directly spawning hundreds of actors will freeze the main thread.
+		// These chunks are already ordered and queued inside GenerationQueue, and will be Rate-Limited 
+		// and spawned over the next several ticks while the load progress bar tracks them safely.
 		InitialSpawnCoords.Add(Coord);
 	}
 
