@@ -224,10 +224,9 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   float Impact = FastNoise3D(nX * (ModifiedFrequency * 0.5f),
                              nY * (ModifiedFrequency * 0.5f), 200.f);
 
-  // Subtle organic distortion - kept small to avoid chaotic height jumps
-  // that blended with adjacent biomes were the direct cause of pillars.
-  const float Distort = FastNoise3D(nX * 0.004f, nY * 0.004f, 400.f) * CRC.ShapeDistortion;
-  const float Border  = FastNoise3D(nX * 0.003f, nY * 0.003f, 500.f) * CRC.BorderIrregularity;
+  // Subtle organic distortion - smooth swelling multipliers
+  const float Distort = FastNoise3D(nX * 0.0012f, nY * 0.0012f, 400.f) * CRC.ShapeDistortion;
+  const float Border  = FastNoise3D(nX * 0.0010f, nY * 0.0010f, 500.f) * CRC.BorderIrregularity;
   Impact += Distort + Border;
 
   // Map Impact into [0, 1] where 0 = flat plains, 1 = crater centre
@@ -242,12 +241,11 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   const float BasePlains = Config.SeaLevel + 1000.f;
 
   // --- Rim peak (sits between plains and floor) --------------------------
-  // RimPeak is at NormDepth ~ 0.25.  Use a bell curve (smooth quadratic)
-  // centred there so the rim rises and falls with no hard edges.
   const float RimCenter = 0.25f;
-  const float RimWidth  = 0.22f; // half-width of the bell
+  const float RimWidth  = 0.22f; 
   const float RimT      = FMath::Max(0.f, 1.f - FMath::Square((NormDepth - RimCenter) / RimWidth));
-  const float RimNoise  = FastNoise3D(nX * 0.008f, nY * 0.008f, 0.f) * CRC.RimNoiseAmplitude;
+  // FIX: lowered frequency to 0.0012f to prevent sawtooth jagged artifacts (was 0.008f)
+  const float RimNoise  = FastNoise3D(nX * 0.0012f, nY * 0.0012f, 0.f) * CRC.RimNoiseAmplitude;
   const float RimPeak   = BasePlains + CRC.RimHeight + RimNoise * RimT;
 
   // --- Floor (deep centre of the crater) --------------------------------
