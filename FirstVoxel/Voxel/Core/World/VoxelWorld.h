@@ -287,6 +287,9 @@ public:
     return &LoadedChunks;
   }
 
+  int32 GetQueueCount() const { return GenerationQueue.Num(); }
+  int32 GetQueueHead() const { return QueueHead; }
+
   virtual void BeginPlay() override;
   virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
   virtual void Tick(float DeltaTime) override;

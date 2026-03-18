@@ -225,8 +225,7 @@ void AVoxelChunk::GenerateAsync()
 		DensityProvider,               // Terrain density provider
 		FoliageDensity,                // Foliage placement density
 		MaxFoliageSlope,               // Maximum slope for foliage placement
-		DataMap,                        // Global voxel modifications Accessor
-		DenseChunk                      // Dense density node grid manager cache
+		DataMap                        // Global voxel modifications Accessor
 	);
 
 	// Capture task and this pointer for async execution
@@ -290,8 +289,7 @@ void AVoxelChunk::GenerateSync()
 		&GlobalDensityGeneratorSync,   // Synchronous density provider
 		FoliageDensity,                // Foliage placement density
 		MaxFoliageSlope,               // Maximum slope for foliage placement
-		DataMap,                        // Global voxel modifications Accessor
-		DenseChunk                      // Dense density node grid manager cache
+		DataMap                         // Global voxel modifications Accessor
 	);
 	
 	// Execute generation task synchronously on current thread
@@ -311,6 +309,13 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 
 	// Store mesh output for state management and LOD transitions
 	MeshOutput = Out;
+
+	// Copy background task isolated densities to local active buffer for downstream components
+	if (!DenseChunk.IsValid())
+	{
+		DenseChunk = MakeShared<FVoxelDensityChunk>();
+	}
+	DenseChunk->Densities = CompletedTask->GetDensities();
 
 	// ── Determine per-biome material overrides ────────────────────────────
 	// Sample the dominant biome at the chunk geometric centre (XY and Z).

@@ -123,8 +123,10 @@ static void FlattenCellTops(
     const int32 S3 = S * S * S;
     const float CellSize     = InVoxelSize * 1.5f; 
     const float CellSizeInv  = 1.f / CellSize;
+    const float ZCellSize    = InVoxelSize * 3.0f; // altitude band
+    const float ZCellSizeInv = 1.f / ZCellSize;
 
-    TMap<TPair<int32,int32>, float> CellMaxZ;
+    TMap<FIntVector, float> CellMaxZ;
     CellMaxZ.Reserve(S3);
 
     for (int32 i = 0; i < S3; ++i)
@@ -134,7 +136,8 @@ static void FlattenCellTops(
 
         const int32 GX = FMath::FloorToInt(CellVertices[i].X * CellSizeInv);
         const int32 GY = FMath::FloorToInt(CellVertices[i].Y * CellSizeInv);
-        const auto Key = TPair<int32,int32>(GX, GY);
+        const int32 GZ = FMath::FloorToInt(CellVertices[i].Z * ZCellSizeInv);
+        const FIntVector Key(GX, GY, GZ);
         float& MaxZ = CellMaxZ.FindOrAdd(Key, CellVertices[i].Z);
         MaxZ = FMath::Max(MaxZ, CellVertices[i].Z);
     }
@@ -146,12 +149,14 @@ static void FlattenCellTops(
 
         const int32 GX = FMath::FloorToInt(CellVertices[i].X * CellSizeInv);
         const int32 GY = FMath::FloorToInt(CellVertices[i].Y * CellSizeInv);
+        const int32 GZ = FMath::FloorToInt(CellVertices[i].Z * ZCellSizeInv);
         float NeighMax = CellVertices[i].Z;
 
         for (int32 dx = -1; dx <= 1; ++dx)
         for (int32 dy = -1; dy <= 1; ++dy)
+        for (int32 dz = -1; dz <= 1; ++dz)
         {
-            const auto Key = TPair<int32,int32>(GX + dx, GY + dy);
+            const FIntVector Key(GX + dx, GY + dy, GZ + dz);
             if (const float* Z = CellMaxZ.Find(Key))
                 NeighMax = FMath::Max(NeighMax, *Z);
         }

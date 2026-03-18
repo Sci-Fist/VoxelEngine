@@ -96,6 +96,55 @@ void AFirstVoxelHUD::DrawHUD()
         DrawRect(FLinearColor(0.15f, 0.18f, 0.22f, 1.0f),  BarX, BarY, BarWidth, BarHeight);
         DrawRect(FLinearColor(0.25f, 0.85f, 0.35f, 1.0f),  BarX, BarY, BarWidth * Progress, BarHeight);
 
+        // ── Descriptive Text ──────────────────────────────────────────
+        const int32 Head = TitleWorld->GetQueueHead();
+        const int32 Total = TitleWorld->GetQueueCount();
+        FString StatusText = FString::Printf(TEXT("Chunks: %d / %d"), Head, Total);
+        if (Head >= Total && Total > 0) StatusText = TEXT("Finalizing geometry... Ready shortly.");
+        if (Total <= 0) StatusText = TEXT("Requesting generation coordinates...");
+        
+        float StatusW, StatusH;
+        GetTextSize(StatusText, StatusW, StatusH, SmallFont, 1.0f);
+        DrawText(StatusText, FLinearColor::White, CX2 - StatusW * 0.5f, BarY + BarHeight + 8.f, SmallFont, 1.0f);
+
+        // ── Dynamic Map Matrix ─────────────────────────────────────────
+        const float BoxSz  = 14.f;
+        const float BoxPad = 3.f;
+        const int32 Radius = 11; // 23x23 grid
+        
+        const float GridWidth  = (Radius * 2 + 1) * (BoxSz + BoxPad);
+        const float GridX      = CX2 - GridWidth * 0.5f;
+        const float GridY      = BarY + BarHeight + 40.f;
+
+        const auto& Loaded = *TitleWorld->GetLoadedChunks();
+
+        for (int32 cy = -Radius; cy <= Radius; ++cy)
+        {
+            for (int32 cx = -Radius; cx <= Radius; ++cx)
+            {
+                const FIntVector Coord(cx, cy, 0); 
+                FLinearColor BoxCol = FLinearColor(0.1f, 0.1f, 0.12f, 0.4f); // Empty background
+
+                if (const AVoxelChunk* const* pChunk = Loaded.Find(Coord))
+                {
+                    const AVoxelChunk* Chunk = *pChunk;
+                    if (Chunk)
+                    {
+                        if (Chunk->IsReady())
+                            BoxCol = FLinearColor(0.2f, 0.8f, 0.3f, 0.9f); // Green: Loaded
+                        else if (Chunk->IsGenerating())
+                            BoxCol = FLinearColor(0.9f, 0.8f, 0.2f, 0.9f); // Yellow: Active
+                        else
+                            BoxCol = FLinearColor(0.4f, 0.4f, 0.45f, 0.7f); // Grey: Initialized
+                    }
+                }
+                
+                const float DrawX = GridX + (cx + Radius) * (BoxSz + BoxPad);
+                const float DrawY = GridY + (cy + Radius) * (BoxSz + BoxPad);
+                DrawRect(BoxCol, DrawX, DrawY, BoxSz, BoxSz);
+            }
+        }
+
         if (!TitleWorld->IsWaitingForInitialSpawn())
         {
             bShowLoadingScreen = false;

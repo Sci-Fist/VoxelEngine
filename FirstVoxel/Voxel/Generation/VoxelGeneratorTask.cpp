@@ -47,8 +47,7 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     IVoxelDensityProvider*        InProvider,
     float                         InFoliageDensity,
     float                         InMaxFoliageSlope,
-    struct FVoxelDataMap*         InDataMap,
-    TSharedPtr<struct FVoxelDensityChunk> InDenseChunk)
+    struct FVoxelDataMap*         InDataMap)
     : ChunkCoord     (InChunkCoord)
     , WorldOrigin    (InWorldOrigin)
     , ChunkSize      (InChunkSize)
@@ -59,7 +58,6 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     , FoliageDensity (InFoliageDensity)
     , MaxFoliageSlope(InMaxFoliageSlope)
     , DataMap        (InDataMap)
-    , DenseChunk     (InDenseChunk)
 {
     // Pre-cache the foliage slot schema from the config.
     // Doing this in the constructor means CalculateFoliage() iterates a flat
@@ -118,7 +116,7 @@ void FVoxelGeneratorTask::BuildDensityField()
     const int32 VoxelCS = ChunkSize;
     const int32 EffCS   = ChunkSize / StepSize;
 
-    DenseChunk->Densities.SetNumUninitialized(TotalSamples);
+    Densities.SetNumUninitialized(TotalSamples);
 
     static FVoxelDensityGenerator FallbackGenerator;
     IVoxelDensityProvider* Provider = DensityProvider ? DensityProvider : &FallbackGenerator;
@@ -312,7 +310,7 @@ void FVoxelGeneratorTask::BuildDensityField()
                         D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
                     }
                 }
-                DenseChunk->Densities[Idx] = D;
+                Densities[Idx] = D;
             }
             return;
         }
@@ -345,7 +343,7 @@ void FVoxelGeneratorTask::BuildDensityField()
                         D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
                     }
                 }
-                DenseChunk->Densities[Idx] = D;
+                Densities[Idx] = D;
             }
             return;
         }
@@ -378,7 +376,7 @@ void FVoxelGeneratorTask::BuildDensityField()
                     D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
                 }
             }
-            DenseChunk->Densities[Idx] = D;
+            Densities[Idx] = D;
         }
     });
 
