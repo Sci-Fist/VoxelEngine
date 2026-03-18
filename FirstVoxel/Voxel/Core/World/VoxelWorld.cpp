@@ -322,17 +322,6 @@ void AVoxelWorld::Tick(float DeltaTime)
 				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: All %d spawn chunks have collision. Releasing player."), TotalCount);
 			}
 
-			// Dismantle hover-lock state
-			bWaitingForInitialSpawn = false;
-			SpawnWaitAccum  = 0.f;
-			SpawnDelayAccum = 0.f;
-			InitialSpawnCoords.Empty();
-
-			// Complete the load bar
-			if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-				if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
-				{ HUD->LoadProgress = 1.0f; HUD->bShowLoadBar = false; }
-
 			// ── Place player precisely on the ground ────────────────────────
 			// Collision is confirmed live, so re-enable it and line-trace to find
 			// the exact surface. We place the player's capsule just above the hit
@@ -349,25 +338,49 @@ void AVoxelWorld::Tick(float DeltaTime)
 				TraceOrigin + FVector(0.f, 0.f, -150000.f),
 				ECC_WorldStatic, QP);
 
-			if (bHit)
+			if (bHit || bTimedOut)
 			{
-				FVector LandPos   = TraceOrigin;
-				LandPos.Z         = GroundHit.ImpactPoint.Z + 101.f; // 96cm capsule half + 5cm
-				SpawnPlayer->SetActorLocation(LandPos, false, nullptr, ETeleportType::TeleportPhysics);
-				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Placed player at ground Z=%.1f (hit Z=%.1f)"),
-					LandPos.Z, GroundHit.ImpactPoint.Z);
+				if (bHit)
+				{
+					FVector LandPos   = TraceOrigin;
+					LandPos.Z         = GroundHit.ImpactPoint.Z + 101.f; // 96cm capsule half + 5cm
+					SpawnPlayer->SetActorLocation(LandPos, false, nullptr, ETeleportType::TeleportPhysics);
+					UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Placed player at ground Z=%.1f (hit Z=%.1f)"),
+						LandPos.Z, GroundHit.ImpactPoint.Z);
+				}
+				else
+				{
+					UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Ground trace missed on timeout — releasing at hover height."));
+				}
+
+				// Dismantle hover-lock state
+				bWaitingForInitialSpawn = false;
+				SpawnWaitAccum  = 0.f;
+				SpawnDelayAccum = 0.f;
+				InitialSpawnCoords.Empty();
+
+				// Complete the load bar
+				if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+					if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+					{ HUD->LoadProgress = 1.0f; HUD->bShowLoadBar = false; }
+
+				// Show the player
+				SpawnPlayer->SetActorHiddenInGame(false);
+
+				// ── Restore walking movement ────────────────────────────────────
+				if (ACharacter* Ch = Cast<ACharacter>(SpawnPlayer))
+				{
+					if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
+					{
+						CMC->SetMovementMode(EMovementMode::MOVE_Walking);
+					}
+				}
 			}
 			else
 			{
-				UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Ground trace missed — player stays at hover height. Terrain collision may not be ready."));
+				UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Ground trace missed — staying at hover height. Terrain collision may not be ready."));
+				// bWaitingForInitialSpawn stays TRUE. Loop continues next frame!
 			}
-
-			// Show the player
-			SpawnPlayer->SetActorHiddenInGame(false);
-
-			// ── Restore walking movement ────────────────────────────────────
-			// We use MOVE_Walking (not MOVE_Falling) because:
-			//  • Collision is confirmed ready (IsCollisionReady passed above).
 			//  • The player is already placed at ground level by the trace above.
 			//  • MOVE_Walking + UpdateFloorFromAdjustment immediately snaps the
 			//    capsule to the floor and triggers the correct grounded anim state.
