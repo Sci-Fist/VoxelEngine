@@ -870,7 +870,11 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
 
     // Point-wise ShapeXY prevents absolute grid-cell fractures on cell boundaries
     const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves, 2), 1, Config.Performance.MaxNoiseOctaves);
-    const float ShapeXY = FBM(WX * Cache.Freq, WY * Cache.Freq, 0.f, Oct2D, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
+    
+    // FIX: Use 3D noise (absolute Z) for smaller shards to break the continuous 
+    // vertical columnar extrusion projections, forming organic 3D boulders.
+    const float ShapeZ  = (Cache.ShardT < 0.5f) ? WZ * Cache.Freq : 0.f;
+    const float ShapeXY = FBM(WX * Cache.Freq, WY * Cache.Freq, ShapeZ, Oct2D, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
 
     const float Shape = ShapeXY + ShapeDetail;
 
