@@ -252,31 +252,24 @@ float FVoxelBiomeGenerators::GetCraterHeight(
 
   // --- Floor (deep centre of the crater) --------------------------------
   // DepthCurve: 0 at rim, 1 at centre.  Use smoothstep so descent is gradual.
-  const float FloorStart = 0.28f; // NormDepth where floor begins (just after RimCenter 0.25f)
-  const float FloorT     = FMath::SmoothStep(FloorStart, 1.0f, NormDepth);
+  const float FloorStart = 0.28f; 
+  const float WallEnd    = 0.50f; // Wall drops fully by 50% radius index
+  const float FloorT     = FMath::SmoothStep(FloorStart, WallEnd, FMath::Min(NormDepth, WallEnd));
   const float FloorNoise = FBM(nX * CRC.BuildingNoiseFrequency,
                                nY * CRC.BuildingNoiseFrequency, 0.f,
                                2, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves)
                            * CRC.BuildingNoiseAmplitude;
-  // FIX: was Depth * 8.0 -> absurd depth.  Now Depth is used directly (1:1).
   const float FloorDepth = BasePlains + CRC.Depth * FloorT + FloorNoise * FloorT;
-
-  // --- Smooth blend across three zones -----------------------------------
-  // Zone 1: plains -> rim  (NormDepth 0 .. RimCenter)
-  // Zone 2: rim -> floor   (NormDepth RimCenter .. 1)
-  // Both use SmoothStep so the height field has no kinks.
 
   float Height;
   if (NormDepth <= RimCenter)
   {
-      // Approach to the rim from the plains side
       const float t = FMath::SmoothStep(0.f, RimCenter, NormDepth);
       Height = FMath::Lerp(BasePlains, RimPeak, t);
   }
   else
   {
-      // Descent from the rim into the floor
-      const float t = FMath::SmoothStep(RimCenter, 1.0f, NormDepth);
+      const float t = FMath::SmoothStep(RimCenter, WallEnd, FMath::Min(NormDepth, WallEnd));
       Height = FMath::Lerp(RimPeak, FloorDepth, t);
   }
 
@@ -503,9 +496,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         //  High island:   BaseIslandSize + HeightSizeBonus + RoughnessSizeBonus
         //  Low shard:     BaseIslandSize * ShardMinScale  (very small)
         //
-        //  ShardMinScale from config (default 0.08 = 8% of BaseIslandSize = ~200cm radius).
-        // -------------------------------------------------------------------
-        const float ShardMinScale = SC.ShardMinScale;
+        // FIX: Raise ShardMinScale to ensure shards have a core width that supports 3D noise detail
+        const float ShardMinScale = FMath::Max(0.20f, SC.ShardMinScale); // Wide enough to build decent features (was SC.ShardMinScale)
         const float SizeNoise   = FBM(cnX * 0.00008f, cnY * 0.00008f, 50.f, 2, 2.0f, 0.5f, 2);
         const float SizeFactor  = (SizeNoise + 1.f) * 0.5f;
 
@@ -567,10 +559,9 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         //  ThicknessRatio (islands, CellShardT=1): stays at SC.ThicknessRatio
         //  (default 0.2) so full skylands remain flat floating platforms.
         // -------------------------------------------------------------------
-        // FIX: Add random aspect ratio for shards. Highly requested to break the 
-        // uniform elongated tall pillar problem on smaller radii.
+        // FIX: Add random aspect ratio for shards. Flat pancakes preferred!
         const float HashAspect = (FastNoise3D(cnX * 0.005f, cnY * 0.005f, 300.f) + 1.f) * 0.5f;
-        const float ShardThickBase = FMath::Lerp(0.35f, 0.75f, HashAspect); // 35% to 75% wide ratio
+        const float ShardThickBase = FMath::Lerp(0.12f, 0.25f, HashAspect); // 12% to 25% wide ratio (was 35-75%)
         const float EffThickness = FMath::Lerp(ShardThickBase, SC.ThicknessRatio, CellShardT);
 
         float HalfThick = IslandSize * EffThickness;
@@ -825,8 +816,8 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     const float tAbs      = FMath::Abs(tCenter);
     const float RockFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(tAbs, 0.6f));
 
-    // Blend: ShardT=0 → pure rock sphere, ShardT=1 → island flat-top
-    const float Falloff = FMath::Lerp(RockFalloff, IslandFalloff, Cache.ShardT);
+    // FIX: Blend at least 40% IslandFalloff onto shards to give them flat tops
+    const float Falloff = FMath::Lerp(RockFalloff, IslandFalloff, FMath::Max(0.40f, Cache.ShardT));
 
     const float WX_base = X + Off.X;
     const float WY_base = Y + Off.Y;

@@ -152,13 +152,10 @@ static void FlattenCellTops(
         const int32 GZ = FMath::FloorToInt(CellVertices[i].Z * ZCellSizeInv);
         float NeighMax = CellVertices[i].Z;
 
-        for (int32 dx = -1; dx <= 1; ++dx)
-        for (int32 dy = -1; dy <= 1; ++dy)
-        for (int32 dz = -1; dz <= 1; ++dz)
+        const FIntVector Key(GX, GY, GZ);
+        if (const float* Z = CellMaxZ.Find(Key))
         {
-            const FIntVector Key(GX + dx, GY + dy, GZ + dz);
-            if (const float* Z = CellMaxZ.Find(Key))
-                NeighMax = FMath::Max(NeighMax, *Z);
+            NeighMax = *Z;
         }
 
         if (FMath::Abs(NeighMax - CellVertices[i].Z) > KINDA_SMALL_NUMBER)
@@ -253,9 +250,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 				}
 			}
 
-			// FIX 1b: Need at least 3 cut edges to form a meaningful vertex.
-			// 1–2 cut edges produce degenerate collapsed geometry.
-			if (EdgeCount < 3) continue;
+			// Averaged coordinates of cut edges form a watertight vertex node.
 
 			CellPos /= (float)EdgeCount;
 

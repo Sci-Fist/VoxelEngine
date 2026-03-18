@@ -474,7 +474,7 @@ void FVoxelGeneratorTask::CalculateFoliage()
 
         // Map height to local cell Z for normal lookup
         const int32 CellZ = FMath::Clamp(FMath::RoundToInt((SurfaceHeight - WorldOrigin.Z) / EffVoxelSize) + 1, 1, EffectiveSize + 1);
-        const FVector Normal = FVoxelMeshGenerator::ComputeNormal(Densities, LX + 1, LY + 1, CellZ, EffectiveSize);
+        const FVector Normal = FVoxelMeshGenerator::ComputeNormal(Densities, LX + 1, LY + 1, CellZ, EffCS);
         const float SlopeZ = Normal.Z;
 
         const FVector ColumnWorldPos(WorldOrigin.X + LX * EffVoxelSize, WorldOrigin.Y + LY * EffVoxelSize, SurfaceHeight);
