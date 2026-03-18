@@ -138,6 +138,9 @@ private:
     // Cached player world position for NativePaint (updated each tick while open).
     FVector PlayerWorldPos = FVector::ZeroVector;
 
+    /** Cached biome name fetched on timer interval to avoid continuous frame noise evaluation. */
+    FString CachedBiomeName = TEXT("Unknown");
+
     // ---- Helpers ----
     void EnsureTexture();
     void RequestRefresh();

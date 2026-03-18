@@ -90,6 +90,7 @@ void UVoxelMapWidget::OpenMap(AVoxelWorld* InVoxelWorld, APawn* InPlayerPawn)
     SetVisibility(ESlateVisibility::Visible);
     SetKeyboardFocus();
     EnsureTexture();
+    CachedBiomeName = GetPlayerBiomeName();
     RequestRefresh();
 
     if (UWorld* W = GetWorld())
@@ -231,7 +232,8 @@ void UVoxelMapWidget::OnRefreshTimer()
 {
 	if (bMapOpen && CachedPlayerPawn && !bShuttingDown)
     {
-        PlayerWorldPos = CachedPlayerPawn->GetActorLocation();
+        PlayerWorldPos  = CachedPlayerPawn->GetActorLocation();
+        CachedBiomeName = GetPlayerBiomeName();
         RequestRefresh();
     }
 }
@@ -461,7 +463,7 @@ void UVoxelMapWidget::PaintOverlayText(
     // Biome name
     FSlateDrawElement::MakeText(Out, Layer + 1,
         MakePaintGeom(G, FVector2D(TextX, TextY), RowSz),
-        FText::FromString(FString::Printf(TEXT("Biome: %s"), *GetPlayerBiomeName())),
+        FText::FromString(FString::Printf(TEXT("Biome: %s"), *CachedBiomeName)),
         Font, ESlateDrawEffect::None, TextCol);
     TextY += LineH + 4.f;
 

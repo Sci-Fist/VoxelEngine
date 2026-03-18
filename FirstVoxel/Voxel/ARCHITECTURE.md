@@ -97,7 +97,7 @@ Source/FirstVoxel/
 │  AVoxelChunk  (Core/VoxelChunk.h)                                │
 │  Holds: ProceduralMeshComponent, WaterMesh, BiomeFoliageHISMs    │
 │  Fires: FVoxelGeneratorTask on a background thread               │
-│  Ticks: UpdateMeshState() for LOD transitions                    │
+│  Ticks: UpdateMeshState() (Only enabled during active transition)│
 └────────┬─────────────────────────────────────────────────────────┘
          │ dispatches
          ▼
@@ -153,7 +153,7 @@ AVoxelWorld::Tick()
   │                        │    └─ GetDensityFull() per voxel (O(n³) noise)
   │                        ├─ PostProcessDensities()  (hook for future passes)
   │                        ├─ BuildMesh()             Surface Nets
-  │                        │    └─ FlattenMeshTops()  O(V) grid-based flatten
+  │                        │    └─ FlattenMeshTops()  O(V) In-place grid flatten
   │                        ├─ CalculateFoliage()      column-cached scatter
   │                        └─ PlaceWaterSources()     depression scan
   │             ↓ (game thread callback via GenerationId guard)
@@ -346,7 +346,7 @@ Two independent subsystems coexist:
 
 **Hysteresis:** Distance comparisons use pre-squared thresholds (`L1ISq`, `L2ISq`) and `DistSq` directly — no `sqrt()` per chunk. A 10% outer band prevents flip-flopping at boundaries.
 
-**Transition tick:** `AVoxelChunk::Tick()` calls `UpdateMeshState()` each frame while `MeshState == Transitioning`. `TransitionToLOD()` fires `GenerateAsync()` for the new LOD and stores the old mesh in `PreviousMesh` for optional blending.
+**Transition tick:** `AVoxelChunk::Tick()` is only enabled during active transitions and disables itself when complete (`MeshState == Ready`). `TransitionToLOD()` fires `GenerateAsync()` for the new LOD and stores the old mesh in `PreviousMesh` for optional blending.
 
 **Skylands streaming** uses a separate volume centred on the estimated skyland altitude (`CachedSkyAltWorld`). The sky altitude is recomputed only when the player moves > `SkyAltSnapDist` (1000 cm) to avoid per-tick biome noise sampling.
 

@@ -413,8 +413,8 @@ void FVoxelMeshGenerator::GenerateMesh(
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
 			const bool bBorder = (X == 1 || X == EffectiveSize || Y == 1 || Y == EffectiveSize);
-			EmitQuad(Idx(X,   Y, Z,   S), Idx(X-1, Y, Z,   S),
-			         Idx(X-1, Y, Z-1, S), Idx(X,   Y, Z-1, S),
+			EmitQuad(Idx(X,   Y, Z,   S), Idx(X,   Y, Z-1, S),
+			         Idx(X-1, Y, Z-1, S), Idx(X-1, Y, Z,   S),
 			         X, Y, D0 > 0.f, bBorder, FVector(0.f, 1.f, 0.f));
 		}
 	}
@@ -446,8 +446,8 @@ void FVoxelMeshGenerator::GenerateMesh(
 // Each vertex only looks up the 9 grid cells around it — typically 2–10 vertices total.
 void FVoxelMeshGenerator::FlattenMeshTops(float InVoxelSize, FVoxelMeshOutput& OutMesh)
 {
-	const TArray<FVector>& Verts = OutMesh.FlatMesh.Vertices;
-	const TArray<FVector>& Norms = OutMesh.FlatMesh.Normals;
+	TArray<FVector>& Verts = OutMesh.FlatMesh.Vertices;
+	TArray<FVector>& Norms = OutMesh.FlatMesh.Normals;
 	if (Verts.Num() == 0) return;
 
 	const float CellSize = InVoxelSize * 1.5f;  // grid cell ≈ one voxel
@@ -471,9 +471,6 @@ void FVoxelMeshGenerator::FlattenMeshTops(float InVoxelSize, FVoxelMeshOutput& O
 
 	// ─ Second pass: for each top-facing vertex, look up the 3x3 cell neighbourhood ─
 	// and snap to the highest Z found in those 9 cells. This is O(9) per vertex.
-	TArray<FVector> NewVertices = Verts;
-	TArray<FVector> NewNormals  = Norms;
-
 	for (int32 i = 0; i < Verts.Num(); ++i)
 	{
 		if (Norms[i].Z <= 0.9f) continue;
@@ -492,11 +489,8 @@ void FVoxelMeshGenerator::FlattenMeshTops(float InVoxelSize, FVoxelMeshOutput& O
 
 		if (FMath::Abs(NeighMax - Verts[i].Z) > KINDA_SMALL_NUMBER)
 		{
-			NewVertices[i].Z = NeighMax;
-			NewNormals[i]    = FVector(0.f, 0.f, 1.f);
+			Verts[i].Z = NeighMax;
+			Norms[i]    = FVector(0.f, 0.f, 1.f);
 		}
 	}
-
-	OutMesh.FlatMesh.Vertices = MoveTemp(NewVertices);
-	OutMesh.FlatMesh.Normals  = MoveTemp(NewNormals);
 }

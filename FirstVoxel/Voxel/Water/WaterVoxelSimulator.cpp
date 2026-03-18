@@ -195,7 +195,8 @@ TArray<FIntVector> FVoxelWaterSimulator::Step()
         for (int32 x = 0; x < ChunkSize; ++x)
         {
             // Simulate individual cell and track if it was modified
-            if (SimCell(Base + FIntVector(x, y, z), DirtyChunks))
+            const int32 Index = LocalIdx(x, y, z);
+            if (SimCell(Base + FIntVector(x, y, z), &D->Cells[Index], DirtyChunks))
                 DirtyChunks.Add(CC);
         }
     }
@@ -213,12 +214,11 @@ TArray<FIntVector> FVoxelWaterSimulator::Step()
 // ---------------------------------------------------------------------------
 // Cell Simulation - Core Physics Logic
 // ---------------------------------------------------------------------------
-bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, TSet<FIntVector>& DirtyChunks)
+bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell, TSet<FIntVector>& DirtyChunks)
 {
     // Simulate water physics for a single cell
     // Returns true if cell was modified, false otherwise
     
-    uint8* SrcCell = CellPtr(WV);
     if (!SrcCell || *SrcCell == WATER_EMPTY) return false;
 
     const bool  bIsSource = (*SrcCell == WATER_SOURCE);

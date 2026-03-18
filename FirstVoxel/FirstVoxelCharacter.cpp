@@ -331,18 +331,8 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 	}
 
 	// ── 1. Keyboard: Move (WASD) ──────────────────────────────────────────
-	// Note: NOT duplicated in PlayerController::PlayerTick — that path was removed.
-	if (!bLastInputWasGamepad)
-	{
-		if (PC->IsInputKeyDown(EKeys::W)) DoMove(0.f,  1.f);
-		if (PC->IsInputKeyDown(EKeys::S)) DoMove(0.f, -1.f);
-		if (PC->IsInputKeyDown(EKeys::A)) DoMove(-1.f, 0.f);
-		if (PC->IsInputKeyDown(EKeys::D)) DoMove( 1.f, 0.f);
-
-		// FIX: Q/E yaw-look removed — Q is bound to ToolWheel open, so using it
-		// for look input caused the camera to spin every time the wheel opened.
-		// Use mouse or right stick for looking instead.
-	}
+	// Handled exclusively by Enhanced Input Action (MoveAction) to support 
+	// player control rebindings and layout flexibility configurations.
 
 	// ── 2. Keyboard: Flight vertical (Space = rise, Ctrl = descend) ──────────
 	// FIX: Only inject vertical movement when already flying. Space also binds

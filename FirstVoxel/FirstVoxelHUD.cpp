@@ -64,12 +64,13 @@ void AFirstVoxelHUD::DrawHUD()
     }
 
     UFont* const SmallFont = GEngine ? GEngine->GetSmallFont() : nullptr;
-    AVoxelWorld* TitleWorld = nullptr;
+    if (!CachedVoxelWorld)
     {
         TArray<AActor*> WA;
         UGameplayStatics::GetAllActorsOfClass(this, AVoxelWorld::StaticClass(), WA);
-        if (WA.Num() > 0) TitleWorld = Cast<AVoxelWorld>(WA[0]);
+        if (WA.Num() > 0) CachedVoxelWorld = Cast<AVoxelWorld>(WA[0]);
     }
+    AVoxelWorld* TitleWorld = CachedVoxelWorld;
 
     // ── Loading screen ────────────────────────────────────────────────────
     if (bShowLoadingScreen && TitleWorld)

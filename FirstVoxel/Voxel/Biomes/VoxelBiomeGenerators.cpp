@@ -252,7 +252,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
 
   // --- Floor (deep centre of the crater) --------------------------------
   // DepthCurve: 0 at rim, 1 at centre.  Use smoothstep so descent is gradual.
-  const float FloorStart = 0.40f; // NormDepth where floor begins
+  const float FloorStart = 0.28f; // NormDepth where floor begins (just after RimCenter 0.25f)
   const float FloorT     = FMath::SmoothStep(FloorStart, 1.0f, NormDepth);
   const float FloorNoise = FBM(nX * CRC.BuildingNoiseFrequency,
                                nY * CRC.BuildingNoiseFrequency, 0.f,

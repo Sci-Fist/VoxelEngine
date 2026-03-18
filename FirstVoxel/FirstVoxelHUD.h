@@ -54,4 +54,8 @@ private:
 	/** Owned pause menu instance. Created in BeginPlay. */
 	UPROPERTY()
 	TObjectPtr<UVoxelPauseMenu> PauseMenu = nullptr;
+
+	/** Cached reference to VoxelWorld for loading state access. */
+	UPROPERTY(Transient)
+	class AVoxelWorld* CachedVoxelWorld = nullptr;
 };

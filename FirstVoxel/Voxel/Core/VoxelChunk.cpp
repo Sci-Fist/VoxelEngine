@@ -46,6 +46,7 @@ AVoxelChunk::AVoxelChunk()
 {
 	// Enable Tick so UpdateMeshState() can drive LOD transitions each frame.
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false; // Starts disabled to save CPU
 	PrimaryActorTick.TickGroup     = TG_PrePhysics;
 
 	// Initialize procedural mesh component for terrain geometry
@@ -810,6 +811,7 @@ void AVoxelChunk::TransitionToLOD(int32 NewLOD)
 	TransitionStartTime = GetWorld()->GetTimeSeconds();
 
 	LOD = NewLOD;
+	SetActorTickEnabled(true); // Enable tick to drive transition progress
 	GenerateAsync();
 }
 
@@ -828,6 +830,7 @@ void AVoxelChunk::UpdateMeshState()
 			// Transition complete
 			MeshState = EChunkMeshState::Ready;
 			PreviousMesh.Reset();
+			SetActorTickEnabled(false); // Disable tick when idle
 		}
 		else
 		{

@@ -119,5 +119,5 @@ private:
     const uint8* CellPtrConst(const FIntVector& WV) const;
     bool         IsSolidAt   (const FIntVector& WV) const;
 
-    bool SimCell(const FIntVector& WV, TSet<FIntVector>& DirtyChunks);
+    bool SimCell(const FIntVector& WV, uint8* SrcCell, TSet<FIntVector>& DirtyChunks);
 };

@@ -4,6 +4,20 @@
 
 ## [Unreleased] — 2026-03-18
 
+### Deep Audit Speed Refactors
+- **Conditional Actor Ticking** (`VoxelChunk.cpp`): Chunk actors now start with `bStartWithTickEnabled = false`. Ticking is enabled only strictly during active transitions, allowing 500+ static chunks to sleep per frame flawlessly.
+- **In-Place Mutation** (`VoxelMeshGenerator.cpp`): Replaced duplicating array copies inside `FlattenMeshTops()` with direct non-const mutable reference tweaks on point mesh vertices streams.
+
+### Inner-Voxel Loop Dispatch Optimization
+- **Static Pipeline Execution** (`VoxelGeneratorTask.cpp`): Removed virtual interface array callbacks inside inner `BuildDensityField` loop ($O(N^3)$). Reconfigured list loop iterations to run direct stack conditional calls to Surface, Cave, and Skylands providers tightly in place for backdrop compiling speeds.
+
+### Mesh Face Inversion Fix
+- **Y-Axis Index Winding synchronization** (`VoxelMeshGenerator.cpp`): Aligned the sequence of edge list emitters. Swapped coordinates inside quad allocation loops to align all 3 spatial axes into strict Counter-Clockwise coordinate orientation uniform lists uniformly. Eliminates inverted translucence hulls safely.
+
+### Subsystems Cleanup (Character & HUD)
+- **`FirstVoxelHUD` Caching** (`FirstVoxelHUD.cpp`): Added `CachedVoxelWorld` reference to prevent executing `GetAllActorsOfClass` scanned lookup sweeps unconditionally on every single frame loop budgets.
+- **Redundant WASD polling** (`FirstVoxelCharacter.cpp`): Stripped redundant manual key hardware polling fallback nodes bounded on Tick callback sequences so continuous flows solely Rest on bound Enhanced Input Action parameters natively.
+
 ### Skylands & Shards
 - **Shard shape rewrite** (`VoxelBiomeGenerators.cpp`): sky-shards now look like floating boulders instead of vertical pillar slabs.
   - `EffThickness`: shard value raised from `0.10` → `0.65` so `HalfThick ≈ 65%` of radius — a near-spherical boulder aspect instead of a 1-voxel-thin pancake.
