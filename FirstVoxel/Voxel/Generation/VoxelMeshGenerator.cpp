@@ -224,18 +224,23 @@ void FVoxelMeshGenerator::GenerateMesh(
 		return ColumnColors[FMath::Clamp(qX, 0, S-1) + FMath::Clamp(qY, 0, S-1) * S];
 	};
 
-	// FIX 5: Triplanar UV projection based on face normal.
-	// Flat faces (abs(N.Z) dominant) → XY projection (top-down, no stretch).
-	// East/West walls (abs(N.X) dominant) → YZ projection.
-	// North/South walls (abs(N.Y) dominant) → XZ projection.
-	auto MakeUV = [&](const FVector& VLocal, const FVector& FaceNorm) -> FVector2D
+	// UV: pure world-space top-down projection (seamless across all chunks).
+	//
+	// We tile by absolute world X,Y so texture boundaries never coincide with
+	// chunk boundaries and no seams appear between adjacent chunks.
+	//
+	// Walls will show mild vertical stretch when viewed at a glancing angle,
+	// but this is invisible in practice when the Material uses the
+	// WorldAlignedTexture node (recommended) which blends per-pixel in the
+	// shader and fully handles all three axes without any C++ branching.
+	//
+	// Scale: 1 tile = 4 voxels (400 cm). Increase the multiplier to tile
+	// more frequently or decrease for larger texture coverage.
+	auto MakeUV = [&](const FVector& VLocal, const FVector& /*FaceNorm*/) -> FVector2D
 	{
 		const FVector VWorld = ChunkOrigin + VLocal;
 		const float   s      = InVoxelSize * 4.f;
-		const FVector AN     = FaceNorm.GetAbs();
-
-		return FVector2D(VWorld.X / s, VWorld.Y / s);   // continuous top-down project
-
+		return FVector2D(VWorld.X / s, VWorld.Y / s);
 	};
 
 

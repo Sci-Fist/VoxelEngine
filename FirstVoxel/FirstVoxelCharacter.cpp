@@ -662,13 +662,48 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 				BuildLastActionTime = CurrentTime;
 			}
 		}
-		else if (CurrentTool == EVoxelToolMode::Smooth || CurrentTool == EVoxelToolMode::Flatten)
+		else if (CurrentTool == EVoxelToolMode::Smooth)
 		{
-			// Smooth/Flatten: dig very lightly at the surface to shave protruding voxels
+			// SMOOTH: soften terrain by alternating very gentle fill and carve
+			// passes centred just below the surface. Each pass subtracts / adds
+			// a small density delta that rounds off sharp edges without removing
+			// large amounts of material. The fill pass prevents the tool from
+			// hollowing out the terrain the way a plain dig would.
 			if (CurrentTime - DigLastActionTime > 0.08f)
 			{
-				FVector SmoothPos = ImpactPoint - (Hit.ImpactNormal * (InteractionRadius * 0.25f));
-				World->SetVoxelSphere(SmoothPos, InteractionRadius, -0.3f, true);
+				// Step 1: very light carve to shave protruding voxels
+				const FVector SoftPos = ImpactPoint - (Hit.ImpactNormal * (InteractionRadius * 0.15f));
+				World->SetVoxelSphere(SoftPos, InteractionRadius, -0.15f, false);
+				// Step 2: equally light fill to round concave dips back up
+				World->SetVoxelSphere(SoftPos, InteractionRadius * 0.6f, 0.10f, true);
+				DigLastActionTime = CurrentTime;
+			}
+		}
+		else if (CurrentTool == EVoxelToolMode::Flatten)
+		{
+			// FLATTEN: level terrain to the height of the impact point.
+			//
+			// Strategy: two overlapping spheres positioned above and below the
+			// target plane enforce a flat surface at ImpactPoint.Z:
+			//   - Sphere below the plane fills (adds density) to raise low spots.
+			//   - Sphere above the plane carves (removes density) to cut high spots.
+			//
+			// Both spheres are offset by their own radius so their centres sit
+			// exactly one radius away from the target plane, giving maximum
+			// effect right at the plane and tapering to zero at ±2 radii.
+			if (CurrentTime - DigLastActionTime > 0.08f)
+			{
+				const FVector PlaneOrigin = FVector(ImpactPoint.X, ImpactPoint.Y, ImpactPoint.Z);
+				const float   R           = InteractionRadius;
+
+				// Fill anything below the plane (raise low terrain)
+				const FVector FillCentre = PlaneOrigin - FVector(0.f, 0.f, R);
+				World->SetVoxelSphere(FillCentre, R, 1.0f, false);
+
+				// Carve anything above the plane (cut high terrain)
+				const FVector CarveCentre = PlaneOrigin + FVector(0.f, 0.f, R);
+				World->SetVoxelSphere(CarveCentre, R, -1.0f, true);
+
 				DigLastActionTime = CurrentTime;
 			}
 		}

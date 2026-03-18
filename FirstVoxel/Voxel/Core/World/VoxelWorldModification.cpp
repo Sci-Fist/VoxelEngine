@@ -53,13 +53,9 @@ void AVoxelWorld::SetVoxelSphere(FVector WorldPosition, float Radius, float Dens
 		*WorldPosition.ToString(), Radius, DensityValue));
 
 	// Apply spherical modification to the data map
-	// FIX: DataMap uses pure world-space coordinates (no actor offset).
-	// The density generator also samples in world space, so they match.
-	// Previously the coordinate spaces were consistent but the chunk dirty
-	// calculation below was using WorldToChunkCoord which DOES account for
-	// the actor anchor -- so we must use WorldToChunkCoord for dirty marking,
-	// not manual arithmetic that assumed the actor is at (0,0,0).
-	DataMap.SetSphere(WorldPosition, Radius, DensityValue, VoxelSize);
+	// FIX: Pass GetActorLocation() as the Anchor so DataMap sparse keys
+	// align with AVoxelWorld's anchor-relative chunk tracking dictionary.
+	DataMap.SetSphere(WorldPosition, Radius, DensityValue, VoxelSize, GetActorLocation());
 
 	// Mark affected chunks as dirty for regeneration if requested
 	if (bRebuildChunks)
@@ -80,11 +76,12 @@ void AVoxelWorld::SetVoxelSphere(FVector WorldPosition, float Radius, float Dens
 			const FIntVector Coord(x, y, z);
 			if (AVoxelChunk** ChunkPtr = LoadedChunks.Find(Coord))
 			{
-				if (AVoxelChunk* Chunk = *ChunkPtr)
-					Chunk->bMeshDirty = true;
+				if (*ChunkPtr)
+					MarkChunkDirty(Coord); // FIX: use central dirty queue
 			}
 		}
 	}
+
 }
 
 void AVoxelWorld::ClearModifications()
