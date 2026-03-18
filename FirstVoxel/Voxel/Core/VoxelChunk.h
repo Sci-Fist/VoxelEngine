@@ -1,3 +1,27 @@
+/**
+ * @file VoxelChunk.h
+ * @brief Core chunk class for procedural voxel terrain generation
+ * 
+ * AVoxelChunk represents a single cubic section of the procedural world.
+ * It manages density field generation, mesh building, foliage placement,
+ * and water simulation for its volume. Chunks are pooled and reused across
+ * the session for optimal performance.
+ * 
+ * ARCHITECTURE OVERVIEW:
+ * - Density Generation: Background thread task builds density field
+ * - Mesh Generation: Surface Nets algorithm converts density to mesh
+ * - Foliage System: Per-biome instanced static mesh components
+ * - Water Simulation: Translucent water surface mesh with physics
+ * - LOD System: Smooth transitions between detail levels
+ * 
+ * DEPENDENCIES:
+ * - VoxelMeshGenerator: Converts density to mesh geometry
+ * - VoxelDataMap: Stores voxel density data
+ * - VoxelGenerationConfig: World generation parameters
+ * - VoxelWaterSimulator: Water physics and rendering
+ * - VoxelChunkPool: Object pooling for performance
+ */
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -299,4 +323,5 @@ private:
 
 	/** Set mesh visibility while maintaining proper state. */
 	void SetMeshVisibility(bool bVisible);
+
 };

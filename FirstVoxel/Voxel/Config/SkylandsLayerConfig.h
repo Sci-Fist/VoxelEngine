@@ -42,6 +42,21 @@
 //    to prevent vertical holes through islands.
 //  • Island size is capped at GridSize * 0.48 to prevent overlapping.
 // =============================================================================
+//
+// ── TUNING GUIDE ─────────────────────────────────────────────────────────────
+// To make small sky shards appear closer to the ground, adjust:
+//   - MinAltitudeAboveTerrain: default 800 → lower values (200-400) bring shards nearer
+// For larger islands, adjust:
+//   - BaseAltitudeAboveTerrain: default 5000 → higher values lift islands
+//   - HeightAltitudeBonus: additional lift over high terrain
+// Shard vs island transition controlled by ShardTransitionStrength:
+//   - Higher values (0.6-0.8) keep low terrain in shard regime longer
+//   - Lower values (0.2-0.4) cause quicker transition to islands
+// Shard size controlled by ShardMinScale (fraction of BaseIslandSize):
+//   - 0.25 = 25% size for tiny shards (default)
+//   - Increase for larger shards over flat terrain
+// See also: VoxelBiomeGenerators.cpp::GetSkylandColumnCache() for algorithm details.
+// =============================================================================
 
 #pragma once
 
@@ -57,11 +72,12 @@ struct FSkylandsLayerConfig
     GENERATED_BODY()
 
 
-    /** MinAltitude: how far above the terrain even tiny sky-shards float. */
+    /** MinAltitude: how far above the terrain even tiny sky-shards float.
+        Lower values (200-400) bring shards closer to ground; higher values (800+) keep them high. */
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
 
-    float MinAltitudeAboveTerrain = 800.f;
+    float MinAltitudeAboveTerrain = 200.f;
 
 
 

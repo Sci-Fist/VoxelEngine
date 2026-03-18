@@ -83,7 +83,12 @@ void UVoxelMapWidget::OpenMap(AVoxelWorld* InVoxelWorld, APawn* InPlayerPawn)
 		return;
 	}
 
+
+    UE_LOG(LogTemp, Verbose, TEXT("VoxelMapWidget::OpenMap called - VoxelWorld: %s, Pawn: %s"),
+        InVoxelWorld ? *InVoxelWorld->GetName() : TEXT("null"),
+        InPlayerPawn ? *InPlayerPawn->GetName() : TEXT("null"));
     CachedVoxelWorld  = InVoxelWorld;
+
     CachedPlayerPawn  = InPlayerPawn;
     bMapOpen          = true;
 
@@ -289,7 +294,13 @@ int32 UVoxelMapWidget::NativePaint(
 {
     if (!bMapOpen) return LayerId;
 
+
+    UE_LOG(LogTemp, Verbose, TEXT("VoxelMapWidget::NativePaint - bMapOpen=%d, Texture=%s, PendingPixels=%d"),
+        bMapOpen, MapTexture ? TEXT("valid") : TEXT("null"), PendingPixels.Num());
+
+    
     const FVector2D ViewSz    = AllottedGeometry.GetLocalSize();
+
     const float     Short     = FMath::Min(ViewSz.X, ViewSz.Y);
     const float     PanelSz   = Short * MapPanelFraction;
     const float     PanelX    = (ViewSz.X - PanelSz) * 0.5f;

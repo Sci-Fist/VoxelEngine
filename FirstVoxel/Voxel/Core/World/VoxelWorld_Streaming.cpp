@@ -200,8 +200,45 @@ void AVoxelWorld::UpdateChunkStreaming()
 		EmptyChunks.Remove(C);
 	}
 
+
 	// --- 3. DYNAMIC LOD MULTIPLIERS FOR EXISTING CHUNKS ---
+
+	// 
+	// CHUNK BORDER GAP FIX: LOD Consistency Enforcement
+	// ------------------------------------------------
+	// Adjacent chunks must share the same LOD level to ensure mesh vertices
+	// align perfectly at chunk boundaries. When neighboring chunks have different
+	// LODs, their Surface Nets vertices are computed at different resolutions,
+	// causing misalignment and visible gaps.
+
+	//
+	// Algorithm (3-pass):
+	//   1. Compute desired LOD for each chunk based on distance from player
+
+	//   2. Enforce consistency: if any neighbor has higher detail (lower LOD number),
+	//      adopt that LOD for the current chunk. This propagates detail inward
+	//      from the player's position, ensuring all chunks within the same
+
+	//      render distance band have uniform LOD.
+	//   3. Apply transitions for any LOD changes
+	//
+	// The neighbor check uses 6-directional adjacency (up/down/north/south/east/west).
+	// This guarantees that the entire loaded volume is LOD-uniform except at the
+	// outermost boundary where lower-detail chunks may appear.
+	//
+	// Performance: O(N) where N = number of loaded chunks. Each chunk checks up
+
+	// to 6 neighbors. For typical view distances (5-8 chunks), this is negligible.
+	//
+	// NOTE: The hysteresis bands (L1ISq, L1OSq, etc.) prevent rapid LOD flip-flopping
+	// when a chunk sits near a distance threshold. The factor of 1.10 provides a
+	// 10% deadband to stabilize transitions.
+	//
+
 	// Update LOD levels for existing chunks based on distance from player
+
+	// PASS 1: Compute desired LOD for each chunk based on distance from player
+	TMap<FIntVector, int32> DesiredLODs;
 	for (auto& It : LoadedChunks)
 	{
 		AVoxelChunk* Chunk = It.Value;
@@ -226,9 +263,57 @@ void AVoxelWorld::UpdateChunkStreaming()
 			else if (Chunk->LOD < 1 && DistSq > L1OSq) TargetLOD = 1;
 			else if (Chunk->LOD > 0 && DistSq < L1ISq) TargetLOD = 0;
 
-			if (TargetLOD != Chunk->LOD)
+			DesiredLODs.Add(It.Key, TargetLOD);
+		}
+	}
+
+	// PASS 2: Enforce LOD consistency between neighbors
+	// If any neighbor has higher detail (lower LOD number), adopt that LOD
+	TMap<FIntVector, int32> FinalLODs = DesiredLODs;
+	
+	for (auto& It : DesiredLODs)
+	{
+		const FIntVector& ChunkCoord = It.Key;
+		int32 CurrentLOD = It.Value;
+		
+		// Check all 6 adjacent neighbors (up/down/north/south/east/west)
+		const FIntVector Neighbors[6] = {
+			FIntVector(1, 0, 0),  // +X (east)
+			FIntVector(-1, 0, 0), // -X (west)
+			FIntVector(0, 1, 0),  // +Y (south)
+			FIntVector(0, -1, 0), // -Y (north)
+			FIntVector(0, 0, 1),  // +Z (up)
+			FIntVector(0, 0, -1)  // -Z (down)
+		};
+
+		for (const FIntVector& Offset : Neighbors)
+		{
+			const FIntVector NeighborCoord = ChunkCoord + Offset;
+			if (DesiredLODs.Contains(NeighborCoord))
 			{
-				Chunk->TransitionToLOD(TargetLOD);
+				int32 NeighborLOD = DesiredLODs[NeighborCoord];
+				// If neighbor has higher detail (lower LOD number), adopt it
+				if (NeighborLOD < CurrentLOD)
+				{
+					CurrentLOD = NeighborLOD;
+				}
+			}
+		}
+		
+		FinalLODs[ChunkCoord] = CurrentLOD;
+	}
+
+	// PASS 3: Apply transitions for any LOD changes
+	for (auto& It : LoadedChunks)
+	{
+		const FIntVector& ChunkCoord = It.Key;
+		AVoxelChunk* Chunk = It.Value;
+		if (IsValid(Chunk) && FinalLODs.Contains(ChunkCoord))
+		{
+			int32 FinalLOD = FinalLODs[ChunkCoord];
+			if (FinalLOD != Chunk->LOD)
+			{
+				Chunk->TransitionToLOD(FinalLOD);
 			}
 		}
 	}

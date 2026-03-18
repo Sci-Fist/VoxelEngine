@@ -223,6 +223,8 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 	FVector BestPos = StartPos;
 	float BestWeight = -1.0f;
 	float BestSurfH = FLT_MAX; // Track minimal surface height
+	float BestRelief = 0.0f;   // Track crater relief (rim height - depth magnitude)
+	float BestCenterScore = 0.0f; // Track how close to crater center (0 = center, 1 = rim)
 
 	// Search in a grid pattern around the start position
 	// This provides comprehensive coverage while maintaining performance
@@ -238,10 +240,26 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 			float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
 			float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(Candidate.X, Candidate.Y, Weights, Config);
 
+			// Calculate crater relief for dramatic impact assessment
+			// Relief = RimHeight - |Depth| (both in cm)
+			const FCraterBiomeConfig& CraterConfig = Config.Craters;
+			float CraterRelief = CraterConfig.RimHeight - FMath::Abs(CraterConfig.Depth);
+
+			// NEW: Calculate crater center score to find actual crater centers
+			// Crater centers have high crater weight AND are in the deepest part of the basin
+			// Rim areas have high crater weight but are elevated
+			float CenterScore = 0.0f;
+			if (CraterWeight > MinWeight)
+			{
+				// Normalize surface height relative to typical crater depth range
+				// Lower values indicate deeper basin centers
+				float DepthScore = FMath::Clamp((SurfH - (Config.SeaLevel + 1000.f)) / 5000.f, 0.0f, 1.0f);
+				CenterScore = (1.0f - DepthScore) * CraterWeight; // High weight + low height = center
+			}
+
 			// Update best position if this candidate has higher crater weight
 			// and meets the minimum weight threshold.
-			// FIX: For tied max weights, favor candidates with lower SurfaceHeight
-			// to center the spawn neat the bottom of the crater bowl center rather than edge plateaus.
+			// NEW: Prioritize crater center depth, relief, and center score over just surface height
 			bool bBetter = false;
 			if (CraterWeight > BestWeight)
 			{
@@ -249,9 +267,26 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 			}
 			else if (FMath::Abs(CraterWeight - BestWeight) < 0.001f)
 			{
-				if (SurfH < BestSurfH)
+				// For tied crater weights, prefer deeper craters with higher relief
+				if (CraterRelief > BestRelief)
 				{
 					bBetter = true;
+				}
+				else if (FMath::Abs(CraterRelief - BestRelief) < 100.0f) // Similar relief
+				{
+					// If relief is similar, prefer better center score (deeper basin center)
+					if (CenterScore > BestCenterScore)
+					{
+						bBetter = true;
+					}
+					else if (FMath::Abs(CenterScore - BestCenterScore) < 0.1f) // Similar center score
+					{
+						// If center score is similar, prefer lower surface height (deeper basin)
+						if (SurfH < BestSurfH)
+						{
+							bBetter = true;
+						}
+					}
 				}
 			}
 
@@ -259,6 +294,8 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 			{
 				BestWeight = CraterWeight;
 				BestSurfH = SurfH;
+				BestRelief = CraterRelief;
+				BestCenterScore = CenterScore;
 				BestPos = Candidate;
 			}
 		}

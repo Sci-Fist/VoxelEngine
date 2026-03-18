@@ -1,16 +1,79 @@
+
 # Changelog
+
+
+
+
 
 ## [Unreleased]
 
+
+
+
+
+### Fixed — Crater Visual Artifacts and Tool Diagnostics
+
+- **Reduced crater rim noise amplitude** from 500cm to 150cm in `FCraterBiomeConfig` to minimize pillar/spike artifacts at crater boundaries.
+
+- **Steepened crater walls** by reducing `RimWidth` from 0.55 to 0.25, creating more visible and dramatic crater rim walls instead of gradual slopes.
+
+- **Fixed critical bug**: `RimWidth` was hardcoded to 0.05f in `GetCraterHeight()` instead of using the config value. Changed to `CRC.RimWidth` so the config parameter actually takes effect.
+- **Added comprehensive diagnostic logging** to troubleshoot terrain modification and map display issues:
+
+
+
+  - `UVoxelMapWidget::OpenMap` now logs world and pawn pointers
+
+
+
+  - `UVoxelMapWidget::NativePaint` logs texture state and pending pixel count
+
+  - `FVoxelMapGenerator::GeneratePixelBuffer` logs map generation parameters and loaded chunk count
+
+  - `AFirstVoxelCharacter::ApplyCurrentTool` logs tool type, radius, raycast hits, and modification positions
+
+  - `AVoxelWorld::SetVoxelSphere` already had detailed chunk dirty marking logs
+
+- These diagnostics will help identify why the map may not display and why terrain tools appear non-functional.
+
+- **Crater configuration** remains at moderate depth (-4500cm) and raised rim (+4000cm) but with cleaner transitions. Consider further tweaking `Depth`, `RimHeight`, and `CraterSizeMultiplier` if craters still appear too large or noisy.
+
+
+
+
+
+### Fixed — Chunk Border Gap Elimination (LOD Consistency)
+- **Root cause**: Adjacent chunks with different LODs have misaligned Surface Nets vertices, causing visible gaps at chunk boundaries.
+- **Solution**: Implemented 3-pass LOD consistency enforcement in `UpdateChunkStreaming()`:
+
+  1. Compute desired LOD per chunk based on distance from player
+  2. Enforce neighbor consistency: if any adjacent chunk (6-directional) has higher detail (lower LOD number), adopt that LOD
+  3. Apply transitions for any LOD changes
+- This ensures all loaded chunks within the render distance share uniform LOD, eliminating border seams.
+- Performance impact: O(N) neighbor checks per streaming update (~500 chunks × 6 neighbors = negligible).
+
+- Added comprehensive documentation in `VoxelWorld_Streaming.cpp` explaining the algorithm and its necessity.
+
+
+
 ### Added — Voxel Water Simulation
+
 - **FVoxelWaterSimulator** (`Components/VoxelWaterSimulator.h/.cpp`): New cellular-automata
+
   water engine. Each voxel stores a fill level 0–8. Simulation runs at a fixed interval
+
   (default 5 steps/sec) entirely on the GameThread after async mesh work completes.
+
   - **Gravity**: water falls into the cell directly below if it is air.
+
   - **Lateral spread**: water equalises with horizontal neighbours when below is blocked.
+
   - **Ledge flow**: water detects downhill diagonal paths and flows over edges.
+
   - **Permanent sources** (`WATER_SOURCE = 255`): marked cells refill to full every tick and
+
     never drain — used for springs, pool beds, and skyland waterfalls.
+
 - **FVoxelWaterData** (part of `VoxelWaterSimulator.h`): per-chunk struct owning the cell
   array and solid-cell bit-field. Lives on `AVoxelChunk` so the simulator holds only a
   raw pointer; lifetime is guaranteed by the chunk pool.

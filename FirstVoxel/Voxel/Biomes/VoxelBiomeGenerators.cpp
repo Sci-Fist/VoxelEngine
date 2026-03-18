@@ -242,7 +242,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
 
   // --- Rim peak (sits between plains and floor) --------------------------
   const float RimCenter = 0.12f;
-  const float RimWidth  = 0.05f; 
+  const float RimWidth  = CRC.RimWidth; 
   const float RimT      = FMath::Max(0.f, 1.f - FMath::Square((NormDepth - RimCenter) / RimWidth));
   // FIX: lowered frequency to 0.0012f to prevent sawtooth jagged artifacts (was 0.008f)
   const float RimNoise  = FastNoise3D(nX * 0.0012f, nY * 0.0012f, 0.f) * CRC.RimNoiseAmplitude;

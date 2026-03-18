@@ -62,22 +62,38 @@ const TCHAR* FVoxelMapGenerator::BiomeNames[FVoxelBiomeWeightMap::MaxBiomes] =
 static_assert(FVoxelBiomeWeightMap::MaxBiomes == 6,
     "BiomeColors and BiomeNames must each have exactly MaxBiomes entries.");
 
-// ---------------------------------------------------------------
-//  GeneratePixelBuffer - Main Map Generation Algorithm
-// ---------------------------------------------------------------
+
 void FVoxelMapGenerator::GeneratePixelBuffer(
+
     float                         CenterX,
+
     float                         CenterY,
+
     float                         WorldRadius,
+
     int32                         Resolution,
+
     const FVoxelGenerationConfig& Config,
+
     const TSet<FIntVector>&       LoadedChunkCoords,
+
     float                         ChunkWorldSize,
+
     TArray<FColor>&               OutPixels)
+
 {
+
+    // Debug: Log map generation parameters
+    UE_LOG(LogTemp, Verbose, TEXT("VoxelMapGenerator::GeneratePixelBuffer - Center=(%.1f,%.1f) Radius=%.1f Res=%d ChunkSize=%.1f LoadedChunks=%d"),
+        CenterX, CenterY, WorldRadius, Resolution, ChunkWorldSize, LoadedChunkCoords.Num());
+
+    
     // Initialize output pixel buffer with required size
+
     // Resolution × Resolution for square map output
+
     OutPixels.SetNumUninitialized(Resolution * Resolution);
+
 
     // Calculate world-to-pixel conversion factors
     const float PixelWorldSize = (WorldRadius * 2.f) / (float)Resolution;
