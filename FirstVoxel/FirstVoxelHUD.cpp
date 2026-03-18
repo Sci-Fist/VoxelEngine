@@ -158,6 +158,7 @@ void AFirstVoxelHUD::DrawHUD()
               bAnySaved ? FColor(220,220,220) : FColor(100,100,100) },
         };
 
+        bool bMouseOverButton = false;
         // ── Input polling & Mouse Hover setup ─────────────────────────────
         APlayerController* PC = GetOwningPlayerController();
         if (PC)
@@ -183,7 +184,10 @@ void AFirstVoxelHUD::DrawHUD()
                     if (MouseY >= BaseY && MouseY <= BaseY + 35.f && MouseX >= CX2 - 180.f && MouseX <= CX2 + 180.f)
                     {
                         if (i == 0 || bAnySaved) // prevent hovering Load if empty
+                        {
                             TitleSelection = i;
+                            bMouseOverButton = true;
+                        }
                     }
                     BaseY += 50.f;
                 }
@@ -214,7 +218,7 @@ void AFirstVoxelHUD::DrawHUD()
         {
             bool bConfirm = PC->WasInputKeyJustPressed(EKeys::Enter) ||
                             PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Bottom) ||
-                            PC->WasInputKeyJustPressed(EKeys::LeftMouseButton);
+                            (PC->WasInputKeyJustPressed(EKeys::LeftMouseButton) && bMouseOverButton);
 
             if (bConfirm)
             {

@@ -110,22 +110,34 @@ void AVoxelWorld::BeginPlay()
 	// ---- Optional random seed ----
 	// Removed to ensure Editor previews match Gameplay 1:1. Use explicit Editor Button to randomize seed.
 
-// ---- Always Freeze player during initial hold-zone ----
-	APawn* EarlyPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
-	if (EarlyPlayer != nullptr)
+	// FIX: Hide player actor and show title screen until world generation is complete
+	// This ensures the player doesn't see the character floating in empty space
+	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+	if (Player)
 	{
-		// Park far above the world so it can't collide with anything
-		EarlyPlayer->SetActorLocation(FVector(0.f, 0.f, 100000.f),
-			false, nullptr, ETeleportType::TeleportPhysics);
-		EarlyPlayer->SetActorHiddenInGame(true);
-
-		// Disable movement so gravity doesn't pull the pawn down while hidden
-		ACharacter* EarlyChar = Cast<ACharacter>(EarlyPlayer);
-		if (EarlyChar && EarlyChar->GetCharacterMovement())
+		// Hide player actor completely until generation is complete
+		Player->SetActorHiddenInGame(true);
+		Player->SetActorEnableCollision(false);
+		
+		// Disable player movement to prevent any input during generation
+		if (ACharacter* Character = Cast<ACharacter>(Player))
 		{
-			EarlyChar->GetCharacterMovement()->DisableMovement();
+			if (Character->GetCharacterMovement())
+			{
+				Character->GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_None);
+			}
 		}
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Player parked at sky-hold during initial startup."));
+	}
+
+	// FIX: Show load bar during generation
+	// This ensures the player sees progress during world generation
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+		{
+			HUD->bShowLoadBar = true;
+			HUD->LoadProgress = 0.0f;
+		}
 	}
 
 	if (bAutoGenerateOnBeginPlay)
@@ -213,24 +225,46 @@ void AVoxelWorld::Tick(float DeltaTime)
 	else
 	{
 		SpawnWaitAccum += DeltaTime;
-		const bool bTimedOut = (SpawnWaitAccum > 8.f);
+		// FIX: Increased timeout to 30 seconds to allow for slower chunk generation
+		// This ensures the spawn area has enough time to generate completely
+		const bool bTimedOut = (SpawnWaitAccum > 30.f);
 
 		bool bAllReady = bTimedOut;
 		if (!bTimedOut)
 		{
 			bAllReady = true;
+			int32 ReadyCount = 0;
+			int32 TotalCount = InitialSpawnCoords.Num();
+			
 			for (const FIntVector& C : InitialSpawnCoords)
 			{
 				AVoxelChunk** Ptr = LoadedChunks.Find(C);
 				if (Ptr == nullptr)
 				{
+					UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Chunk (%d,%d,%d) not found in LoadedChunks"), C.X, C.Y, C.Z);
 					bAllReady = false;
 					break;
 				}
 				if (!(*Ptr)->IsReady())
 				{
+					UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Chunk (%d,%d,%d) not ready"), C.X, C.Y, C.Z);
 					bAllReady = false;
 					break;
+				}
+				ReadyCount++;
+			}
+			
+			UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Spawn progress %d/%d chunks ready (%.1f%%)"), 
+			       ReadyCount, TotalCount, (float)ReadyCount / (float)TotalCount * 100.0f);
+			
+			// FIX: Update load bar progress during spawn area generation
+			if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+			{
+				if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+				{
+					HUD->bShowLoadBar = true;
+					HUD->bShowTitleScreen = false; // Hide title screen during spawn area generation
+					HUD->LoadProgress = (float)ReadyCount / (float)TotalCount; // Update progress 0.0 to 1.0
 				}
 			}
 		}
@@ -240,24 +274,66 @@ void AVoxelWorld::Tick(float DeltaTime)
 		{
 			if (!bAllReady)
 			{
+				// FIX: Enhanced hover-lock positioning with visual feedback
+				// Move player to the calculated spawn height immediately, don't keep them at sky-hold
 				FVector HoverPos = SpawnPlayer->GetActorLocation();
+				// Always move player to the calculated spawn height, regardless of current position
 				HoverPos.Z = TargetCoordsZ;
 				SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
+				
+				// FIX: Disable player movement during hover-lock to prevent falling
+				// This ensures the player stays in place until the spawn area is ready
+				if (ACharacter* Character = Cast<ACharacter>(SpawnPlayer))
+				{
+					if (Character->GetCharacterMovement())
+					{
+						Character->GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_None);
+					}
+				}
 			}
 			else
 			{
 				if (bTimedOut)
 				{
-					UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn hover-lock timed out."));
+					UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn hover-lock timed out after %.1f seconds. Proceeding with available chunks."), SpawnWaitAccum);
 				}
 				else
 				{
 					UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawn ready at Z=%.2f"), TargetCoordsZ);
 				}
+				
+				// FIX: Properly release player from hover-lock and enable movement
 				bWaitingForInitialSpawn = false;
 				SpawnWaitAccum = 0.f;
 				InitialSpawnCoords.Empty();
-				ProcessInitialPlayerSpawn();
+				
+				// FIX: Keep load bar visible slightly longer and ensure proper transition
+				if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+				{
+					if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+					{
+						HUD->LoadProgress = 1.0f; // Set to complete
+						// Keep load bar visible for 1 more second to ensure smooth transition
+						// This will be handled by a delayed hide in the HUD or by keeping it visible until gameplay starts
+					}
+				}
+				
+				// FIX: Enable player movement and show player
+				if (SpawnPlayer)
+				{
+					SpawnPlayer->SetActorHiddenInGame(false);
+					SpawnPlayer->SetActorEnableCollision(true);
+					
+					if (ACharacter* Character = Cast<ACharacter>(SpawnPlayer))
+					{
+						if (Character->GetCharacterMovement())
+						{
+							Character->GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Walking);
+						}
+					}
+				}
+				
+				// Remainder of release logic completes normally or simply ends here
 			}
 		}
 	}

@@ -50,6 +50,22 @@ AFirstVoxelCharacter::AFirstVoxelCharacter()
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
+
+	FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
+	FirstPersonCamera->SetupAttachment(GetMesh(), TEXT("head"));
+	FirstPersonCamera->bUsePawnControlRotation = true;
+	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, 100.f)); // Offset to eye level
+	FirstPersonCamera->SetVisibility(false);
+
+	// Initialize camera properties
+	CameraTransitionSpeed = 5.0f;
+	ThirdPersonDistance = 300.0f;
+	ThirdPersonHeight = 100.0f;
+	ThirdPersonLookAtOffset = 50.0f;
+
+	// Set default camera mode to third person
+	bIsFirstPerson = false;
+	bIsThirdPerson = true;
 }
 
 void AFirstVoxelCharacter::BeginPlay()
@@ -97,6 +113,8 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		MapAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Map.IA_Map"));
 	if (!PauseAction)
 		PauseAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Pause.IA_Pause"));
+	if (!ToggleCameraAction)
+		ToggleCameraAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_ToggleCamera.IA_ToggleCamera"));
 
 	if (UEnhancedInputComponent* EnhancedIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
@@ -128,12 +146,17 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		// Explicit fly-down action (Ctrl)
 		if (FlyDownAction)
 			EnhancedIC->BindAction(FlyDownAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::FlyDown);
+
+		// Camera toggle (V key / Y button)
+		if (ToggleCameraAction)
+			EnhancedIC->BindAction(ToggleCameraAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleCameraMode);
 	}
 
 	// ── Keyboard/Mouse fallback bindings ────────────────────────────────────
 	PlayerInputComponent->BindKey(EKeys::F,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
 	PlayerInputComponent->BindKey(EKeys::M,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
 	PlayerInputComponent->BindKey(EKeys::P,               IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
+	PlayerInputComponent->BindKey(EKeys::V,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp,   IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AFirstVoxelCharacter::DecreaseRadius);
 
@@ -158,6 +181,8 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
 	// Y  → Toggle Map
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top,   IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
+	// X  → Toggle Camera
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left,  IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
 	// Start → Pause menu (Start was previously bound to Map but is more
 	// conventionally used for pause on consoles; Map stays on Y button only)
 	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Right,    IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
@@ -614,4 +639,26 @@ void AFirstVoxelCharacter::TogglePauseMenu()
 	if (APlayerController* PC = Cast<APlayerController>(GetController()))
 		if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
 			HUD->TogglePause();
+}
+
+void AFirstVoxelCharacter::ToggleCameraMode()
+{
+	bIsFirstPerson = !bIsFirstPerson;
+	
+	if (bIsFirstPerson)
+	{
+		// Switch to first person
+		FollowCamera->SetVisibility(false);
+		FirstPersonCamera->SetVisibility(true);
+		FirstPersonCamera->Activate();
+		CameraBoom->TargetArmLength = 0.f; // Retract the boom
+	}
+	else
+	{
+		// Switch to third person
+		FirstPersonCamera->SetVisibility(false);
+		FollowCamera->SetVisibility(true);
+		FollowCamera->Activate();
+		CameraBoom->TargetArmLength = 400.f; // Extend the boom
+	}
 }

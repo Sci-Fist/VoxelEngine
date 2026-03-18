@@ -510,7 +510,7 @@ public:
   UFUNCTION(BlueprintPure, Category = "Voxel")
   float GetGenerationProgress() const;
 private:
-  void SpawnChunk(const FIntVector &Coord);
+  void SpawnChunk(const FIntVector &Coord, bool bSyncCollision = false);
   void DestroyChunk(const FIntVector &Coord);
   void RebuildChunk(const FIntVector &Coord);
   void UpdateChunkStreaming();

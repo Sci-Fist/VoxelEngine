@@ -88,7 +88,8 @@ FVector FVoxelMeshGenerator::ComputeNormal(
 			Densities[CenterIdx + S] - Densities[CenterIdx - S],
 			Densities[CenterIdx + S2] - Densities[CenterIdx - S2]
 		);
-		return Grad.GetSafeNormal(); // Fixed: Removed inversion for correct lighting
+		// FIX: Invert gradient to point OUT of solid (toward air) for correct lighting
+		return -Grad.GetSafeNormal();
 	}
 
 	// Border fallback
@@ -100,14 +101,16 @@ FVector FVoxelMeshGenerator::ComputeNormal(
 		return Densities[Idx(ix, iy, iz, S)];
 	};
 
-	// Central diff - fixed to point out from solid
+	// Central diff - gradient points INTO solid, we want OUT of solid
 	FVector Grad(
 		SafeGet(X+1,Y,Z) - SafeGet(X-1,Y,Z),
 		SafeGet(X,Y+1,Z) - SafeGet(X,Y-1,Z),
 		SafeGet(X,Y,Z+1) - SafeGet(X,Y,Z-1)
 	);
 
-	return Grad.GetSafeNormal(); // Fixed: Removed inversion for correct lighting
+	// FIX: Gradient points INTO solid terrain, but normals must point OUT of solid (toward air) for correct lighting and culling
+	// This ensures proper face culling - faces facing away from the solid will be culled
+	return -Grad.GetSafeNormal();
 }
 
 // ---------------------------------------------------------------------------
@@ -367,15 +370,16 @@ void FVoxelMeshGenerator::GenerateMesh(
 
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
-		// Emit single-sided quad. Winding flips with density sign so the normal
-		// always points outward (into air). Halves triangle count vs double-emit.
-		if (bD0Solid)
+		// Emit single-sided quad pointing outward into air
+		if (!bD0Solid)
 		{
+			// Standard CCW winding when D1 is solid (points normal into D0 air space)
 			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, VC);
 			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, VC);
 		}
 		else
 		{
+			// Flipped CCW winding when D0 is solid (ensures normals point outward into D1 air space)
 			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, VC);
 			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, VC);
 		}

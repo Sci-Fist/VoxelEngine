@@ -5,7 +5,7 @@
 // to improve code organization and maintainability.
 //
 // GENERATION PIPELINE:
-// 1. World Discovery: Locate existing chunks and avoid overlap
+// 1. World Discovery: Locate existing chunkgots and avoid overlap
 // 2. Bounds Calculation: Determine generation area centered on world location
 // 3. Chunk Queueing: Sort chunks by distance for optimal generation order
 // 4. Async Generation: Spawn chunks with proper configuration and threading
@@ -38,6 +38,7 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "FirstVoxelHUD.h"
 
 
 // ============================================================
@@ -65,41 +66,23 @@ void AVoxelWorld::GenerateWorldDeferred()
 	TArray<AActor*> PlayerStarts;
 	UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
 	
-	// If bForceCraterSpawn is enabled, find the best crater spot near the
-	// PlayerStart BEFORE queuing chunks so the entire generation is centred on
-	// the crater rather than on the fixed editor PlayerStart position.
-	// This prevents the "always same mountain at spawn" issue caused by always
-	// anchoring generation to the same hard-coded PlayerStart XY in the editor.
-	if (bForceCraterSpawn)
-	{
-		// Always search from world origin (0,0) — NOT from the PlayerStart's
-		// current position. The PlayerStart gets moved each generation, so
-		// using it as the search base makes every run find the same relative
-		// crater from the last run's position. Searching from (0,0) with the
-		// new seed means every generation scans fresh and finds a different crater.
-		const FVoxelGenerationConfig& Cfg = GetEffectiveConfig();
-		const FVector SearchOrigin(0.f, 0.f, 0.f);
-		CandidatePos   = FindCraterSpawnLocation(SearchOrigin, Cfg);
-		CandidatePos.Z = 0.f;
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Crater spawn at %s (seed %d)"), *CandidatePos.ToString(), Cfg.Seed);
-
-		// Move PlayerStart to the found crater XY so UE's GameMode spawns the
-		// pawn near the right place before ProcessInitialPlayerSpawn fires.
-		if (PlayerStarts.Num() > 0 && PlayerStarts[0])
-		{
-			if (PlayerStarts[0]->GetRootComponent())
-				PlayerStarts[0]->GetRootComponent()->SetMobility(EComponentMobility::Movable);
-			FVector PSPos = PlayerStarts[0]->GetActorLocation();
-			PSPos.X = CandidatePos.X;
-			PSPos.Y = CandidatePos.Y;
-			PlayerStarts[0]->SetActorLocation(PSPos, false, nullptr, ETeleportType::TeleportPhysics);
-		}
-	}
-	else if (PlayerStarts.Num() > 0 && PlayerStarts[0])
+	// FIX: Always center generation on the PlayerStart location for consistent behavior
+	// This ensures the world generates around where the player will spawn
+	if (PlayerStarts.Num() > 0 && PlayerStarts[0])
 	{
 		CandidatePos = PlayerStarts[0]->GetActorLocation();
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering GenerateWorld on PlayerStart %s"), *CandidatePos.ToString());
 	}
+	
+	// FIX: Only search for conflicts in standalone game builds, not in PIE
+	// In PIE mode, we want to generate terrain exactly where the VoxelWorld actor is placed
+	// to avoid creating terrain far away from the intended location
+#if WITH_EDITOR
+	// In editor builds, always use current location without conflict checking
+	// This covers both editor viewport and PIE mode
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Editor build - using current location %s"), *CandidatePos.ToString());
+#else
+	// In standalone game builds, do conflict checking to prevent overlapping worlds
 	bool bFoundConflict = true;
 	int32 MaxAttempts = 100;
 
@@ -125,6 +108,7 @@ void AVoxelWorld::GenerateWorldDeferred()
 			}
 		}
 	}
+#endif
 
 	if (GetActorLocation() != CandidatePos)
 	{
@@ -146,10 +130,32 @@ void AVoxelWorld::GenerateWorldDeferred()
 	QueueHead = 0;
 
 	// 4. Calculate generation bounds
-	// Always generate bounds strictly centered on the AVoxelWorld actor location.
-	// Bounding boxes spanning LoadedChunks can explode to millions of
-	// iterations if those chunks are disconnected on the grid for any reason.
-	FVector Anchor = GetActorLocation();
+	// Center generation on the player position when in PIE mode, or on the VoxelWorld actor location otherwise.
+	// This ensures terrain generates around the player when pressing Play.
+	FVector Anchor;
+	if (GetWorld()->IsGameWorld())
+	{
+		// In PIE mode, center generation on the player position
+		APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+		if (Player)
+		{
+			Anchor = Player->GetActorLocation();
+			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering generation on player position %s"), *Anchor.ToString());
+		}
+		else
+		{
+			// Fallback to VoxelWorld location if no player found
+			Anchor = GetActorLocation();
+			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: No player found, using VoxelWorld location %s"), *Anchor.ToString());
+		}
+	}
+	else
+	{
+		// In editor viewport, use VoxelWorld actor location
+		Anchor = GetActorLocation();
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Editor mode - using VoxelWorld location %s"), *Anchor.ToString());
+	}
+	
 	FIntVector Origin = WorldToChunkCoord(Anchor);
 	
 	FIntVector MinCoord = Origin - FIntVector(RenderDistanceXY, RenderDistanceXY, RenderDistanceZ);
@@ -265,6 +271,16 @@ void AVoxelWorld::GenerateWorldDeferred()
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d new chunks to extend the world."), GenerationQueue.Num());
 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Queued %d chunks."), GenerationQueue.Num()));
 
+	// FIX: Update load bar progress during main world generation
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+		{
+			HUD->bShowLoadBar = true;
+			HUD->LoadProgress = 0.0f;
+		}
+	}
+
 	if (GenerationQueue.Num() == 0)
 	{
 		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: No chunks were queued for generation. This may indicate an issue with world bounds or chunk coordinates."));
@@ -307,31 +323,39 @@ void AVoxelWorld::GenerateWorldDeferred()
 #endif
 	}
 
-	// 5. If at runtime, snap the player
+	// 5. If at runtime, prepare for player spawn
 	if (GetWorld()->IsGameWorld())
 	{
-		// ── Activate Hover Lock ──────────────────────────────────────────
-		bWaitingForInitialSpawn = true;
-		SpawnWaitAccum = 0.f;
-		TargetCoordsZ  = 100000.f; // Lock far in the sky
-
-		InitialSpawnCoords.Empty();
-		FIntVector CenterChunk = WorldToChunkCoord(CandidatePos);
-		for (int32 x = -1; x <= 1; ++x)
+		// ── Prepare Spawn State ──────────────────────────────────────────
+		// Do NOT activate hover-lock here - let ProcessInitialPlayerSpawn handle it
+		// This prevents double chunk generation and state conflicts
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Runtime generation complete, spawn will be handled by ProcessInitialPlayerSpawn"));
+		
+		// FIX: Initialize spawn wait state to ensure player only spawns after spawn area is ready
+		// This prevents the player from spawning in empty space before terrain is generated
+		APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+		if (Player)
 		{
-			for (int32 y = -1; y <= 1; ++y)
-			{
-				for (int32 z = -1; z <= 1; ++z)
-				{
-					InitialSpawnCoords.Add(FIntVector(CenterChunk.X + x, CenterChunk.Y + y, CenterChunk.Z + z));
-				}
-			}
+			// Park player at high altitude to prevent falling through empty terrain
+			FVector ParkPos = Player->GetActorLocation();
+			ParkPos.Z = 100000.0f; // High altitude parking position
+			Player->SetActorLocation(ParkPos, false, nullptr, ETeleportType::TeleportPhysics);
+			
+			// Player movement is now handled normally - no freezing or hiding
+			// The hover-lock system in Tick() will handle the waiting and positioning
 		}
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Hover-lock activated for %d coordinates around spawn (%s)"), InitialSpawnCoords.Num(), *CandidatePos.ToString());
+		
+		// FIX: Only start spawn area generation after main world generation is complete
+		// This prevents generation deadlock and ensures proper chunk ordering
+		// The hover-lock system in Tick() will handle the spawn area generation
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Main world generation complete, spawn area will be handled by hover-lock system"));
+		
+		// Trigger initial spawn sequence calculation and wait lock
+		ProcessInitialPlayerSpawn();
 	}
 }
 
-void AVoxelWorld::SpawnChunk(const FIntVector& Coord)
+void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
 {
 	if (LoadedChunks.Contains(Coord)) return;
 
@@ -343,10 +367,15 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord)
 	Chunk = ChunkPool.RetrieveOrCreateChunk(GetWorld(), Loc, this);
 	if (!Chunk) return;
 
-	// FIX: Hide the actor IMMEDIATELY so recycled pool chunks do not flash
-	// older components while the async generation task runs in the background.
-	Chunk->SetActorHiddenInGame(true);
-	if (Chunk->GetProceduralMesh()) Chunk->GetProceduralMesh()->SetVisibility(false);
+	// FIX: Keep chunk visible but hide mesh components until generation is complete
+	// This prevents invisible terrain while allowing proper visibility management
+	Chunk->SetActorHiddenInGame(false);
+	if (Chunk->GetProceduralMesh()) 
+	{
+		Chunk->GetProceduralMesh()->SetVisibility(false);
+		// FIX: Force synchronous cooking for spawn area chunks to prevent falling through floor
+		Chunk->GetProceduralMesh()->bUseAsyncCooking = !bSyncCollision;
+	}
 
 	// SetOwner links the detached chunk to this world so it can be rediscovered on re-play reconciliations
 	// without forcing it into the actor attachment tree.
@@ -580,7 +609,8 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	bool bFoundSkyland = false;
 	
 	// FIXED: Only check for skylands if they're significantly higher than surface
-	if (SkyAlt > Surface + 5000.f)
+	// AND if the surface height is reasonable (not extremely high)
+	if (SkyAlt > Surface + 5000.f && Surface < 50000.f)
 	{
 		for (float z = SearchTop; z >= SearchBot; z -= 200.f)
 		{
@@ -592,61 +622,110 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 			}
 		}
 	}
-
-	// Restore the player that was frozen in BeginPlay.
-	Player->SetActorHiddenInGame(false);
-	ACharacter* SpawnChar = Cast<ACharacter>(Player);
-	if (SpawnChar && SpawnChar->GetCharacterMovement())
+	
+	// FIXED: Ensure spawn height is reasonable - prevent extremely high spawns
+	// If TargetZ is extremely high (>100000), something went wrong with the calculation
+	if (TargetZ > 100000.f)
 	{
-		SpawnChar->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn height calculation resulted in extremely high value (%.2f). Using surface height instead."), TargetZ);
+		TargetZ = Surface + SafeOffset;
 	}
 
-	// Re-capture viewport input focus so the player can move immediately
-	// without needing to left-click first. DisableMovement() + the hidden-pawn
-	// period causes UE to lose viewport focus; we restore it explicitly here.
-	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-	{
-		FInputModeGameOnly GameInputMode;
-		PC->SetInputMode(GameInputMode);
-		PC->SetShowMouseCursor(false);
-		// FlushPressedKeys clears any stale held-key state accumulated
-		// during the frozen period so movement doesn't "lurch" on restore.
-		PC->FlushPressedKeys();
-	}
+	// Player movement is now handled normally - no need to restore anything
+	// since we don't freeze or hide the player anymore
 
 	Pos.Z = TargetZ;
 	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
 	
-	// FIXED: Initialize spawn tracking
+	// FIXED: Initialize spawn tracking with proper coordinate alignment
+	// Only proceed if we're not already in a spawn state to prevent recursion
+	if (bWaitingForInitialSpawn)
+	{
+		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: ProcessInitialPlayerSpawn called while already in spawn state. Ignoring."));
+		return;
+	}
+
 	InitialSpawnCoords.Empty();
 	bWaitingForInitialSpawn = true;
 	TargetCoordsZ = TargetZ;
 	CachedSurfaceHeight = Surface;
 
-	// FIXED: Spawn chunks around the player position
-	const FIntVector LandCoord = WorldToChunkCoord(Pos);
+	// FIXED: Use consistent coordinate system - spawn chunks around the actual spawn position
+	// This ensures the hover-lock waits for the same chunks that were actually generated
+	const FIntVector SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, TargetZ));
 	const float ChunkHeight = ChunkSize * VoxelSize;
 	const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
 
-	// Spawn ground chunks
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawning spawn area chunks around position %s (Z=%.2f)"), 
+	       *FVector(Pos.X, Pos.Y, TargetZ).ToString(), TargetZ);
+
+	// Spawn chunks in a focused 3x3x3 cube around the spawn position
+	// This ensures the player has solid ground without overwhelming the generation system
+	TArray<FIntVector> SpawnAreaCoords;
 	for (int32 x = -1; x <= 1; ++x)
 	{
 		for (int32 y = -1; y <= 1; ++y)
 		{
-			FIntVector NeighborCoord = LandCoord + FIntVector(x, y, 0);
-			SpawnChunk(NeighborCoord);
-			InitialSpawnCoords.Add(NeighborCoord);
+			for (int32 z = -1; z <= 1; ++z)
+			{
+				FIntVector NeighborCoord = SpawnCoord + FIntVector(x, y, z);
+				SpawnAreaCoords.Add(NeighborCoord);
+			}
 		}
 	}
 
-	// Spawn skyland chunks if needed
-	if (bFoundSkyland && SpawnChunkZ != 0)
+	// Sort spawn area chunks by distance from player to generate closest first
+	SpawnAreaCoords.Sort([SpawnCoord](const FIntVector& A, const FIntVector& B) {
+		int32 DistA = FMath::Abs(A.X - SpawnCoord.X) + FMath::Abs(A.Y - SpawnCoord.Y) + FMath::Abs(A.Z - SpawnCoord.Z);
+		int32 DistB = FMath::Abs(B.X - SpawnCoord.X) + FMath::Abs(B.Y - SpawnCoord.Y) + FMath::Abs(B.Z - SpawnCoord.Z);
+		return DistA < DistB;
+	});
+
+	// Generate spawn area chunks with throttling to prevent deadlock
+	int32 SpawnChunksGenerated = 0;
+	const int32 MaxSpawnChunksPerTick = 3; // Limit spawn chunk generation
+	
+	for (const FIntVector& Coord : SpawnAreaCoords)
+	{
+		// Only spawn if not already generated during world generation
+		if (!LoadedChunks.Contains(Coord))
+		{
+			if (SpawnChunksGenerated < MaxSpawnChunksPerTick)
+			{
+				SpawnChunk(Coord, true);
+				SpawnChunksGenerated++;
+			}
+		}
+		InitialSpawnCoords.Add(Coord);
+	}
+
+	// Additional safety: spawn chunks directly below the player if they don't exist
+	// This ensures terrain generates below the player even if the initial 3x3x3 didn't cover it
+	const FIntVector PlayerChunkBelow = SpawnCoord + FIntVector(0, 0, -1);
+	if (!LoadedChunks.Contains(PlayerChunkBelow))
+	{
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawning additional chunk below player at %s"), *PlayerChunkBelow.ToString());
+		SpawnChunk(PlayerChunkBelow);
+		InitialSpawnCoords.Add(PlayerChunkBelow);
+	}
+
+	// Spawn one more chunk below that to ensure solid ground
+	const FIntVector PlayerChunkBelow2 = SpawnCoord + FIntVector(0, 0, -2);
+	if (!LoadedChunks.Contains(PlayerChunkBelow2))
+	{
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawning additional chunk 2 below player at %s"), *PlayerChunkBelow2.ToString());
+		SpawnChunk(PlayerChunkBelow2);
+		InitialSpawnCoords.Add(PlayerChunkBelow2);
+	}
+
+	// Spawn additional skyland chunks if needed (only if not already handled above)
+	if (bFoundSkyland && SpawnChunkZ != SpawnCoord.Z)
 	{
 		for (int32 x = -1; x <= 1; ++x)
 		{
 			for (int32 y = -1; y <= 1; ++y)
 			{
-				FIntVector SkyCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ);
+				FIntVector SkyCoord = FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y, SpawnChunkZ);
 				if (!LoadedChunks.Contains(SkyCoord))
 				{
 					SpawnChunk(SkyCoord);
@@ -655,7 +734,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 				
 				if (SpawnChunkZ > 0)
 				{
-					FIntVector BelowCoord = FIntVector(LandCoord.X + x, LandCoord.Y + y, SpawnChunkZ - 1);
+					FIntVector BelowCoord = FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y, SpawnChunkZ - 1);
 					if (!LoadedChunks.Contains(BelowCoord))
 					{
 						SpawnChunk(BelowCoord);
@@ -665,5 +744,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 			}
 		}
 	}
+
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawn chunks initialized. Waiting for %d chunks to be ready."), InitialSpawnCoords.Num());
 }
 

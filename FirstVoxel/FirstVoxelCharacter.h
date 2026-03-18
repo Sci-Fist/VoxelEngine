@@ -98,6 +98,14 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input|Voxel")
 	UInputAction* FlyDownAction;
 
+	/** Camera Toggle Input Action (V) */
+	UPROPERTY(EditAnywhere, Category="Input|Voxel")
+	UInputAction* ToggleCameraAction;
+
+	/** Camera component for first person view */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	UCameraComponent* FirstPersonCamera;
+
 	/** Input Mapping Context */
 	UPROPERTY(EditAnywhere, Category="Input")
 	class UInputMappingContext* MappingContext;
@@ -242,6 +250,48 @@ public:
 	/** Currently selected terrain tool (defaults to Dig). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel|Tools")
 	EVoxelToolMode CurrentTool = EVoxelToolMode::Dig;
+
+	/** Toggle between first person and third person camera modes */
+	void ToggleCameraMode();
+
+	/** Switch between first person and third person camera */
+	void SwitchCamera();
+
+	/** Toggle between first person and third person camera */
+	void ToggleCamera();
+
+	/** Set camera to first person view */
+	void SetFirstPersonView();
+
+	/** Set camera to third person view */
+	void SetThirdPersonView();
+
+	/** Update camera position and rotation for third person view */
+	void UpdateThirdPersonCamera(float DeltaTime);
+
+	/** True when in first person mode */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Camera")
+	bool bIsFirstPerson = false;
+
+	/** Whether the character is in third person view */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
+	bool bIsThirdPerson;
+
+	/** Camera transition speed */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	float CameraTransitionSpeed;
+
+	/** Third person camera distance */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	float ThirdPersonDistance;
+
+	/** Third person camera height */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	float ThirdPersonHeight;
+
+	/** Third person camera look-at offset */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	float ThirdPersonLookAtOffset;
 
 private:
 	/** Per-instance dig/build throttle timestamps (replaces static locals to work correctly across PIE sessions). */

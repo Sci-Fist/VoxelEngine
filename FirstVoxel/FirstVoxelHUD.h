@@ -19,6 +19,12 @@ public:
 	UPROPERTY(Transient, BlueprintReadWrite, Category = "Voxel")
 	bool bShowTitleScreen = false;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Voxel")
+	bool bShowLoadBar = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Voxel")
+	float LoadProgress = 0.0f;
+
 	UPROPERTY(Transient)
 	bool bShowLoadingScreen = false;
 

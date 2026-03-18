@@ -93,12 +93,16 @@ struct FVoxelMeshData
 // ---------------------------------------------------------------------------
 struct FVoxelMeshOutput
 {
-	/** Section 0 — continuous mesh section containing all quads */
+	/** Section 0 — continuous mesh section containing all quads (with collision) */
 	FVoxelMeshData FlatMesh;
+
+	/** Section 1 — backfaces for visual double-sidedness (no collision) */
+	FVoxelMeshData BackMesh;
 
 	void Reset()
 	{
 		FlatMesh.Reset();
+		BackMesh.Reset();
 	}
 };
 

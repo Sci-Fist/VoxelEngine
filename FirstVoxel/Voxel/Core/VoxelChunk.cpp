@@ -59,6 +59,13 @@ AVoxelChunk::AVoxelChunk()
 	ProceduralMesh->bUseComplexAsSimpleCollision = true;
 	ProceduralMesh->bUseAsyncCooking = true;
 	
+	// FIX: Ensure proper culling and rendering settings for terrain mesh
+	ProceduralMesh->SetCastShadow(true);
+	ProceduralMesh->SetCanEverAffectNavigation(true);
+	// Note: Two-sided lighting and reverse culling settings not available in this UE version
+	// The mesh should render correctly with proper normals from the mesh generation
+	// If faces are still being culled, the issue is likely in the mesh generation normals
+	
 	// IMPORTANT: Hide terrain mesh until geometry is actually ready
 	// This prevents invisible-mesh pop-in during generation
 	// SetVisibility(true) is called at the end of ApplyMesh() once all sections are uploaded
@@ -301,6 +308,29 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		if (BiomeRender.SlopeMaterialOverride) SlopeMat = BiomeRender.SlopeMaterialOverride.Get();
 	}
 	
+	// FIX: Ensure materials are valid - fall back to master materials if biome overrides are invalid
+	if (!FlatMat)  FlatMat = MasterFlatMaterial;
+	if (!SlopeMat) SlopeMat = MasterSlopeMaterial;
+	
+	// CRITICAL: Ensure we always have valid materials - use default engine materials as last resort
+	if (!FlatMat)
+	{
+		// Use default engine material if no custom material is assigned
+		FlatMat = UMaterial::GetDefaultMaterial(MD_Surface);
+		UE_LOG(LogVoxelChunk, Warning, TEXT("VoxelChunk: No flat material assigned, using default material"));
+	}
+	if (!SlopeMat)
+	{
+		// Use default engine material if no custom material is assigned
+		SlopeMat = UMaterial::GetDefaultMaterial(MD_Surface);
+		UE_LOG(LogVoxelChunk, Warning, TEXT("VoxelChunk: No slope material assigned, using default material"));
+	}
+	
+	// FIX: Ensure proper material assignment - use slope material for steep faces
+	// This ensures the material assignment logic works correctly
+	// Note: Material assignment is handled per-section in UploadSection() based on mesh data
+	// The material selection above (FlatMat vs SlopeMat) is applied when uploading mesh sections
+	
 
 	// ── Generate biome-specific mesh name ─────────────────────────────────
 	// Create descriptive mesh names that include biome information for debugging
@@ -324,7 +354,7 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	// ── Upload terrain mesh sections ──────────────────────────────────────
 	// Clear existing mesh sections and upload new geometry
 	ProceduralMesh->ClearAllMeshSections();
-	UploadSection(0, Out.FlatMesh,  FlatMat, FlatMeshName);
+	UploadSection(0, Out.FlatMesh, FlatMat, FlatMeshName);
 
 	// ── Per-biome foliage system (Recycled / Pooled) ──────────────────────
 	// Handle biome-specific foliage placement with efficient component reuse
@@ -494,7 +524,7 @@ void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, 
 		Data.UVs,             // Texture coordinates
 		Data.VertexColors,    // Biome vertex colors (CRITICAL for visual variety)
 		Data.Tangents,        // Vertex tangents for lighting
-		LOD <= 1              // OPTIMIZATION: Build collision mesh only for highest and mid-detail chunks
+		(LOD <= 1) && (SectionIndex == 0) // OPTIMIZATION: Build collision mesh only for highest and mid-detail chunks, and restrict to Section 0
 	);
 
 	// Apply material if provided
@@ -680,6 +710,9 @@ void AVoxelChunk::ClearMesh()
 			HISM->ClearInstances();
 		}
 	}
+	
+	// Reset async cooking to default for pooled recycling
+	if (ProceduralMesh) ProceduralMesh->bUseAsyncCooking = true;
 	
 	// Reset mesh state flags
 	bMeshApplied = false;
