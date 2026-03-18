@@ -84,16 +84,29 @@ void AVoxelWorld::UpdateChunkStreaming()
 		const float HeightNormSky    = FMath::Clamp(PlayerSurfH / SC.MaxTerrainReference, 0.f, 1.f);
 		const float RoughnessNormSky = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
 		const float TerrainStrSky    = FMath::Clamp(HeightNormSky * 1.5f + RoughnessNormSky * 0.8f, 0.f, 1.f);
-		const float ShardFalloff     = FMath::Pow(TerrainStrSky, 2.2f);
 		CachedCurvedH               = FMath::Pow(HeightNormSky,    2.5f);
 		CachedCurvedR               = FMath::Pow(RoughnessNormSky, 2.0f);
 		const float AltBase          = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TerrainStrSky);
 
-
-		CachedSkyAltWorld = RoundedSurfH + AltBase
-		                  + CachedCurvedH * SC.HeightAltitudeBonus
-		                  + CachedCurvedR * SC.RoughnessAltitudeBonus
-		                  + ShardFalloff * SC.LowTerrainAltitudeBoost;
+		// STREAMING BUG FIX: mirror the GetSkylandColumnCache altitude formula exactly.
+		//
+		// Previous code:  CachedSkyAltWorld = SurfH + AltBase  (~3800 cm for flat terrain)
+		// Actual shard altitude in GetSkylandColumnCache:
+		//   DecoupledHeight = Lerp(AbsoluteSkyAnchor=15000, CenterHeight, CellShardT)
+		//   SkyAlt = DecoupledHeight + AltBase + CellShardT * HeightAltitudeBonus
+		//
+		// For shards (CellShardT=0):  SkyAlt = 15000 + MinAlt  =>  ~15800 cm
+		// For islands (CellShardT=1): SkyAlt = SurfH + BaseAlt + HeightAltBonus
+		//
+		// The old formula gave ~3800 cm for flat terrain: 120 m below where shards
+		// actually live.  The streaming volume was centred in the wrong place so
+		// skyland chunks were never spawned — skylands were completely invisible.
+		static constexpr float AbsoluteSkyAnchor = 15000.f; // must match GetSkylandColumnCache
+		const float ShardT     = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TerrainStrSky);
+		const float DecoupledH = FMath::Lerp(AbsoluteSkyAnchor, RoundedSurfH, ShardT);
+		CachedSkyAltWorld      = DecoupledH + AltBase
+		                       + ShardT * (CachedCurvedH * SC.HeightAltitudeBonus
+		                                  + CachedCurvedR * SC.RoughnessAltitudeBonus);
 	}
 
 	// Use the cached sky altitude (recomputed above if player moved enough)

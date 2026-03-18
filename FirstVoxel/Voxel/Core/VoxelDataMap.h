@@ -56,8 +56,9 @@ public:
 	/** Set a density override at a global voxel coordinate. Positive = solid, Negative = air. */
 	void SetDensity(const FIntVector& GlobalCoord, float Density);
 
-	/** Set overrides in a spherical radius */
-	void SetSphere(const FVector& WorldPos, float Radius, float Density, float VoxelSize);
+	/** Set overrides in a spherical radius. Pass World Anchor for aligning sparse lookup keys. */
+	void SetSphere(const FVector& WorldPos, float Radius, float Density, float VoxelSize, const FVector& Anchor = FVector::ZeroVector);
+
 
 	/** 
 	 * Retrieve a density override.

@@ -9,12 +9,13 @@ void FVoxelDataMap::Init(int32 InChunkSize)
 	Chunks.Empty();
 }
 
-void FVoxelDataMap::SetSphere(const FVector& WorldPos, float Radius, float Density, float VoxelSize)
+void FVoxelDataMap::SetSphere(const FVector& WorldPos, float Radius, float Density, float VoxelSize, const FVector& Anchor)
 {
+	const FVector RelativePos = WorldPos - Anchor;
 	const FIntVector Center = FIntVector(
-		FMath::RoundToInt(WorldPos.X / VoxelSize),
-		FMath::RoundToInt(WorldPos.Y / VoxelSize),
-		FMath::RoundToInt(WorldPos.Z / VoxelSize)
+		FMath::RoundToInt(RelativePos.X / VoxelSize),
+		FMath::RoundToInt(RelativePos.Y / VoxelSize),
+		FMath::RoundToInt(RelativePos.Z / VoxelSize)
 	);
 
 	const int32 RVox = FMath::CeilToInt(Radius / VoxelSize);
@@ -34,8 +35,9 @@ void FVoxelDataMap::SetSphere(const FVector& WorldPos, float Radius, float Densi
 	for (int32 x = -RVox; x <= RVox; ++x)
 	{
 		const FIntVector Coord = Center + FIntVector(x, y, z);
-		const FVector Pos = FVector(Coord.X, Coord.Y, Coord.Z) * VoxelSize;
+		const FVector Pos = Anchor + FVector(Coord.X, Coord.Y, Coord.Z) * VoxelSize;
 		const float Dist = FVector::Dist(WorldPos, Pos);
+
 		if (Dist > Radius) continue;
 
 		// Smooth SDF gradient: full density at centre, tapering to near-zero at edge.
