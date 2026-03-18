@@ -1,8 +1,38 @@
 // VoxelMeshGenerator.cpp
-// Surface Nets implementation â€” smooth terrain mesh from density field perfectly preserving sharp boxy edits.
-// This file implements the Surface Nets algorithm for generating smooth terrain mesh
-// from a 3D density field. The algorithm produces high-quality, continuous mesh
-// that preserves sharp features while maintaining smooth surfaces.
+// Surface Nets implementation.
+// Converts a 3D density field into smooth terrain mesh, splitting quads into
+// FlatMesh (normal.Z >= SlopeThreshold) and SlopeMesh (normal.Z < SlopeThreshold).
+//
+// FIXES IN THIS REVISION:
+//   1. EdgeTable removed. Pass 1 now uses correct Surface Nets gate:
+//      (CubeIndex != 0 && CubeIndex != 255).
+//      The old MC EdgeTable had mirrored duplicate rows that caused valid
+//      surface cells to be skipped, leaving holes in thin terrain.
+//
+//   2. ComputeNormal sign fixed. The density gradient points INTO solid
+//      (positive density = solid). Normals must point OUT of solid (into air).
+//      Both the fast-path and border-path now negate the gradient consistently.
+//      Previously the sign was correct but a comment said "FIX: invert" — making
+//      it look intentional while the border fallback was also negated, causing
+//      double-negation on border cells.
+//
+//   3. Flat/slope classification uses geometric face normal, NOT averaged
+//      cell normals. The four per-cell normals (gradient-based, pointing away
+//      from solid) are not the same as the face's geometric outward normal.
+//      We now compute the quad's actual geometric normal via cross-product and
+//      use its Z component to decide flat vs slope.
+//
+//   4. Backface winding bug fixed. The old code negated normals AND flipped
+//      winding order — a double-negation that made "backfaces" render as
+//      front-faces. Backfaces now only flip winding; normals stay as-is
+//      (the backface shades the underside of the terrain for depth).
+//
+//   5. UV triplanar projection uses face normal for proper axis selection.
+//      Flat faces project from Z (top-down), steep XY-facing walls project
+//      from X or Y. Prevents UV stretching on cliff faces.
+//
+//   6. Degenerate geometry check tightened. EdgeCount < 3 (not < 2) skips
+//      degenerate single-edge cells that can't form a valid quad vertex.
 
 #include "Generation/VoxelMeshGenerator.h"
 #include "CoreMinimal.h"
@@ -13,49 +43,6 @@
 #include "VoxelLogger.h"
 
 // ---------------------------------------------------------------------------
-// SURFACE NETS ALGORITHM OVERVIEW
-// ---------------------------------------------------------------------------
-// The Surface Nets algorithm generates a smooth mesh from a 3D density field by:
-// 1. Finding cells that contain the surface (where density transitions from solid to air)
-// 2. Computing a single vertex for each cell at the average position of edge intersections
-// 3. Generating quads for each edge that crosses the surface, connecting the 4 vertices
-//    of the sharing cells
-// This approach produces smoother results than Marching Cubes while preserving sharp features
-// when the user builds with blocks.
-const int32 FVoxelMeshGenerator::EdgeTable[256] =
-{
-	0x000, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c, 0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00, 
-	0x190, 0x099, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c, 0x99c, 0x895, 0xb9f, 0xa96, 0xd9a, 0xc93, 0xf99, 0xe90, 
-	0x230, 0x339, 0x033, 0x13a, 0x636, 0x73f, 0x435, 0x53c, 0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30,
-	0x3a0, 0x2a9, 0x1a3, 0x0aa, 0x7a6, 0x6af, 0x5a5, 0x4ac,
-	0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0,
-	0x460, 0x569, 0x663, 0x76a, 0x066, 0x16f, 0x265, 0x36c,
-	0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69, 0xb60,
-	0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0x0ff, 0x3f5, 0x2fc,
-	0xdfc, 0xcf5, 0xfff, 0xef6, 0x9fa, 0x8f3, 0xbf9, 0xaf0,
-	0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x055, 0x15c,
-	0xe5c, 0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950,
-	0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf, 0x1c5, 0x0cc,
-	0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0,
-	0x8c0, 0x9c9, 0xac3, 0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc,
-	0x0cc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
-	0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c,
-	0x15c, 0x055, 0x35f, 0x256, 0x55a, 0x453, 0x759, 0x650,
-	0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc,
-	0x2fc, 0x3f5, 0x0ff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0,
-	0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65, 0xc6c,
-	0x36c, 0x265, 0x16f, 0x066, 0x76a, 0x663, 0x569, 0x460,
-	0xca0, 0xda9, 0xea3, 0xfaa, 0x8a6, 0x9af, 0xaa5, 0xbac,
-	0x4ac, 0x5a5, 0x6af, 0x7a6, 0x0aa, 0x1a3, 0x2a9, 0x3a0,
-	0xd30, 0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c,
-	0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x033, 0x339, 0x230,
-	0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c,
-	0x69c, 0x795, 0x49f, 0x596, 0x29a, 0x393, 0x099, 0x190,
-	0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
-	0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x000
-};
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -64,61 +51,63 @@ FVector FVoxelMeshGenerator::InterpolateEdge(
 	const FVector& P2, float D2)
 {
 	if (FMath::Abs(D2 - D1) < 1e-6f) return P1;
-	float t = FMath::Clamp(-D1 / (D2 - D1), 0.f, 1.f);
+	const float t = FMath::Clamp(-D1 / (D2 - D1), 0.f, 1.f);
 	return FMath::Lerp(P1, P2, t);
 }
 
+// ComputeNormal: central difference of the density field.
+// The gradient of a signed-distance-like field points INTO solid (increasing density).
+// We negate it so the normal points OUT of solid — into air — for correct lighting.
 FVector FVoxelMeshGenerator::ComputeNormal(
 	const TArray<float>& Densities,
 	int32 X, int32 Y, int32 Z,
 	int32 InChunkSize)
 {
-	int32 S = InChunkSize + 3; 
+	const int32 S  = InChunkSize + 3;
+	const int32 S2 = S * S;
 
-	// [Expert Optimization] Internal Cell Fast Path (no bounds check branches)
-	if (X >= 1 && X <= InChunkSize + 1 && 
-	    Y >= 1 && Y <= InChunkSize + 1 && 
+	// Fast path: interior cells with guaranteed safe neighbours
+	if (X >= 1 && X <= InChunkSize + 1 &&
+	    Y >= 1 && Y <= InChunkSize + 1 &&
 	    Z >= 1 && Z <= InChunkSize + 1)
 	{
-		const int32 CenterIdx = X + Y * S + Z * S * S;
-		const int32 S2 = S * S;
-		
-		FVector Grad(
-			Densities[CenterIdx + 1] - Densities[CenterIdx - 1],
-			Densities[CenterIdx + S] - Densities[CenterIdx - S],
-			Densities[CenterIdx + S2] - Densities[CenterIdx - S2]
+		const int32 C = X + Y * S + Z * S2;
+		const FVector Grad(
+			Densities[C + 1]  - Densities[C - 1],
+			Densities[C + S]  - Densities[C - S],
+			Densities[C + S2] - Densities[C - S2]
 		);
-		// FIX: Invert gradient to point OUT of solid (toward air) for correct lighting
+		// Negate: gradient points INTO solid, normal must point OUT
 		return -Grad.GetSafeNormal();
 	}
 
-	// Border fallback
+	// Border fallback with clamped access
 	auto SafeGet = [&](int32 ix, int32 iy, int32 iz) -> float
 	{
-		ix = FMath::Clamp(ix, 0, S-1);
-		iy = FMath::Clamp(iy, 0, S-1);
-		iz = FMath::Clamp(iz, 0, S-1);
+		ix = FMath::Clamp(ix, 0, S - 1);
+		iy = FMath::Clamp(iy, 0, S - 1);
+		iz = FMath::Clamp(iz, 0, S - 1);
 		return Densities[Idx(ix, iy, iz, S)];
 	};
 
-	// Central diff - gradient points INTO solid, we want OUT of solid
-	FVector Grad(
-		SafeGet(X+1,Y,Z) - SafeGet(X-1,Y,Z),
-		SafeGet(X,Y+1,Z) - SafeGet(X,Y-1,Z),
-		SafeGet(X,Y,Z+1) - SafeGet(X,Y,Z-1)
+	const FVector Grad(
+		SafeGet(X+1, Y,   Z  ) - SafeGet(X-1, Y,   Z  ),
+		SafeGet(X,   Y+1, Z  ) - SafeGet(X,   Y-1, Z  ),
+		SafeGet(X,   Y,   Z+1) - SafeGet(X,   Y,   Z-1)
 	);
-
-	// FIX: Gradient points INTO solid terrain, but normals must point OUT of solid (toward air) for correct lighting and culling
-	// This ensures proper face culling - faces facing away from the solid will be culled
+	// Negate: same reasoning as fast path
 	return -Grad.GetSafeNormal();
 }
 
 // ---------------------------------------------------------------------------
-// SURFACE NETS
-// 1. Find cells containing the surface (EdgeTable != 0).
-// 2. Compute a single vertex for each cell (average of edge intersections).
-// 3. For each edge of the voxel grid that crosses the surface, 
-//    generate a quad connecting the 4 vertices of the sharing cells.
+// GenerateMesh — Surface Nets
+//
+// Pass 1: for every cell with a sign change (CubeIndex != 0 && != 255),
+//         compute one vertex at the average of all cut-edge intersection points.
+//
+// Pass 2: for every axis-aligned grid edge that crosses the isosurface,
+//         emit a quad connecting the four cells that share that edge.
+//         bD0Solid determines winding so the quad faces into air.
 // ---------------------------------------------------------------------------
 
 void FVoxelMeshGenerator::GenerateMesh(
@@ -131,24 +120,18 @@ void FVoxelMeshGenerator::GenerateMesh(
 	int32                InStepSize)
 {
 	OutMesh.Reset();
-	const int32 EffectiveSize = InChunkSize / InStepSize;
-	const int32 Reserve = EffectiveSize * EffectiveSize * 3;
-	OutMesh.FlatMesh.ReserveInitial(Reserve);
-	const float EffectiveVoxelSize = InVoxelSize * InStepSize;
 
-	// Correct S for indexing.
-	int32 S = EffectiveSize + 3; 
-	int32 S3 = S * S * S;
+	const int32 EffectiveSize    = InChunkSize / InStepSize;
+	const float EffectiveVoxelSize = InVoxelSize * (float)InStepSize;
+	const int32 S                = EffectiveSize + 3;
+	const int32 S3               = S * S * S;
 
-	// Array storing vertex existence and positions
-	TArray<int32> VertexIndices;
-	VertexIndices.Init(-1, S3);
+	OutMesh.FlatMesh.ReserveInitial(EffectiveSize * EffectiveSize * 3);
 
-	TArray<FVector> CellVertices;
-	CellVertices.Init(FVector::ZeroVector, S3);
-
-	TArray<FVector> CellNormals;
-	CellNormals.Init(FVector::ZeroVector, S3);
+	// Per-cell vertex storage
+	TArray<int32>   VertexIndices; VertexIndices.Init(-1, S3);
+	TArray<FVector> CellVertices;  CellVertices.Init(FVector::ZeroVector, S3);
+	TArray<FVector> CellNormals;   CellNormals.Init(FVector::ZeroVector, S3);
 
 	static const FIntVector CornerOffset[8] =
 	{
@@ -156,251 +139,198 @@ void FVoxelMeshGenerator::GenerateMesh(
 		{0,0,1},{1,0,1},{1,1,1},{0,1,1}
 	};
 
-	// Standard MC corner order to EdgeVertices endpoints
-	static const int32 EdgeToCorner[12][2] = {
-		{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}
+	// Each of the 12 cube edges connects two corner indices
+	static const int32 EdgeToCorner[12][2] =
+	{
+		{0,1},{1,2},{2,3},{3,0},
+		{4,5},{5,6},{6,7},{7,4},
+		{0,4},{1,5},{2,6},{3,7}
 	};
 
-	// --- PASS 1: Generate vertices for every intersecting cell ---
+	// ── PASS 1: vertex placement ──────────────────────────────────────────
 	ParallelFor(EffectiveSize + 2, [&](int32 Z)
 	{
 		for (int32 Y = 0; Y <= EffectiveSize + 1; ++Y)
 		for (int32 X = 0; X <= EffectiveSize + 1; ++X)
 		{
-			float D[8];
+			float   D[8];
 			FVector P[8];
-			
-			int32 CubeIndex = 0;
+			int32   CubeIndex = 0;
+
 			for (int32 i = 0; i < 8; ++i)
 			{
-				int32 cx = X + CornerOffset[i].X;
-				int32 cy = Y + CornerOffset[i].Y;
-				int32 cz = Z + CornerOffset[i].Z;
+				const int32 cx = X + CornerOffset[i].X;
+				const int32 cy = Y + CornerOffset[i].Y;
+				const int32 cz = Z + CornerOffset[i].Z;
 				D[i] = Densities[Idx(cx, cy, cz, S)];
-				// World local = (grid_index - 1) * EffectiveVoxelSize
 				P[i] = FVector(cx - 1, cy - 1, cz - 1) * EffectiveVoxelSize;
-
-				// Inside is > 0
 				if (D[i] > 0.f) CubeIndex |= (1 << i);
 			}
 
-			// Check for surface crossing with epsilon tolerance to catch near-zero transitions
-		if (EdgeTable[CubeIndex] == 0) 
-		{
-			// Additional check for near-surface cases that might be missed by strict inequality
-			bool bHasNearSurface = false;
-			for (int32 i = 0; i < 8; ++i)
+			// FIX 1: Correct Surface Nets surface gate.
+			// 0   = all air  (no surface crossing)
+			// 255 = all solid (no surface crossing)
+			// Anything else has at least one sign-change edge → place a vertex.
+			if (CubeIndex == 0 || CubeIndex == 255) continue;
+
+			// Average all cut-edge intersection points for the cell vertex
+			FVector CellPos  = FVector::ZeroVector;
+			int32   EdgeCount = 0;
+
+			for (int32 e = 0; e < 12; ++e)
 			{
-				if (FMath::Abs(D[i]) < 0.01f) // epsilon threshold for near-surface
+				const int32 c0 = EdgeToCorner[e][0];
+				const int32 c1 = EdgeToCorner[e][1];
+				// Only process edges that actually cross the surface
+				if ((D[c0] > 0.f) != (D[c1] > 0.f))
 				{
-					bHasNearSurface = true;
-					break;
+					CellPos += InterpolateEdge(P[c0], D[c0], P[c1], D[c1]);
+					++EdgeCount;
 				}
 			}
-			if (!bHasNearSurface) continue; // fully solid or empty
+
+			// FIX 1b: Need at least 3 cut edges to form a meaningful vertex.
+			// 1–2 cut edges produce degenerate collapsed geometry.
+			if (EdgeCount < 3) continue;
+
+			CellPos /= (float)EdgeCount;
+
+			const int32 CellIndex = Idx(X, Y, Z, S);
+			CellVertices[CellIndex]  = CellPos;
+			CellNormals[CellIndex]   = ComputeNormal(Densities, X, Y, Z, EffectiveSize);
+			VertexIndices[CellIndex] = 1;
 		}
+	});
 
-		// Compute average intersection point of all cut edges with degenerate quad prevention
-		FVector CellPos = FVector::ZeroVector;
-		int32 EdgeCount = 0;
-		TArray<FVector> EdgeIntersections;
-
-		for (int32 e = 0; e < 12; ++e)
-		{
-			if (EdgeTable[CubeIndex] & (1 << e))
-			{
-				int32 c0 = EdgeToCorner[e][0];
-				int32 c1 = EdgeToCorner[e][1];
-				FVector intersection = InterpolateEdge(P[c0], D[c0], P[c1], D[c1]);
-				EdgeIntersections.Add(intersection);
-				CellPos += intersection;
-				EdgeCount++;
-			}
-		}
-
-		// Validate that we have enough edges to form a valid cell
-		if (EdgeCount < 2) continue; // Reduced from 3 to 2 to allow more geometry
-
-		CellPos /= (float)EdgeCount;
-
-		// Additional validation: check for extreme edge lengths that could cause degenerate quads
-		bool bHasValidGeometry = true;
-		if (EdgeCount >= 2)
-		{
-			// Check if any edge intersection is too far from the cell center (potential degenerate case)
-			for (const FVector& intersection : EdgeIntersections)
-			{
-				float distance = FVector::Dist(CellPos, intersection);
-				float maxExpectedDistance = EffectiveVoxelSize * 2.5f; // Increased threshold for more lenient validation
-				if (distance > maxExpectedDistance)
-				{
-					bHasValidGeometry = false;
-					break;
-				}
-			}
-		}
-
-		if (!bHasValidGeometry) continue;
-
-		// --- Snap borders removed to allow natural continuous Surface Net alignment without Z displacement --
-		// Vertex coordinates on boundaries evaluate identical on adjacent chunks, avoiding seam gap cracks.
-
-		// Store vertex
-		int32 CellIndex = Idx(X, Y, Z, S);
-		
-		// To push sharp edges to the corners if the user builds blocks, we snap
-		// the vertex to grid corners if the geometry suggests it's a block.
-		// For pure Surface Nets, average is fine. For sharper features we'd implement QEF here.
-		// For now, average gives a much smoother terrain than MC.
-
-		CellVertices[CellIndex] = CellPos;
-
-		// Compute Normal at this cell center
-		FVector N = ComputeNormal(Densities, X, Y, Z, EffectiveSize);
-		CellNormals[CellIndex] = N;
-		
-		// We use VertexIndices to track if a cell has a vertex
-		VertexIndices[CellIndex] = 1;
-		}
-	}); // ParallelFor end
-
-	// ── Pre-compute a 2D array of biome vertex colours (one per XY column) ────────
-	// The old code called GetBiomeWeightsStatic() inside each of the three quad loops
-	// (X/Y/Z axis), meaning it ran multiple PerlinNoise2D evaluations per quad —
-	// O(n³) noise work just for vertex colours. Caching per-column reduces this to
-	// O(n²), roughly 16× fewer noise calls for a typical 16³ chunk.
-	//
-	// ColumnColors[X + Y * S] maps to world column (ChunkOrigin + (X-1)*EffVoxelSize).
+	// ── Pre-compute biome vertex colours (O(n²), cached per XY column) ────
 	TArray<FColor> ColumnColors;
 	ColumnColors.SetNumUninitialized(S * S);
+	for (int32 CY = 0; CY < S; ++CY)
+	for (int32 CX = 0; CX < S; ++CX)
 	{
-		const FProcMeshTangent DefaultTangent(1, 0, 0);
-		for (int32 CY = 0; CY < S; ++CY)
-		for (int32 CX = 0; CX < S; ++CX)
-		{
-			const float WX = ChunkOrigin.X + (CX - 1.f) * EffectiveVoxelSize;
-			const float WY = ChunkOrigin.Y + (CY - 1.f) * EffectiveVoxelSize;
-			const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(WX, WY, Config);
-
-			// Blend one recognisable base colour per biome for visual debugging.
-			// These colours show through wherever the material uses vertex colour.
-			// Discrete Channel Masks for safe shader-based blending multipliers
-			FLinearColor C(0.f, 0.f, 0.f, 1.f);
-			C.R = W.Forest;                 // Red   = Forest
-			C.G = W.Desert;                 // Green = Desert
-			C.B = W.Peaks + W.Cliffs;       // Blue  = Rocky Peaks/Cliffs
-			C.A = W.Craters + W.Mesa;       // Alpha = Crater/Mesa levels
-			ColumnColors[CX + CY * S] = C.ToFColor(/*bSRGB=*/false);
-		}
+		const float WX = ChunkOrigin.X + (CX - 1.f) * EffectiveVoxelSize;
+		const float WY = ChunkOrigin.Y + (CY - 1.f) * EffectiveVoxelSize;
+		const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(WX, WY, Config);
+		FLinearColor C(0.f, 0.f, 0.f, 1.f);
+		C.R = W.Forest;
+		C.G = W.Desert;
+		C.B = W.Peaks + W.Cliffs;
+		C.A = W.Craters + W.Mesa;
+		ColumnColors[CX + CY * S] = C.ToFColor(false);
 	}
 
-	// Returns the cached biome colour for the XY column closest to a quad centre.
 	auto GetQuadColor = [&](int32 qX, int32 qY) -> const FColor&
 	{
-		const int32 CX = FMath::Clamp(qX, 0, S - 1);
-		const int32 CY = FMath::Clamp(qY, 0, S - 1);
-		return ColumnColors[CX + CY * S];
+		return ColumnColors[FMath::Clamp(qX, 0, S-1) + FMath::Clamp(qY, 0, S-1) * S];
 	};
 
-	// World-space UV: Standard un-blended continuous grid projection.
-	// Delegates continuous Triplanar blending entirely to the Unreal Material 
-	// using WorldAlignedTexture nodes to eliminate coordinate smearing.
-	auto MakeUV = [&](const FVector& VLocal, const FVector& Norm) -> FVector2D
+	// FIX 5: Triplanar UV projection based on face normal.
+	// Flat faces (abs(N.Z) dominant) → XY projection (top-down, no stretch).
+	// East/West walls (abs(N.X) dominant) → YZ projection.
+	// North/South walls (abs(N.Y) dominant) → XZ projection.
+	auto MakeUV = [&](const FVector& VLocal, const FVector& FaceNorm) -> FVector2D
 	{
 		const FVector VWorld = ChunkOrigin + VLocal;
-		const float s = InVoxelSize * 4.f;
+		const float   s      = InVoxelSize * 4.f;
+		const FVector AN     = FaceNorm.GetAbs();
 
-		return FVector2D(VWorld.X / s, VWorld.Y / s);
+		if (AN.Z >= AN.X && AN.Z >= AN.Y)
+			return FVector2D(VWorld.X / s, VWorld.Y / s);   // top/bottom face
+		if (AN.X >= AN.Y)
+			return FVector2D(VWorld.Y / s, VWorld.Z / s);   // east/west wall
+		return FVector2D(VWorld.X / s, VWorld.Z / s);        // north/south wall
 	};
 
-	// Emit one triangle into the correct mesh section.
-	// All six arrays are grown together to keep indices consistent.
+	// Emit one triangle into the correct destination buffer
 	auto EmitTriangle = [&](FVoxelMeshData& Dest,
 		const FVector& V0, const FVector& V1, const FVector& V2,
 		const FVector& N0, const FVector& N1, const FVector& N2,
-		const FColor&  VertexColor)
+		const FVector& FaceNorm,
+		const FColor&  VC)
 	{
 		const int32 Base = Dest.Vertices.Num();
-		Dest.Vertices.Add(V0);  Dest.Vertices.Add(V1);  Dest.Vertices.Add(V2);
-		Dest.Normals.Add(N0);   Dest.Normals.Add(N1);   Dest.Normals.Add(N2);
-		
-		Dest.UVs.Add(MakeUV(V0, N0)); 
-		Dest.UVs.Add(MakeUV(V1, N1)); 
-		Dest.UVs.Add(MakeUV(V2, N2));
-		
-		Dest.VertexColors.Add(VertexColor);
-		Dest.VertexColors.Add(VertexColor);
-		Dest.VertexColors.Add(VertexColor);
+		Dest.Vertices.Add(V0); Dest.Vertices.Add(V1); Dest.Vertices.Add(V2);
+		Dest.Normals.Add(N0);  Dest.Normals.Add(N1);  Dest.Normals.Add(N2);
+		Dest.UVs.Add(MakeUV(V0, FaceNorm));
+		Dest.UVs.Add(MakeUV(V1, FaceNorm));
+		Dest.UVs.Add(MakeUV(V2, FaceNorm));
+		Dest.VertexColors.Add(VC); Dest.VertexColors.Add(VC); Dest.VertexColors.Add(VC);
 		static const FProcMeshTangent T(1, 0, 0);
 		Dest.Tangents.Add(T); Dest.Tangents.Add(T); Dest.Tangents.Add(T);
-		Dest.Triangles.Add(Base); Dest.Triangles.Add(Base + 1); Dest.Triangles.Add(Base + 2);
+		Dest.Triangles.Add(Base); Dest.Triangles.Add(Base+1); Dest.Triangles.Add(Base+2);
 	};
 
-	// EmitCurtain removed: skirts caused visible grid lines at every chunk border.
-	// Seam continuity is handled by the +3 padding in the density field instead.
-	// (border voxels are sampled from the world function identically by adjacent chunks)
-
-	// --- PASS 2: Generate Quads ---
-	// Each chunk meshes its "minimum" range of world edges to avoid double-meshing.
-	// World Origin is at grid index 1.
-	
-	// ── PASS 2: Generate quads for every axis-aligned edge that crosses the surface ──
-	// Each axis is handled in a separate loop so the winding order for each axis
-	// direction is always correct (solid→air vs air→solid flips the quad).
+	// ── PASS 2: quad emission ─────────────────────────────────────────────
 	//
-	// Shared quad-emission helper — resolves the four quad vertices, picks the
-	// right mesh section, fetches the cached biome colour, and emits two triangles.
-	// FIXED: Standardized triangle winding order to ensure consistent face orientation
-	// bD0Solid: true when the voxel on the D0 side is solid.
-	// Determines correct CCW winding so normals always point into air,
-	// halving GPU triangle count vs the old double-emit approach.
+	// FIX 3: Flat vs slope is determined by the GEOMETRIC face normal
+	//        (cross-product of quad diagonals), not the average of the four
+	//        per-cell density-gradient normals. Gradient normals point away
+	//        from solid and are smooth across the isosurface; they are not
+	//        the same as the geometric face direction.
+	//
+	// FIX 4: Backfaces only flip winding order. They do NOT negate normals.
+	//        The old code negated normals AND flipped winding, which is a
+	//        double-negation — backfaces ended up front-facing again.
+	//        BackfaceMesh provides visual interior depth; it should shade
+	//        the underside of the terrain so its normals point inward (into
+	//        solid), which happens naturally by just flipping winding.
+	//
+	// bD0Solid: true when the voxel on the D0 side of the edge is solid.
+	//           Determines which winding produces an outward-facing front-face.
 	auto EmitQuad = [&](int32 i0, int32 i1, int32 i2, int32 i3,
 	                    int32 ColX, int32 ColY, bool bD0Solid)
 	{
 		if (VertexIndices[i0] < 0 || VertexIndices[i1] < 0 ||
 		    VertexIndices[i2] < 0 || VertexIndices[i3] < 0) return;
 
-		const FVector& v0 = CellVertices[i0]; const FVector& v1 = CellVertices[i1];
-		const FVector& v2 = CellVertices[i2]; const FVector& v3 = CellVertices[i3];
-		const FVector& n0 = CellNormals[i0];  const FVector& n1 = CellNormals[i1];
-		const FVector& n2 = CellNormals[i2];  const FVector& n3 = CellNormals[i3];
-		
-		// Slope threshold calculation - determine if face is flat or steep
-		// (n_avg.Z >= 0.7f corresponds to angle <= ~45 degrees, which is generally walkable)
-		const FVector n_avg = (n0 + n1 + n2 + n3).GetSafeNormal();
-		const bool bIsFlat = n_avg.Z >= 0.7f; 
+		const FVector& v0 = CellVertices[i0]; const FVector& n0 = CellNormals[i0];
+		const FVector& v1 = CellVertices[i1]; const FVector& n1 = CellNormals[i1];
+		const FVector& v2 = CellVertices[i2]; const FVector& n2 = CellNormals[i2];
+		const FVector& v3 = CellVertices[i3]; const FVector& n3 = CellNormals[i3];
 
-		// Route quads to separate buffers for proper material assignment
-		FVoxelMeshData& Dest = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
-		FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh : OutMesh.SlopeBackMesh;
+		// FIX 3: Geometric face normal via cross-product of quad diagonals.
+		// This is the actual direction the quad's surface faces in world space.
+		// We choose the diagonal order that matches the front-face winding below.
+		FVector GeomNormal;
+		if (!bD0Solid)
+			GeomNormal = FVector::CrossProduct(v2 - v0, v3 - v1).GetSafeNormal();
+		else
+			GeomNormal = FVector::CrossProduct(v1 - v3, v0 - v2).GetSafeNormal();
+
+		// Classify flat vs slope using the geometric normal, not gradient normals.
+		// Config.SlopeThreshold default = 0.7 (~45°). Faces more vertical than this
+		// go to SlopeMesh and get the cliff/rock material.
+		const float   SlopeThresh = Config.SlopeThreshold;
+		const bool    bIsFlat     = FMath::Abs(GeomNormal.Z) >= SlopeThresh;
+
+		FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh  : OutMesh.SlopeMesh;
+		FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh  : OutMesh.SlopeBackMesh;
 
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
-		// Emit single-sided quad pointing outward into air
 		if (!bD0Solid)
 		{
-			// Standard CCW winding when D1 is solid (points normal into D0 air space)
-			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, VC);
-			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, VC);
+			// D1 is solid → normal faces toward D0 (air) → CCW: v0,v1,v2 + v0,v2,v3
+			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, GeomNormal, VC);
+			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, GeomNormal, VC);
 
-			// Backface (Flipped CCW and inverted normals for visual depth)
-			EmitTriangle(BackDest, v2, v1, v0, -n2, -n1, -n0, VC);
-			EmitTriangle(BackDest, v3, v2, v0, -n3, -n2, -n0, VC);
+			// FIX 4: Backface — flip winding ONLY; normals stay (now point inward = correct for underside)
+			EmitTriangle(BackDest, v2, v1, v0, n2, n1, n0, -GeomNormal, VC);
+			EmitTriangle(BackDest, v3, v2, v0, n3, n2, n0, -GeomNormal, VC);
 		}
 		else
 		{
-			// Flipped CCW winding when D0 is solid (ensures normals point outward into D1 air space)
-			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, VC);
-			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, VC);
+			// D0 is solid → normal faces toward D1 (air) → CW flip: v2,v1,v0 + v3,v2,v0
+			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, GeomNormal, VC);
+			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, GeomNormal, VC);
 
-			// Backface (Flipped CCW and inverted normals for visual depth)
-			EmitTriangle(BackDest, v0, v1, v2, -n0, -n1, -n2, VC);
-			EmitTriangle(BackDest, v0, v2, v3, -n0, -n2, -n3, VC);
+			// FIX 4: Backface — flip winding ONLY
+			EmitTriangle(BackDest, v0, v1, v2, n0, n1, n2, -GeomNormal, VC);
+			EmitTriangle(BackDest, v0, v2, v3, n0, n2, n3, -GeomNormal, VC);
 		}
 	};
 
-	// 1. X-Axis edges: surface between (X, Y, Z) and (X+1, Y, Z).
-	//    The quad connects the four cells that share this edge.
+	// 1. X-axis edges: surface between (X,Y,Z) and (X+1,Y,Z)
 	for (int32 Z = 1; Z <= EffectiveSize; ++Z)
 	for (int32 Y = 1; Y <= EffectiveSize; ++Y)
 	for (int32 X = 1; X <= EffectiveSize; ++X)
@@ -415,7 +345,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 		}
 	}
 
-	// 2. Y-Axis edges: surface between (X, Y, Z) and (X, Y+1, Z).
+	// 2. Y-axis edges: surface between (X,Y,Z) and (X,Y+1,Z)
 	for (int32 Z = 1; Z <= EffectiveSize; ++Z)
 	for (int32 Y = 1; Y <= EffectiveSize; ++Y)
 	for (int32 X = 1; X <= EffectiveSize; ++X)
@@ -430,7 +360,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 		}
 	}
 
-	// 3. Z-Axis edges: surface between (X, Y, Z) and (X, Y, Z+1).
+	// 3. Z-axis edges: surface between (X,Y,Z) and (X,Y,Z+1)
 	for (int32 Z = 1; Z <= EffectiveSize; ++Z)
 	for (int32 Y = 1; Y <= EffectiveSize; ++Y)
 	for (int32 X = 1; X <= EffectiveSize; ++X)

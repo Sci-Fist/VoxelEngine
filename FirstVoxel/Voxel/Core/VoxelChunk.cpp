@@ -322,18 +322,31 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	if (!FlatMat)  FlatMat = MasterFlatMaterial;
 	if (!SlopeMat) SlopeMat = MasterSlopeMaterial;
 	
-	// CRITICAL: Ensure we always have valid materials - use default engine materials as last resort
+	// If no material is assigned (user hasn't set MasterFlatMaterial / MasterSlopeMaterial
+	// on the AVoxelWorld Details panel), fall back to the engine default surface material.
+	// We log this ONCE globally rather than once per chunk (which floods the output log
+	// with hundreds of identical warnings every generation).
 	if (!FlatMat)
 	{
-		// Use default engine material if no custom material is assigned
 		FlatMat = UMaterial::GetDefaultMaterial(MD_Surface);
-		UE_LOG(LogVoxelChunk, Warning, TEXT("VoxelChunk: No flat material assigned, using default material"));
+		static bool bFlatWarned = false; // suppress per-chunk spam
+		if (!bFlatWarned) { bFlatWarned = true;
+			UE_LOG(LogVoxelChunk, Warning,
+				TEXT("VoxelChunk: MasterFlatMaterial is not assigned on AVoxelWorld. "
+				     "Assign a material in the Details panel under Voxel|Materials. "
+				     "Using engine default for now. (This message appears once.)"));
+		}
 	}
 	if (!SlopeMat)
 	{
-		// Use default engine material if no custom material is assigned
 		SlopeMat = UMaterial::GetDefaultMaterial(MD_Surface);
-		UE_LOG(LogVoxelChunk, Warning, TEXT("VoxelChunk: No slope material assigned, using default material"));
+		static bool bSlopeWarned = false;
+		if (!bSlopeWarned) { bSlopeWarned = true;
+			UE_LOG(LogVoxelChunk, Warning,
+				TEXT("VoxelChunk: MasterSlopeMaterial is not assigned on AVoxelWorld. "
+				     "Assign a material in the Details panel under Voxel|Materials. "
+				     "Using engine default for now. (This message appears once.)"));
+		}
 	}
 	
 	// FIX: Ensure proper material assignment - use slope material for steep faces
@@ -384,7 +397,19 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	const TArray<TArray<FTransform>>& PerFoliage = CompletedTask->GetPerFoliageTransforms();
 	const TArray<UStaticMesh*>&       FoliageMeshes = CompletedTask->GetPerFoliageMeshes();
 
-	const bool bHasPerBiomeFoliage = PerFoliage.Num() > 0;
+	// FIX: Check that at least one foliage slot has actual geometry.
+	// PerFoliage.Num() > 0 is true whenever FoliageSlots were pre-cached (even
+	// if every slot has zero instances), which silently bypassed the legacy
+	// tree/grass path even when no per-biome foliage meshes were assigned.
+	bool bHasPerBiomeFoliage = false;
+	for (int32 s = 0; s < PerFoliage.Num(); ++s)
+	{
+		if (FoliageMeshes.IsValidIndex(s) && FoliageMeshes[s] && PerFoliage[s].Num() > 0)
+		{
+			bHasPerBiomeFoliage = true;
+			break;
+		}
+	}
 
 	if (bHasPerBiomeFoliage)
 	{
@@ -404,10 +429,9 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 			}
 			else
 			{
-				// Create new component with clean integer naming
-				float NextIdx = BiomeFoliageHISMs.Num();
+				const int32 NextIdx = BiomeFoliageHISMs.Num();
 				HISM = NewObject<UInstancedStaticMeshComponent>(this,
-				*FString::Printf(TEXT("BiomeFoliage_%d"), (int32)NextIdx));
+					*FString::Printf(TEXT("BiomeFoliage_%d"), NextIdx));
 				HISM->SetupAttachment(RootComponent);
 				HISM->RegisterComponent();
 				BiomeFoliageHISMs.Add(HISM);
@@ -468,16 +492,24 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	{
 		WaterData.Init(ChunkSize);
 		const TArray<float>& Dens = CompletedTask->GetDensities();
-		const int32 S = (ChunkSize / GetStepSize()) + 3; // density array stride with padding
+		// FIX: Density array is indexed in effective (LOD-stepped) voxel space.
+		// EffCS = voxels-per-axis after stepping, S = padded stride.
+		// The water cell map is always ChunkSize^3 (full resolution), so we
+		// sample the density array at the nearest stepped voxel for each cell.
+		const int32 EffCS      = ChunkSize / GetStepSize();
+		const int32 S          = EffCS + 3;
+		const int32 StepSz     = GetStepSize();
 		const FVector ChunkOrigin = GetActorLocation();
 		
-		// Map density data to water solid cell data
 		for (int32 lz = 0; lz < ChunkSize; ++lz)
 		for (int32 ly = 0; ly < ChunkSize; ++ly)
 		for (int32 lx = 0; lx < ChunkSize; ++lx)
 		{
-			// Density array uses padded indexing: local voxel (lx,ly,lz) is at padded index (lx+1, ly+1, lz+1)
-			const int32 DIdx = (lx + 1) + (ly + 1) * S + (lz + 1) * S * S;
+			// Map full-res voxel to nearest stepped voxel, then into padded density array.
+			const int32 ex   = FMath::Clamp(lx / StepSz, 0, EffCS - 1);
+			const int32 ey   = FMath::Clamp(ly / StepSz, 0, EffCS - 1);
+			const int32 ez   = FMath::Clamp(lz / StepSz, 0, EffCS - 1);
+			const int32 DIdx = (ex + 1) + (ey + 1) * S + (ez + 1) * S * S;
 			const int32 WIdx = lx + ly * ChunkSize + lz * ChunkSize * ChunkSize;
 			if (Dens.IsValidIndex(DIdx))
 			{
@@ -519,6 +551,7 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	// Update generation state flags
 	bMeshApplied = true;
 	bGenerating  = false;
+	MeshState    = EChunkMeshState::Ready;
 
 	// Notify AVoxelWorld that this chunk finished so it can decrement ActiveGenerations.
 	// Use MoveTemp to prevent double-fire if the callback re-enters this chunk.
@@ -537,30 +570,29 @@ void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, 
 	// Safety check: ensure we have valid data and mesh component
 	if (Data.Vertices.Num() == 0 || !IsValid(MeshToUse)) return;
 
-	// Create mesh section with vertex color data
+	// Build collision for ALL sections on the main ProceduralMesh at LOD 0/1.
+	// FIX: The old code only built collision for SectionIndex == 0 (flat faces).
+	// Slope/cliff faces (section 1) had NO collision, so the player would fall
+	// through any wall or cliff steeper than the SlopeThreshold. Both sections
+	// on ProceduralMesh need collision; BackfaceMesh never needs it.
+	const bool bBuildCollision = (MeshToUse == ProceduralMesh) && (LOD <= 1);
+
 	MeshToUse->CreateMeshSection(
 		SectionIndex,
-		Data.Vertices,        // Vertex positions
-		Data.Triangles,       // Triangle indices
-		Data.Normals,         // Vertex normals
-		Data.UVs,             // Texture coordinates
-		Data.VertexColors,    // Biome vertex colors (CRITICAL for visual variety)
-		Data.Tangents,        // Vertex tangents for lighting
-		(LOD <= 1) && (SectionIndex == 0) && (MeshToUse == ProceduralMesh) // OPTIMIZATION: Only build collision for main ProceduralMesh
+		Data.Vertices,
+		Data.Triangles,
+		Data.Normals,
+		Data.UVs,
+		Data.VertexColors,
+		Data.Tangents,
+		bBuildCollision
 	);
 
 	// Apply material if provided
 	if (Mat) MeshToUse->SetMaterial(SectionIndex, Mat);
 
-	// Note: UProceduralMeshComponent doesn't have SetSectionName method
-	// Biome-specific naming is handled through the section name parameter
-	// for debugging purposes, but actual section naming requires custom implementation
-	if (!SectionName.IsEmpty())
-	{
-		// Store section name for potential future use or debugging
-		// The biome information is now embedded in the mesh generation process
-		// and can be accessed through the section index and chunk coordinates
-	}
+	// UProceduralMeshComponent does not support per-section naming; the parameter
+	// is accepted for call-site readability / future debug tooling only.
 }
 
 void AVoxelChunk::DestroyAndRebuildMesh()
@@ -738,6 +770,7 @@ void AVoxelChunk::ClearMesh()
 	
 	// Reset mesh state flags
 	bMeshApplied = false;
+	MeshState    = EChunkMeshState::Empty;
 }
 
 #if WITH_EDITOR
@@ -764,17 +797,15 @@ void AVoxelChunk::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedE
 
 void AVoxelChunk::TransitionToLOD(int32 NewLOD)
 {
-	// Early exit if LOD is already the target
 	if (NewLOD == LOD) return;
-	
-	// Store current mesh as previous for potential blending
-	PreviousMesh = MeshOutput;
-	TargetLOD = NewLOD;
-	MeshState = EChunkMeshState::Transitioning;
-	TransitionProgress = 0.0f;
+	if (bGenerating) return; // already mid-transition; let it finish
+
+	PreviousMesh        = MeshOutput;
+	TargetLOD           = NewLOD;
+	MeshState           = EChunkMeshState::Transitioning;
+	TransitionProgress  = 0.0f;
 	TransitionStartTime = GetWorld()->GetTimeSeconds();
-	
-	// Start generating new LOD mesh asynchronously
+
 	LOD = NewLOD;
 	GenerateAsync();
 }
@@ -828,14 +859,14 @@ void AVoxelChunk::BlendMeshes(const FVoxelMeshOutput& From, const FVoxelMeshOutp
 
 void AVoxelChunk::SetMeshVisibility(bool bVisible)
 {
-	// Set visibility for all mesh components based on current state
+	// Drive visibility on all renderable components.
+	// ProceduralMesh: only show when we actually have geometry (not Empty/Error).
 	if (ProceduralMesh)
 	{
-		// Only change visibility if state allows it
-		if (MeshState != EChunkMeshState::Empty && MeshState != EChunkMeshState::Error)
-		{
-			ProceduralMesh->SetVisibility(bVisible);
-		}
+		const bool bHasGeometry =
+			(MeshState != EChunkMeshState::Empty) &&
+			(MeshState != EChunkMeshState::Error);
+		ProceduralMesh->SetVisibility(bVisible && bHasGeometry);
 	}
 	
 	// Update water mesh visibility

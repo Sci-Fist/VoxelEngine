@@ -3,50 +3,55 @@
 // =============================================================================
 //
 // Stateless, thread-safe Surface Nets mesh builder.
-// Converts a 3D density field into a ProceduralMesh-ready dataset.
+// Converts a 3D density field into a ProceduralMesh-ready dataset split into
+// two material sections: FlatMesh (top-facing) and SlopeMesh (cliff/wall).
 //
-// -- ALGORITHM OVERVIEW -------------------------------------------------------
+// -- ALGORITHM ----------------------------------------------------------------
 //
-//  Surface Nets (Gibson 1998) is a dual-contouring variant that produces
-//  smooth meshes with correct topology:
+//  PASS 1 — Vertex placement
+//    For every cell whose 8 corners contain a density sign change
+//    (CubeIndex != 0 && CubeIndex != 255), compute one vertex at the average
+//    of all cut-edge intersection points. Run via ParallelFor over Z slices.
 //
-//   PASS 1 -- Vertex placement
-//     For every voxel cell that straddles the density isosurface (sign change
-//     among 8 corners), compute one vertex at the average of all edge
-//     intersection points. Runs via ParallelFor over the Z dimension.
+//  PASS 2 — Quad emission
+//    For every axis-aligned edge that crosses the isosurface, emit a quad
+//    connecting the four cells sharing that edge. Three loops cover X, Y, Z
+//    edges. bD0Solid determines winding so the front face always points into air.
 //
-//   PASS 2 -- Quad emission
-//     For every axis-aligned grid edge that crosses the surface, emit a quad
-//     connecting the vertices of the four sharing cells. Three loops handle
-//     X-axis, Y-axis, and Z-axis edges respectively.
+// -- FLAT vs SLOPE CLASSIFICATION ---------------------------------------------
 //
-// -- WINDING ORDER & NORMALS --------------------------------------------------
+//  Each quad's geometric face normal (cross-product of diagonals) is tested
+//  against Config.SlopeThreshold (default 0.7 ≈ 45°):
+//    abs(GeomNormal.Z) >= SlopeThreshold → FlatMesh  (grass / dirt material)
+//    abs(GeomNormal.Z) <  SlopeThreshold → SlopeMesh (cliff / rock material)
 //
-//  Quads are single-sided. Winding is determined by the density sign of the
-//  D0 voxel on each edge (bD0Solid parameter). This ensures normals always
-//  point outward (into air), halving triangle count vs the old double-emit
-//  approach which emitted both windings regardless of orientation.
+//  The classification uses the GEOMETRIC normal, not the averaged per-cell
+//  density-gradient normals. Gradient normals are smooth interpolants for
+//  lighting; they do not reliably indicate the face's actual orientation.
 //
-//  Normals are computed by central differences on the density field, giving
-//  smooth gradient-based normals that blend naturally across biome boundaries.
+// -- NORMALS ------------------------------------------------------------------
+//
+//  ComputeNormal() returns the negative density gradient (central differences),
+//  which points OUT of solid (into air) — correct for outward-facing normals.
+//  Backface triangles keep the same per-vertex normals but have flipped winding
+//  so they shade the underside of the terrain from inside.
 //
 // -- VERTEX COLOR ENCODING ----------------------------------------------------
 //
-//  ColumnColors[] (one entry per XY column) is precomputed once in O(n^2)
-//  and sampled per quad in O(1). Colors encode biome weights for material
-//  blending in the terrain material graph:
-//    R = Forest weight     G = Desert weight
-//    B = Peaks + Cliffs    A = Craters + Mesa
+//  ColumnColors[] (one entry per XY column) is precomputed once in O(n²).
+//    R = Forest   G = Desert   B = Peaks+Cliffs   A = Craters+Mesa
 //
-// -- OUTPUT -------------------------------------------------------------------
+// -- UV PROJECTION ------------------------------------------------------------
 //
-//  FVoxelMeshOutput.FlatMesh  -- all quads in a single continuous section.
-//  Uploaded to ProceduralMeshComponent section 0 in AVoxelChunk::UploadSection.
+//  MakeUV() selects the projection axis from the geometric face normal:
+//    Top/bottom faces   → XY projection (no stretch on flat ground)
+//    East/West walls    → YZ projection
+//    North/South walls  → XZ projection
 //
 // -- THREAD SAFETY ------------------------------------------------------------
 //
-//  GenerateMesh() has no mutable state. Safe to call from multiple background
-//  threads simultaneously (as during ParallelFor in BuildDensityField).
+//  GenerateMesh() is fully stateless. Safe to call from multiple background
+//  threads simultaneously.
 // =============================================================================
 #pragma once
 
@@ -54,7 +59,7 @@
 #include "ProceduralMeshComponent.h"
 
 // ---------------------------------------------------------------------------
-// FVoxelMeshData — data for ONE ProceduralMesh section
+// FVoxelMeshData — geometry for one ProceduralMesh section
 // ---------------------------------------------------------------------------
 struct FVoxelMeshData
 {
@@ -62,81 +67,73 @@ struct FVoxelMeshData
 	TArray<int32>            Triangles;
 	TArray<FVector>          Normals;
 	TArray<FVector2D>        UVs;
-	TArray<FColor>           VertexColors; // Per-vertex biome blend for material tinting
+	TArray<FColor>           VertexColors;
 	TArray<FProcMeshTangent> Tangents;
 
 	void Reset()
 	{
-		Vertices.Reset();
-		Triangles.Reset();
-		Normals.Reset();
-		UVs.Reset();
-		VertexColors.Reset();
-		Tangents.Reset();
+		Vertices.Reset(); Triangles.Reset(); Normals.Reset();
+		UVs.Reset(); VertexColors.Reset(); Tangents.Reset();
 	}
 
 	bool IsEmpty() const { return Vertices.Num() == 0; }
 
 	void ReserveInitial(int32 N)
 	{
-		Vertices.Reserve(N);
-		Triangles.Reserve(N);
-		Normals.Reserve(N);
-		UVs.Reserve(N);
-		VertexColors.Reserve(N);
-		Tangents.Reserve(N);
+		Vertices.Reserve(N); Triangles.Reserve(N); Normals.Reserve(N);
+		UVs.Reserve(N); VertexColors.Reserve(N); Tangents.Reserve(N);
 	}
 };
 
 // ---------------------------------------------------------------------------
-// FVoxelMeshOutput — two sections produced by one GenerateMesh call
+// FVoxelMeshOutput — four sections from one GenerateMesh call
 // ---------------------------------------------------------------------------
 struct FVoxelMeshOutput
 {
-	/** Section 0 — Flat terrain faces (with collision) */
+	/** Section 0 — flat terrain (normal.Z >= SlopeThreshold). Collision on. */
 	FVoxelMeshData FlatMesh;
 
-	/** Section 1 — Steep slope faces (with collision) */
+	/** Section 1 — steep slopes/cliffs (normal.Z < SlopeThreshold). Collision on. */
 	FVoxelMeshData SlopeMesh;
 
-	/** Section 0 Backfaces — visual double-sidedness flat */
+	/** Backface mirror of FlatMesh — visual only, no collision. */
 	FVoxelMeshData BackMesh;
 
-	/** Section 1 Backfaces — visual double-sidedness slope */
+	/** Backface mirror of SlopeMesh — visual only, no collision. */
 	FVoxelMeshData SlopeBackMesh;
 
 	void Reset()
 	{
-		FlatMesh.Reset();
-		SlopeMesh.Reset();
-		BackMesh.Reset();
-		SlopeBackMesh.Reset();
+		FlatMesh.Reset(); SlopeMesh.Reset();
+		BackMesh.Reset(); SlopeBackMesh.Reset();
 	}
 };
 
 // ---------------------------------------------------------------------------
-// FVoxelMeshGenerator — stateless, thread-safe
+// FVoxelMeshGenerator — stateless, thread-safe mesh builder
 // ---------------------------------------------------------------------------
 struct FVoxelMeshGenerator
 {
 	/**
 	 * Run Surface Nets on a density field and fill OutMesh.
 	 *
-	 * @param Densities       Flat array of size (ChunkSize+3)^3.
-	 *                        Index: X + Y*(ChunkSize+3) + Z*(ChunkSize+3)^2
-	 * @param ChunkSize       Voxels per axis (e.g. 32)
-	 * @param VoxelSize       World-space size of one voxel in cm (e.g. 100)
-	 * @param ChunkOrigin     World position of voxel [0,0,0] in this chunk
-	 * @param OutMesh         Output — FlatMesh containing all vertices
+	 * @param Densities     Flat array, size = (ChunkSize/StepSize + 3)^3.
+	 *                      Index: X + Y*S + Z*S*S  where S = ChunkSize/StepSize + 3.
+	 * @param InChunkSize   Voxels per axis (e.g. 16 or 32).
+	 * @param InVoxelSize   World-space size of one voxel in cm (e.g. 100).
+	 * @param ChunkOrigin   World position of local voxel [0,0,0].
+	 * @param OutMesh       Receives the generated geometry.
+	 * @param Config        Generation config — SlopeThreshold used for flat/slope split.
+	 * @param InStepSize    LOD step — 1 = full res, 2 = half res, etc.
 	 */
 	static void GenerateMesh(
-		const TArray<float>& Densities,
-		int32                InChunkSize,
-		float                InVoxelSize,
-		const FVector&       ChunkOrigin,
-		FVoxelMeshOutput&    OutMesh,
+		const TArray<float>&          Densities,
+		int32                         InChunkSize,
+		float                         InVoxelSize,
+		const FVector&                ChunkOrigin,
+		FVoxelMeshOutput&             OutMesh,
 		const struct FVoxelGenerationConfig& Config,
-		int32                InStepSize = 1);
+		int32                         InStepSize = 1);
 
 private:
 	static FVector InterpolateEdge(
@@ -152,8 +149,4 @@ private:
 	{
 		return X + Y * S + Z * S * S;
 	}
-
-	// Surface nets uses edges from the grid, defined by intersections.
-	static const int32 EdgeTable[256];
-
 };

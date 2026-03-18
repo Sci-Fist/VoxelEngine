@@ -215,46 +215,18 @@ void FVoxelGeneratorTask::BuildDensityField()
 
 void FVoxelGeneratorTask::PostProcessDensities(int32 TotalSamples)
 {
-    // Check for extreme density values that can cause entire chunks to become solid or empty
-    int32 SolidCount = 0;
-    int32 EmptyCount = 0;
-    for (int32 i = 0; i < TotalSamples; ++i)
-    {
-        if (Densities[i] > 1.5f)
-        {
-            SolidCount++;
-        }
-        else if (Densities[i] < -1.5f)
-        {
-            EmptyCount++;
-        }
-    }
-
-    // If more than 90% of the voxels are solid or empty, adjust the density values
-    if (SolidCount > TotalSamples * 0.9f)
-    {
-        UE_LOG(LogVoxelWorld, Warning, TEXT("Chunk (%d, %d, %d) is almost entirely solid. Adjusting density values."),
-               ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
-        for (int32 i = 0; i < TotalSamples; ++i)
-        {
-            if (Densities[i] > 1.5f)
-            {
-                Densities[i] = 1.5f;
-            }
-        }
-    }
-    else if (EmptyCount > TotalSamples * 0.9f)
-    {
-        UE_LOG(LogVoxelWorld, Warning, TEXT("Chunk (%d, %d, %d) is almost entirely empty. Adjusting density values."),
-               ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
-        for (int32 i = 0; i < TotalSamples; ++i)
-        {
-            if (Densities[i] < -1.5f)
-            {
-                Densities[i] = -1.5f;
-            }
-        }
-    }
+    // FIX: The old implementation clamped extreme densities to ±1.5 when a chunk
+    // was >90% solid or air. This was harmful:
+    //   - Clamping high-density values shifts the isosurface position — terrain
+    //     appears to thin or inflate depending on gradient direction.
+    //   - Deep underground chunks are legitimately 100% solid; clamping them
+    //     produces phantom surface vertices in chunks that should be inert.
+    //   - The bIsFullSolid / bIsFullAir guards in Execute() already skip mesh
+    //     generation for entirely uniform chunks.
+    //
+    // PostProcessDensities now does nothing except exist as a named hook so
+    // future per-voxel post-passes (erosion, smoothing) have a clear place to go.
+    // The bIsFullSolid / bIsFullAir early-outs in Execute() are sufficient.
 }
 
 

@@ -119,12 +119,15 @@ void AVoxelWorld::BeginPlay()
 		Player->SetActorHiddenInGame(true);
 		Player->SetActorEnableCollision(false);
 		
-		// Disable player movement to prevent any input during generation
+		// Freeze movement during generation. MOVE_None is used intentionally here:
+		// the hover-lock in Tick will release via MOVE_Falling + bJustTeleported
+		// once spawn chunks are ready, which lets UE's landing detection run
+		// and correctly transition into MOVE_Walking + grounded anim state.
 		if (ACharacter* Character = Cast<ACharacter>(Player))
 		{
-			if (Character->GetCharacterMovement())
+			if (UCharacterMovementComponent* CMC = Character->GetCharacterMovement())
 			{
-				Character->GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_None);
+				CMC->SetMovementMode(EMovementMode::MOVE_None);
 			}
 		}
 	}
@@ -285,13 +288,15 @@ void AVoxelWorld::Tick(float DeltaTime)
 				HoverPos.Z = TargetCoordsZ;
 				SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
 				
-				// FIX: Disable player movement during hover-lock to prevent falling
-				// This ensures the player stays in place until the spawn area is ready
+				// Keep movement frozen during hover-lock.
+				// bJustTeleported=true tells the CMC to flush its floor cache so
+				// the position override above is respected this tick.
 				if (ACharacter* Character = Cast<ACharacter>(SpawnPlayer))
 				{
-					if (Character->GetCharacterMovement())
+					if (UCharacterMovementComponent* CMC = Character->GetCharacterMovement())
 					{
-						Character->GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_None);
+						CMC->SetMovementMode(EMovementMode::MOVE_None);
+						CMC->bJustTeleported = true;
 					}
 				}
 			}
@@ -311,28 +316,63 @@ void AVoxelWorld::Tick(float DeltaTime)
 				SpawnWaitAccum = 0.f;
 				InitialSpawnCoords.Empty();
 				
-				// FIX: Keep load bar visible slightly longer and ensure proper transition
+				// Mark load bar complete and hide it so the HUD returns to gameplay mode.
 				if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
 				{
 					if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
 					{
-						HUD->LoadProgress = 1.0f; // Set to complete
-						// Keep load bar visible for 1 more second to ensure smooth transition
-						// This will be handled by a delayed hide in the HUD or by keeping it visible until gameplay starts
+						HUD->LoadProgress  = 1.0f;
+						HUD->bShowLoadBar  = false; // FIX: was never cleared — load bar stayed on screen permanently
 					}
 				}
 				
-				// FIX: Enable player movement and show player
+				// Release player from hover-lock: place exactly on ground, enable collision,
+				// then switch to MOVE_Falling so ProcessLanded fires within 1-2 frames.
 				if (SpawnPlayer)
 				{
-					SpawnPlayer->SetActorHiddenInGame(false);
+					// Step 1: Re-enable collision first so the line trace hits terrain.
 					SpawnPlayer->SetActorEnableCollision(true);
-					
+
+					// Step 2: Line-trace straight down from the hover position to find
+					// the exact ground surface. This snaps the player to just above the
+					// terrain so ProcessLanded fires within 1-2 physics frames instead
+					// of after a long freefall from TargetCoordsZ (which is 3000cm up).
+					const FVector TraceStart = SpawnPlayer->GetActorLocation();
+					const FVector TraceEnd   = TraceStart + FVector(0.f, 0.f, -100000.f);
+					FHitResult GroundHit;
+					FCollisionQueryParams TraceParams;
+					TraceParams.AddIgnoredActor(SpawnPlayer);
+					const bool bFoundGround = GetWorld()->LineTraceSingleByChannel(
+						GroundHit, TraceStart, TraceEnd, ECC_WorldStatic, TraceParams);
+
+					if (bFoundGround)
+					{
+						// Place player 120cm above the hit point (capsule half-height ~96cm + 24cm margin).
+						// This ensures the capsule bottom just touches the floor surface so
+						// the very first CMC sweep detects the floor and fires ProcessLanded.
+						FVector LandPos = SpawnPlayer->GetActorLocation();
+						LandPos.Z = GroundHit.ImpactPoint.Z + 120.f;
+						SpawnPlayer->SetActorLocation(LandPos, false, nullptr, ETeleportType::TeleportPhysics);
+					}
+
+					// Step 3: Show the player now that we are at the right height.
+					SpawnPlayer->SetActorHiddenInGame(false);
+
+					// Step 4: Release movement via MOVE_Falling + bJustTeleported.
+					// MOVE_Falling tells UE "check for a floor this tick".
+					// bJustTeleported flushes the CMC's stale floor cache so it
+					// probes immediately rather than on the next movement frame.
+					// When the capsule hits the ground ProcessLanded fires automatically,
+					// switching to MOVE_Walking and resetting the animation state.
 					if (ACharacter* Character = Cast<ACharacter>(SpawnPlayer))
 					{
-						if (Character->GetCharacterMovement())
+						if (UCharacterMovementComponent* CMC = Character->GetCharacterMovement())
 						{
-							Character->GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Walking);
+							CMC->SetMovementMode(EMovementMode::MOVE_Falling);
+							CMC->bJustTeleported = true;
+							// Zero out any accumulated velocity from the hover-lock period
+							// so the character doesn't shoot sideways on release.
+							CMC->Velocity = FVector::ZeroVector;
 						}
 					}
 				}

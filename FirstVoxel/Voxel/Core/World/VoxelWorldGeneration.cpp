@@ -534,6 +534,12 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 	// which is functionally equivalent but skips any future per-world overrides.
 	Chunk->DensityGenerator   = DensityGenerator.Get();
 
+	// FIX: Propagate world-level SlopeThreshold into the generation config so
+	// VoxelMeshGenerator uses the right cutoff for flat vs slope classification.
+	// Previously this was set on the chunk directly but never written into
+	// GenerationConfig, so the mesh generator always used the struct default.
+	Chunk->GenerationConfig.SlopeThreshold = SlopeThreshold;
+
 	// Wire water material from the world-level config.
 	Chunk->WaterMaterial      = GenerationConfig.Water.OceanMaterial.Get();
 }

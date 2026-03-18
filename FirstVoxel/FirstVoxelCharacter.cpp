@@ -119,21 +119,27 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	if (UEnhancedInputComponent* EnhancedIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		// Jump (keyboard/gamepad A)
-		EnhancedIC->BindAction(JumpAction, ETriggerEvent::Started,   this, &ACharacter::Jump);
-		EnhancedIC->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
+		if (JumpAction)
+		{
+			EnhancedIC->BindAction(JumpAction, ETriggerEvent::Started,   this, &ACharacter::Jump);
+			EnhancedIC->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
+		}
 
-		// Look / Move
-		EnhancedIC->BindAction(LookAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
-		EnhancedIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
-		EnhancedIC->BindAction(MoveAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Move);
+		// Look / Move — guarded: raw key polling in Tick is the primary path anyway
+		if (LookAction)      EnhancedIC->BindAction(LookAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
+		if (MouseLookAction) EnhancedIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
+		if (MoveAction)      EnhancedIC->BindAction(MoveAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Move);
 
-		// Sprint (keyboard Shift)
-		EnhancedIC->BindAction(SprintAction, ETriggerEvent::Started,   this, &AFirstVoxelCharacter::Sprint);
-		EnhancedIC->BindAction(SprintAction, ETriggerEvent::Completed, this, &AFirstVoxelCharacter::StopSprinting);
+		// Sprint (keyboard Shift) — guarded: SprintAction is optional, not auto-loaded
+		if (SprintAction)
+		{
+			EnhancedIC->BindAction(SprintAction, ETriggerEvent::Started,   this, &AFirstVoxelCharacter::Sprint);
+			EnhancedIC->BindAction(SprintAction, ETriggerEvent::Completed, this, &AFirstVoxelCharacter::StopSprinting);
+		}
 
-		// Dig / Build — ETriggerEvent::Triggered fires every frame while held
-		EnhancedIC->BindAction(DigAction,   ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Dig);
-		EnhancedIC->BindAction(BuildAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Build);
+		// Dig / Build — optional; polling fallback in Tick handles LMB/RMB directly
+		if (DigAction)   EnhancedIC->BindAction(DigAction,   ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Dig);
+		if (BuildAction) EnhancedIC->BindAction(BuildAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Build);
 
 		// Flight toggle / map
 		if (ToggleFlyAction)

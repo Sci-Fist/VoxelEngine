@@ -101,13 +101,19 @@ void UVoxelPauseMenu::Close()
 
     if (APlayerController* PC = OwnerHUD ? OwnerHUD->GetOwningPlayerController() : nullptr)
     {
-        // Restore walking movement
+        // Restore movement. We re-enable via MOVE_Falling + bJustTeleported so
+        // UE's ProcessLanded chain runs and resets animation state correctly.
+        // SetMovementMode(MOVE_Walking) alone doesn't probe the floor.
         if (APawn* P = PC->GetPawn())
         {
             if (ACharacter* Ch = Cast<ACharacter>(P))
             {
                 if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
-                    CMC->SetMovementMode(MOVE_Walking);
+                {
+                    CMC->Velocity        = FVector::ZeroVector;
+                    CMC->SetMovementMode(MOVE_Falling);
+                    CMC->bJustTeleported = true;
+                }
             }
         }
 

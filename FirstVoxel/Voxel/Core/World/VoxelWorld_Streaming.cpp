@@ -136,20 +136,21 @@ void AVoxelWorld::UpdateChunkStreaming()
 			FVector ChunkPos = ChunkCoordToWorld(It.Key) + FVector(ChunkSize * VoxelSize * 0.5f);
 			float DistSq = FVector::DistSquared(PlayerPos, ChunkPos);
 
-			// Determine target LOD based on distance thresholds.
-			// Hysteresis: a chunk must exceed the boundary by 10% before transitioning
-			// to prevent repeated rebuilds when the player walks along an LOD border.
+			// Hysteresis bands prevent LOD flip-flopping at borders.
+			// Upgrade (lower LOD number = higher detail) only when inside the INNER threshold.
+			// Downgrade (higher LOD number = lower detail) only when outside the OUTER threshold.
 			static constexpr float HysteresisFactor = 1.10f;
-			const float LOD1Inner = LOD1Distance;
-			const float LOD1Outer = LOD1Distance * HysteresisFactor;
-			const float LOD2Inner = LOD2Distance;
-			const float LOD2Outer = LOD2Distance * HysteresisFactor;
+			const float L1I = LOD1Distance;
+			const float L1O = LOD1Distance * HysteresisFactor;
+			const float L2I = LOD2Distance;
+			const float L2O = LOD2Distance * HysteresisFactor;
+			const float D   = FMath::Sqrt(DistSq); // single sqrt here, not per-comparison
 
-			int32 TargetLOD = Chunk->LOD; // default: keep current
-			if (Chunk->LOD < 2 && DistSq > LOD2Outer * LOD2Outer)       TargetLOD = 2;
-			else if (Chunk->LOD > 1 && DistSq < LOD2Inner * LOD2Inner)   TargetLOD = 1;
-			else if (Chunk->LOD < 1 && DistSq > LOD1Outer * LOD1Outer)   TargetLOD = 1;
-			else if (Chunk->LOD > 0 && DistSq < LOD1Inner * LOD1Inner)   TargetLOD = 0;
+			int32 TargetLOD = Chunk->LOD;
+			if      (Chunk->LOD < 2 && D > L2O) TargetLOD = 2;  // downgrade to LOD2
+			else if (Chunk->LOD > 1 && D < L2I) TargetLOD = 1;  // upgrade from LOD2
+			else if (Chunk->LOD < 1 && D > L1O) TargetLOD = 1;  // downgrade to LOD1
+			else if (Chunk->LOD > 0 && D < L1I) TargetLOD = 0;  // upgrade to full res
 
 			if (TargetLOD != Chunk->LOD)
 			{

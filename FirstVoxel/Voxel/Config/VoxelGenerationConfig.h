@@ -565,6 +565,17 @@ struct FVoxelGenerationConfig
         meta=(ToolTip="World seed. Any integer change produces a completely different world layout."))
     int32 Seed = 1337;
 
+    /**
+     * Dot-product threshold for flat vs slope face classification.
+     * abs(FaceNormal.Z) >= SlopeThreshold → FlatMesh (grass/dirt material).
+     * abs(FaceNormal.Z) <  SlopeThreshold → SlopeMesh (cliff/rock material).
+     * Default 0.7 ≈ 45°. Raise toward 1.0 for more faces classified as slope.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Global",
+        meta=(ClampMin="0.0", ClampMax="1.0",
+              ToolTip="Normal.Z threshold for flat vs slope face material split. 0.7 = ~45 degrees."))
+    float SlopeThreshold = 0.7f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Global",
         meta=(ToolTip="World Z of the water/sea plane. Terrain at this Z is 'sea level' (cm)."))
     float SeaLevel = 0.f;
