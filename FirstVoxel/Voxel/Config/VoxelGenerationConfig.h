@@ -115,6 +115,25 @@ struct FVoxelPerformanceConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug",
         meta=(ToolTip="Toggle generating Crater biome layouts across surface levels."))
     bool bEnableCraters = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug",
+        meta=(ToolTip="Toggle the entire base Surface Layer (Turning off leaves only Skylands if enabled)."))
+    bool bEnableSurface = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug")
+    bool bEnableForest = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug")
+    bool bEnableDesert = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug")
+    bool bEnablePeaks = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug")
+    bool bEnableCliffs = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug")
+    bool bEnableMesa = true;
 };
 
 // ============================================================

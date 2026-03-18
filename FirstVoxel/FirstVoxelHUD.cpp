@@ -156,16 +156,32 @@ void AFirstVoxelHUD::DrawHUD()
         {
             Items.Add({ TEXT("< Back"), FColor(200,200,200) });
 
-            bool bSky = true; bool bCave = true; bool bCrat = true;
+            bool bSurf = true; bool bSky = true; bool bCave = true;
+            bool bFor = true; bool bDes = true; bool bPk = true;
+            bool bClf = true; bool bMsa = true; bool bCrat = true;
+
             if (TitleWorld)
             {
-                bSky = TitleWorld->GenerationConfig.Performance.bEnableSkylands;
-                bCave = TitleWorld->GenerationConfig.Performance.bEnableCaves;
-                bCrat = TitleWorld->GenerationConfig.Performance.bEnableCraters;
+                const auto& Perf = TitleWorld->GenerationConfig.Performance;
+                bSurf = Perf.bEnableSurface;
+                bSky  = Perf.bEnableSkylands;
+                bCave = Perf.bEnableCaves;
+                bFor  = Perf.bEnableForest;
+                bDes  = Perf.bEnableDesert;
+                bPk   = Perf.bEnablePeaks;
+                bClf  = Perf.bEnableCliffs;
+                bMsa  = Perf.bEnableMesa;
+                bCrat = Perf.bEnableCraters;
             }
 
-            Items.Add({ FString::Printf(TEXT("Skylands:  %s"), bSky ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Surface:   %s"), bSurf ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Skylands:  %s"), bSky  ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
             Items.Add({ FString::Printf(TEXT("Caves:     %s"), bCave ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Forest:    %s"), bFor  ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Desert:    %s"), bDes  ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Peaks:     %s"), bPk   ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Cliffs:    %s"), bClf  ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Mesa:      %s"), bMsa  ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
             Items.Add({ FString::Printf(TEXT("Craters:   %s"), bCrat ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
         }
 
@@ -323,12 +339,16 @@ void AFirstVoxelHUD::DrawHUD()
                     }
                     else if (TitleWorld)
                     {
-                        if (TitleSelection == 1)
-                            TitleWorld->GenerationConfig.Performance.bEnableSkylands = !TitleWorld->GenerationConfig.Performance.bEnableSkylands;
-                        else if (TitleSelection == 2)
-                            TitleWorld->GenerationConfig.Performance.bEnableCaves = !TitleWorld->GenerationConfig.Performance.bEnableCaves;
-                        else if (TitleSelection == 3)
-                            TitleWorld->GenerationConfig.Performance.bEnableCraters = !TitleWorld->GenerationConfig.Performance.bEnableCraters;
+                        auto& Perf = TitleWorld->GenerationConfig.Performance;
+                        if (TitleSelection == 1)      Perf.bEnableSurface = !Perf.bEnableSurface;
+                        else if (TitleSelection == 2) Perf.bEnableSkylands = !Perf.bEnableSkylands;
+                        else if (TitleSelection == 3) Perf.bEnableCaves = !Perf.bEnableCaves;
+                        else if (TitleSelection == 4) Perf.bEnableForest = !Perf.bEnableForest;
+                        else if (TitleSelection == 5) Perf.bEnableDesert = !Perf.bEnableDesert;
+                        else if (TitleSelection == 6) Perf.bEnablePeaks = !Perf.bEnablePeaks;
+                        else if (TitleSelection == 7) Perf.bEnableCliffs = !Perf.bEnableCliffs;
+                        else if (TitleSelection == 8) Perf.bEnableMesa = !Perf.bEnableMesa;
+                        else if (TitleSelection == 9) Perf.bEnableCraters = !Perf.bEnableCraters;
                     }
                 }
             }

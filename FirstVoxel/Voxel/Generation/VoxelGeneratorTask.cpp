@@ -150,7 +150,9 @@ void FVoxelGeneratorTask::BuildDensityField()
 
     // --- 🏗️ Pipeline initialization ---
     TArray<TSharedPtr<IVoxelGenerationStage>> Pipeline;
-    Pipeline.Add(MakeShared<FVoxelSurfacePass>());
+
+    if (Config.Performance.bEnableSurface)
+        Pipeline.Add(MakeShared<FVoxelSurfacePass>());
 
     if (Config.Performance.bEnableCaves)
         Pipeline.Add(MakeShared<FVoxelCavePass>());
@@ -181,11 +183,18 @@ void FVoxelGeneratorTask::BuildDensityField()
         const FVoxelBiomeWeightMap BaseWeights = Provider->GetBiomeWeights(WorldX, WorldY, Config);
         FVoxelBiomeWeightMap Weights = BaseWeights;
 
-        if (!Config.Performance.bEnableCraters)
+        if (!Config.Performance.bEnableForest)  Weights.SetWeight(EVoxelBiome::Forest,  0.f);
+        if (!Config.Performance.bEnableDesert)  Weights.SetWeight(EVoxelBiome::Desert,  0.f);
+        if (!Config.Performance.bEnablePeaks)   Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
+        if (!Config.Performance.bEnableCliffs)  Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
+        if (!Config.Performance.bEnableMesa)    Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
+        if (!Config.Performance.bEnableCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
+
+        if (Weights.GetSum() <= 0.001f)
         {
-            Weights.SetWeight(EVoxelBiome::Craters, 0.f);
-            Weights.Normalize();
+            Weights.SetWeight(EVoxelBiome::Forest, 1.0f);
         }
+        Weights.Normalize();
 
         const float               SurfaceHeight  = FVoxelBiomeManager::GetSurfaceHeightStatic(
                                                       WorldX, WorldY, Weights, Config);
