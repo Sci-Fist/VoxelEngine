@@ -11,6 +11,7 @@
 #include "Generation/VoxelMeshGenerator.h"
 #include "Generation/VoxelDensityGenerator.h"
 #include "Generation/IVoxelGenerationStage.h"
+#include "Voxel/Core/VoxelDataMap.h"
 #include "Biomes/VoxelBiomeManager.h"
 #include "Biomes/VoxelBiomeGenerators.h"
 #include "Async/ParallelFor.h"

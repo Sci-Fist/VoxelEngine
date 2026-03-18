@@ -56,6 +56,7 @@
 #include "Generation/VoxelMeshGenerator.h"
 #include "Generation/IVoxelDensityProvider.h"
 #include "Math/Vector.h"
+#include "Voxel/Core/VoxelDensityChunk.h"
 #include "Math/IntVector.h"
 
 class FVoxelGeneratorTask
