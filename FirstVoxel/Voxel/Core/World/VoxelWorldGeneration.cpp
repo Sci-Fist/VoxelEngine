@@ -667,10 +667,12 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
 	// Spawn chunks in a focused 3x3x3 cube around the spawn position
 	// This ensures the player has solid ground without overwhelming the generation system
+	// Expand spawn dimensions to wait for a larger safe landing area (roughly 16x16 chunks)
 	TArray<FIntVector> SpawnAreaCoords;
-	for (int32 x = -1; x <= 1; ++x)
+	const int32 RadiusXY = 8;
+	for (int32 x = -RadiusXY; x <= RadiusXY; ++x)
 	{
-		for (int32 y = -1; y <= 1; ++y)
+		for (int32 y = -RadiusXY; y <= RadiusXY; ++y)
 		{
 			for (int32 z = -1; z <= 1; ++z)
 			{
