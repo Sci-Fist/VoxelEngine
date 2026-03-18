@@ -364,10 +364,15 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const FVector& v2 = CellVertices[i2]; const FVector& v3 = CellVertices[i3];
 		const FVector& n0 = CellNormals[i0];  const FVector& n1 = CellNormals[i1];
 		const FVector& n2 = CellNormals[i2];  const FVector& n3 = CellNormals[i3];
+		
+		// Slope threshold calculation - determine if face is flat or steep
+		// (n_avg.Z >= 0.7f corresponds to angle <= ~45 degrees, which is generally walkable)
+		const FVector n_avg = (n0 + n1 + n2 + n3).GetSafeNormal();
+		const bool bIsFlat = n_avg.Z >= 0.7f; 
 
-		// Unified mesh buffer — continuous vertex blending
-		FVoxelMeshData& Dest = OutMesh.FlatMesh;
-		FVoxelMeshData& BackDest = OutMesh.BackMesh;
+		// Route quads to separate buffers for proper material assignment
+		FVoxelMeshData& Dest = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
+		FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh : OutMesh.SlopeBackMesh;
 
 		const FColor& VC = GetQuadColor(ColX, ColY);
 

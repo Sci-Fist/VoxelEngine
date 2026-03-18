@@ -218,6 +218,14 @@ float FVoxelDensityGenerator::GetDensityFull(
     //   (a) WaterD=1.5 below SeaLevel re-solidified carved caves -> filled entire chunks.
     //   (b) Skyland depression sampling ran 8x GetBiomeWeightsStatic per skyland voxel -> massive perf hit.
 
+    // ---- ☁️ CLEARANCE GATE: Force absolute air gap above local terrain ----
+    // This solves cell-center averaging overlaps by enforcing SC.MinAltitudeAboveTerrain
+    // continuously against the local height coordinate.
+    if (Z < SurfaceHeight + SC.MinAltitudeAboveTerrain)
+    {
+        SkyD = -2.f; // Force Skyland to Air
+    }
+
     // Final composition: Terrain takes precedence, skylands override air above.
     float FinalDensity = FMath::Max(SkyD, SurfD);
 

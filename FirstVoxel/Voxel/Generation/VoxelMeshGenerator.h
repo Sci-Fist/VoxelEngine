@@ -93,16 +93,24 @@ struct FVoxelMeshData
 // ---------------------------------------------------------------------------
 struct FVoxelMeshOutput
 {
-	/** Section 0 — continuous mesh section containing all quads (with collision) */
+	/** Section 0 — Flat terrain faces (with collision) */
 	FVoxelMeshData FlatMesh;
 
-	/** Section 1 — backfaces for visual double-sidedness (no collision) */
+	/** Section 1 — Steep slope faces (with collision) */
+	FVoxelMeshData SlopeMesh;
+
+	/** Section 0 Backfaces — visual double-sidedness flat */
 	FVoxelMeshData BackMesh;
+
+	/** Section 1 Backfaces — visual double-sidedness slope */
+	FVoxelMeshData SlopeBackMesh;
 
 	void Reset()
 	{
 		FlatMesh.Reset();
+		SlopeMesh.Reset();
 		BackMesh.Reset();
+		SlopeBackMesh.Reset();
 	}
 };
 

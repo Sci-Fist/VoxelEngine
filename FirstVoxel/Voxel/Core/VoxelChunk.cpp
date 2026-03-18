@@ -366,12 +366,17 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	ProceduralMesh->ClearAllMeshSections();
 	if (BackfaceMesh) BackfaceMesh->ClearAllMeshSections();
 
+	// Section 0: Flats
 	UploadSection(0, Out.FlatMesh, FlatMat, FlatMeshName);
+	
+	// Section 1: Slopes (Outward with physics)
+	UploadSection(1, Out.SlopeMesh, SlopeMat, FString::Printf(TEXT("SlopeMesh_%s"), *ChunkCoordStr));
 
 	// Upload backfaces to dedicated visual-only component (no collision)
 	if (BackfaceMesh)
 	{
-		UploadSection(0, Out.BackMesh, FlatMat, FString::Printf(TEXT("BackMesh_%s"), *ChunkCoordStr), BackfaceMesh);
+		UploadSection(0, Out.BackMesh, FlatMat, FString::Printf(TEXT("BackMesh_Flat_%s"), *ChunkCoordStr), BackfaceMesh);
+		UploadSection(1, Out.SlopeBackMesh, SlopeMat, FString::Printf(TEXT("BackMesh_Slope_%s"), *ChunkCoordStr), BackfaceMesh);
 	}
 
 	// ── Per-biome foliage system (Recycled / Pooled) ──────────────────────
