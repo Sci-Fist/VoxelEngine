@@ -32,6 +32,10 @@ public:
 	UPROPERTY(Transient)
 	int32 TitleSelection = 0;
 
+	/** If true, expands the world options sub-menu. */
+	UPROPERTY(Transient)
+	bool bShowWorldOptions = false;
+
 	/**
 	 * Toggle the pause menu open/closed.
 	 * Called by AFirstVoxelCharacter when P is pressed or gamepad Start fires.

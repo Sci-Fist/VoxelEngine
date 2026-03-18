@@ -47,6 +47,7 @@
 #include "Generation/IVoxelDensityProvider.h"
 #include "Voxel/Biomes/VoxelBiome.h"
 #include "Voxel/Config/VoxelGenerationConfig.h"
+#include "Generation/IVoxelGenerationStage.h"
 
 struct FIRSTVOXEL_API FVoxelDensityGenerator : public IVoxelDensityProvider
 {
@@ -77,7 +78,7 @@ struct FIRSTVOXEL_API FVoxelDensityGenerator : public IVoxelDensityProvider
     // Z=0 is sea level and the world origin for chunk coordinate math.
     static constexpr float TerrainMidZ = 0.f;
 
-private:
+public:
     /**
      * Two-tunnel worm noise evaluation.
      * Accepts a pre-computed SeedOff (Config.GetSeedOffset()) to avoid a redundant
@@ -88,4 +89,39 @@ private:
         const FVector&                WorldPos,
         const FVector&                SeedOff,
         const FVoxelGenerationConfig& Config);
+};
+
+// =============================================================================
+//  Concrete Pipeline Stages
+// =============================================================================
+
+/**
+ * FVoxelSurfacePass
+ * Responsibility: Compute safe base height, blended biomes, and overhang noise.
+ */
+struct FIRSTVOXEL_API FVoxelSurfacePass : public IVoxelGenerationStage
+{
+	virtual void PrepareColumn(float WorldX, float WorldY, const FVoxelGenerationConfig& Config, FColumnContext& OutContext) const override;
+	virtual float EvaluateVoxel(const FVector& WorldPos, const FColumnContext& Context, const FVoxelGenerationConfig& Config, float CurrentDensity) const override;
+};
+
+/**
+ * FVoxelSkylandPass
+ * Responsibility: Overlay floating plate density intervals.
+ */
+struct FIRSTVOXEL_API FVoxelSkylandPass : public IVoxelGenerationStage
+{
+	virtual void PrepareColumn(float WorldX, float WorldY, const FVoxelGenerationConfig& Config, FColumnContext& OutContext) const override;
+	virtual float EvaluateVoxel(const FVector& WorldPos, const FColumnContext& Context, const FVoxelGenerationConfig& Config, float CurrentDensity) const override;
+};
+
+/**
+ * FVoxelCavePass
+ * Responsibility: Subtract ridged density values to carve subterranean tunnels.
+ *                 Also embeds absolute 3D Crystal Caverns chambers.
+ */
+struct FIRSTVOXEL_API FVoxelCavePass : public IVoxelGenerationStage
+{
+	virtual void PrepareColumn(float WorldX, float WorldY, const FVoxelGenerationConfig& Config, FColumnContext& OutContext) const override;
+	virtual float EvaluateVoxel(const FVector& WorldPos, const FColumnContext& Context, const FVoxelGenerationConfig& Config, float CurrentDensity) const override;
 };

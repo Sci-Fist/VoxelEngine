@@ -141,13 +141,35 @@ void AFirstVoxelHUD::DrawHUD()
                                bSlotExists[3] || bSlotExists[4];
 
         struct TitleItem { FString Label; FColor Col; };
-        const TitleItem Items[] = {
-            { TEXT("Generate New World"), FColor(220,220,220) },
-            { bAnySaved
+        TArray<TitleItem> Items;
+
+        if (!bShowWorldOptions)
+        {
+            Items.Add({ TEXT("Generate New World"), FColor(220,220,220) });
+            Items.Add({ TEXT("World Options..."), FColor(220,220,220) });
+            Items.Add({ bAnySaved
                 ? TEXT("Load World (Slot 1)")
                 : TEXT("Load World  (no saves)"),
-              bAnySaved ? FColor(220,220,220) : FColor(100,100,100) },
-        };
+              bAnySaved ? FColor(220,220,220) : FColor(100,100,100) });
+        }
+        else
+        {
+            Items.Add({ TEXT("< Back"), FColor(200,200,200) });
+
+            bool bSky = true; bool bCave = true; bool bCrat = true;
+            if (TitleWorld)
+            {
+                bSky = TitleWorld->GenerationConfig.Performance.bEnableSkylands;
+                bCave = TitleWorld->GenerationConfig.Performance.bEnableCaves;
+                bCrat = TitleWorld->GenerationConfig.Performance.bEnableCraters;
+            }
+
+            Items.Add({ FString::Printf(TEXT("Skylands:  %s"), bSky ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Caves:     %s"), bCave ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+            Items.Add({ FString::Printf(TEXT("Craters:   %s"), bCrat ? TEXT("YES") : TEXT("NO")), FColor(150,220,150) });
+        }
+
+        const int32 ItemCount = Items.Num();
 
         APlayerController* PC = GetOwningPlayerController();
 
@@ -172,9 +194,9 @@ void AFirstVoxelHUD::DrawHUD()
         if (PC)
         {
             if (PC->WasInputKeyJustPressed(EKeys::Up)   || PC->WasInputKeyJustPressed(EKeys::Gamepad_DPad_Up))
-                TitleSelection = (TitleSelection - 1 + 2) % 2;
+                TitleSelection = (TitleSelection - 1 + ItemCount) % ItemCount;
             if (PC->WasInputKeyJustPressed(EKeys::Down) || PC->WasInputKeyJustPressed(EKeys::Gamepad_DPad_Down))
-                TitleSelection = (TitleSelection + 1) % 2;
+                TitleSelection = (TitleSelection + 1) % ItemCount;
         }
 
         // ── Mouse hover detection ─────────────────────────────────────
@@ -185,7 +207,7 @@ void AFirstVoxelHUD::DrawHUD()
             if (PC->GetMousePosition(MouseX, MouseY))
             {
                 float BaseY = CY2 - 60.f;   // matches ItemY below
-                for (int32 i = 0; i < 2; ++i)
+                for (int32 i = 0; i < ItemCount; ++i)
                 {
                     const float HitL = CX2 - 180.f;
                     const float HitR = CX2 + 180.f;
@@ -195,10 +217,17 @@ void AFirstVoxelHUD::DrawHUD()
                     if (MouseX >= HitL && MouseX <= HitR &&
                         MouseY >= HitT && MouseY <= HitB)
                     {
-                        if (i == 0 || bAnySaved)
+                        if (!bShowWorldOptions || i == 0 || TitleWorld)
                         {
-                            TitleSelection    = i;
-                            bMouseOverButton  = true;
+                            if (!bShowWorldOptions && i == 2 && !bAnySaved)
+                            {
+                                // skip load if no saves
+                            }
+                            else
+                            {
+                                TitleSelection    = i;
+                                bMouseOverButton  = true;
+                            }
                         }
                     }
                     BaseY += 50.f;
@@ -208,7 +237,7 @@ void AFirstVoxelHUD::DrawHUD()
 
         // ── Render menu items ─────────────────────────────────────────
         float ItemY = CY2 - 60.f;
-        for (int32 i = 0; i < 2; ++i)
+        for (int32 i = 0; i < ItemCount; ++i)
         {
             const bool bSel = (i == TitleSelection);
             if (bSel)
@@ -253,28 +282,53 @@ void AFirstVoxelHUD::DrawHUD()
                     PC->SetInputMode(GM);
                 };
 
-                if (TitleSelection == 0) // Generate New World
+                if (!bShowWorldOptions)
                 {
-                    if (TitleWorld)
+                    if (TitleSelection == 0) // Generate New World
                     {
-                        bShowTitleScreen   = false;
-                        bShowLoadingScreen = true;
-                        RestoreGameInput();
-                        TitleWorld->GenerateWorld();
+                        if (TitleWorld)
+                        {
+                            bShowTitleScreen   = false;
+                            bShowLoadingScreen = true;
+                            RestoreGameInput();
+                            TitleWorld->GenerateWorld();
+                        }
+                    }
+                    else if (TitleSelection == 1) // World Options...
+                    {
+                        bShowWorldOptions = true;
+                        TitleSelection = 0;
+                    }
+                    else if (TitleSelection == 2 && bAnySaved) // Load World
+                    {
+                        if (TitleWorld)
+                        {
+                            int32 FirstSlot = 0;
+                            for (int32 s = 0; s < 5; ++s) { if (bSlotExists[s]) { FirstSlot = s; break; } }
+
+                            bShowTitleScreen = false;
+                            RestoreGameInput();
+                            TitleWorld->ClearWorld();
+                            TitleWorld->LoadFromFile(DefaultSlotNames[FirstSlot]);
+                            TitleWorld->GenerateWorldDeferred();
+                        }
                     }
                 }
-                else if (TitleSelection == 1 && bAnySaved) // Load World
+                else
                 {
-                    if (TitleWorld)
+                    if (TitleSelection == 0) // < Back
                     {
-                        int32 FirstSlot = 0;
-                        for (int32 s = 0; s < 5; ++s) { if (bSlotExists[s]) { FirstSlot = s; break; } }
-
-                        bShowTitleScreen = false;
-                        RestoreGameInput();
-                        TitleWorld->ClearWorld();
-                        TitleWorld->LoadFromFile(DefaultSlotNames[FirstSlot]);
-                        TitleWorld->GenerateWorldDeferred();
+                        bShowWorldOptions = false;
+                        TitleSelection = 1; // highlight "World Options..."
+                    }
+                    else if (TitleWorld)
+                    {
+                        if (TitleSelection == 1)
+                            TitleWorld->GenerationConfig.Performance.bEnableSkylands = !TitleWorld->GenerationConfig.Performance.bEnableSkylands;
+                        else if (TitleSelection == 2)
+                            TitleWorld->GenerationConfig.Performance.bEnableCaves = !TitleWorld->GenerationConfig.Performance.bEnableCaves;
+                        else if (TitleSelection == 3)
+                            TitleWorld->GenerationConfig.Performance.bEnableCraters = !TitleWorld->GenerationConfig.Performance.bEnableCraters;
                     }
                 }
             }

@@ -103,6 +103,18 @@ struct FVoxelPerformanceConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Optimization",
         meta=(ToolTip="Enable full 3D island noise for skylands. Disabling replaces it with cheap 2D approximation."))
     bool bEnable3DSkylandNoise = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug",
+        meta=(ToolTip="Toggle generating Skylands structure overlay."))
+    bool bEnableSkylands = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug",
+        meta=(ToolTip="Toggle generating subterranean Worm tunnels and chambers."))
+    bool bEnableCaves = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug",
+        meta=(ToolTip="Toggle generating Crater biome layouts across surface levels."))
+    bool bEnableCraters = true;
 };
 
 // ============================================================

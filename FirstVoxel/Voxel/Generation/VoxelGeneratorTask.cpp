@@ -10,6 +10,7 @@
 #include "Generation/VoxelGeneratorTask.h"
 #include "Generation/VoxelMeshGenerator.h"
 #include "Generation/VoxelDensityGenerator.h"
+#include "Generation/IVoxelGenerationStage.h"
 #include "Biomes/VoxelBiomeManager.h"
 #include "Biomes/VoxelBiomeGenerators.h"
 #include "Async/ParallelFor.h"
@@ -147,6 +148,16 @@ void FVoxelGeneratorTask::BuildDensityField()
     static FVoxelDensityGenerator FallbackGenerator;
     IVoxelDensityProvider* Provider = DensityProvider ? DensityProvider : &FallbackGenerator;
 
+    // --- 🏗️ Pipeline initialization ---
+    TArray<TSharedPtr<IVoxelGenerationStage>> Pipeline;
+    Pipeline.Add(MakeShared<FVoxelSurfacePass>());
+
+    if (Config.Performance.bEnableCaves)
+        Pipeline.Add(MakeShared<FVoxelCavePass>());
+
+    if (Config.Performance.bEnableSkylands)
+        Pipeline.Add(MakeShared<FVoxelSkylandPass>());
+
     // Allocate column weight cache without zero-constructing -- every entry will
     // be overwritten in the parallel loop below.
     ColumnWeights.SetNumUninitialized(EffCS * EffCS);
@@ -167,7 +178,15 @@ void FVoxelGeneratorTask::BuildDensityField()
         // Biome weights and surface height are the same for the entire
         // vertical column, so they are computed once here and reused
         // for every Z below.
-        const FVoxelBiomeWeightMap Weights       = Provider->GetBiomeWeights(WorldX, WorldY, Config);
+        const FVoxelBiomeWeightMap BaseWeights = Provider->GetBiomeWeights(WorldX, WorldY, Config);
+        FVoxelBiomeWeightMap Weights = BaseWeights;
+
+        if (!Config.Performance.bEnableCraters)
+        {
+            Weights.SetWeight(EVoxelBiome::Craters, 0.f);
+            Weights.Normalize();
+        }
+
         const float               SurfaceHeight  = FVoxelBiomeManager::GetSurfaceHeightStatic(
                                                       WorldX, WorldY, Weights, Config);
 
@@ -185,6 +204,16 @@ void FVoxelGeneratorTask::BuildDensityField()
         const int32 LX = X - 1, LY = Y - 1;
         if (LX >= 0 && LX < EffCS && LY >= 0 && LY < EffCS)
             ColumnWeights[LX + LY * EffCS] = Weights;
+
+        // ---- Per-column preparation (O(N²)) ----
+        FColumnContext Context;
+        Context.SurfaceHeight = SurfaceHeight;
+        Context.BiomeWeights  = Weights;
+
+        for (const auto& Pass : Pipeline)
+        {
+            Pass->PrepareColumn(WorldX, WorldY, Config, Context);
+        }
 
         // ---- Column Range Checks for Early-Out (Area 2 Optimization) ----
         const float MinWorldZ = WorldOrigin.Z - EffVoxelSize;
@@ -227,8 +256,11 @@ void FVoxelGeneratorTask::BuildDensityField()
             const float WorldZ = WorldOrigin.Z + (Z - 1.f) * EffVoxelSize;
             const int32 Idx    = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
 
-            float D = Provider->GetDensityFull(
-                FVector(WorldX, WorldY, WorldZ), Weights, SurfaceHeight, NeutralSurfaceHeight, Config, StepSize, &SkylandCache);
+            float D = -2.0f; // Start with Air
+            for (const auto& Pass : Pipeline)
+            {
+                D = Pass->EvaluateVoxel(FVector(WorldX, WorldY, WorldZ), Context, Config, D);
+            }
 
             // Apply player edits (constant-time dense array lookup).
             if (bHasEdits)

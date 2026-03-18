@@ -268,3 +268,114 @@ float FVoxelDensityGenerator::SampleCaveNoise(
     }
     return 0.f;
 }
+
+// =============================================================================
+//  Concrete Pipeline Stages Implementation
+// =============================================================================
+
+// ---- FVoxelSurfacePass ----
+
+void FVoxelSurfacePass::PrepareColumn(float WorldX, float WorldY, const FVoxelGenerationConfig& Config, FColumnContext& OutContext) const
+{
+	OutContext.BedrockHeight = Config.CaveTunnels.BedrockDepth;
+}
+
+float FVoxelSurfacePass::EvaluateVoxel(const FVector& WorldPos, const FColumnContext& Context, const FVoxelGenerationConfig& Config, float CurrentDensity) const
+{
+	const float X = WorldPos.X, Y = WorldPos.Y, Z = WorldPos.Z;
+	float SurfD = FVoxelBiomeManager::GetBaseSurfaceDensity(Z, Context.SurfaceHeight, Config);
+
+	if (Config.Performance.bEnableOverhangs)
+	{
+		const FOverhangConfig& OC           = Config.Overhangs;
+		const float DistFromSurface         = FMath::Abs(Z - Context.SurfaceHeight);
+		const float SteepnessWeight         = Context.BiomeWeights.Cliffs + Context.BiomeWeights.Peaks;
+
+		if (Z > Config.SeaLevel && DistFromSurface < OC.MaxDistFromSurface && SteepnessWeight > 0.05f)
+		{
+			const float NearSurface = FMath::Clamp(1.f - DistFromSurface / OC.MaxDistFromSurface, 0.f, 1.f);
+			const float Overhang = FMath::PerlinNoise3D(FVector(
+				(X + Config.GetSeedOffset().X) * OC.NoiseFrequency,
+				(Y + Config.GetSeedOffset().Y) * OC.NoiseFrequency,
+				(Z + Config.GetSeedOffset().Z) * OC.NoiseFrequency * 1.8f));
+			SurfD += Overhang * NearSurface * OC.Amplitude * SteepnessWeight;
+		}
+	}
+	return SurfD;
+}
+
+// ---- FVoxelCavePass ----
+
+void FVoxelCavePass::PrepareColumn(float WorldX, float WorldY, const FVoxelGenerationConfig& Config, FColumnContext& OutContext) const
+{
+	FVoxelBiomeWeightMap CavernWeights = OutContext.BiomeWeights;
+	CavernWeights.SetWeight(EVoxelBiome::Craters, 0.f);
+	CavernWeights.Normalize();
+	OutContext.NeutralSurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(WorldX, WorldY, CavernWeights, Config);
+}
+
+float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos, const FColumnContext& Context, const FVoxelGenerationConfig& Config, float CurrentDensity) const
+{
+	const float X = WorldPos.X, Y = WorldPos.Y, Z = WorldPos.Z;
+	float D = CurrentDensity;
+
+	if (D > 0.05f)
+	{
+		const FCaveTunnelsConfig& CVC = Config.CaveTunnels;
+		const float DepthBelow        = FMath::Max(0.f, Context.SurfaceHeight - Z);
+		const float EffectiveMinDepth = FMath::Max(CVC.MinDepthBelowSurface, 600.f); 
+
+		if (DepthBelow > EffectiveMinDepth)
+		{
+			const float SurfFade = FMath::Clamp((DepthBelow - CVC.MinDepthBelowSurface) / CVC.SurfaceFadeDepth, 0.f, 1.f);
+			const float BedrockJag = FMath::PerlinNoise3D(FVector(X * CVC.BedrockJagFrequency, Y * CVC.BedrockJagFrequency, 0.f)) * CVC.BedrockJagAmplitude;
+			const float EffBedrock  = CVC.BedrockDepth + BedrockJag;
+			const float BedrockFade = FMath::Clamp((Z - EffBedrock) / 1000.f, 0.f, 1.f);
+			const float CaveFade    = SurfFade * BedrockFade;
+
+			if (CaveFade > 0.f)
+			{
+				const float TunnelCarve = FVoxelDensityGenerator::SampleCaveNoise(WorldPos, Config.GetSeedOffset(), Config) * CaveFade;
+				D -= FMath::Min(TunnelCarve, 0.85f);
+			}
+		}
+
+		const float CavernDelta = FVoxelBiomeGenerators::GetCrystalCavernDelta(X, Y, Z, Context.NeutralSurfaceHeight, Config);
+		D += FMath::Clamp(CavernDelta, -0.6f, 0.6f);
+	}
+
+	if (Z < Context.BedrockHeight) D = 2.f;
+
+	return D;
+}
+
+// ---- FVoxelSkylandPass ----
+
+void FVoxelSkylandPass::PrepareColumn(float WorldX, float WorldY, const FVoxelGenerationConfig& Config, FColumnContext& OutContext) const
+{
+	OutContext.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(WorldX, WorldY, OutContext.SurfaceHeight, OutContext.BiomeWeights, Config);
+}
+
+float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos, const FColumnContext& Context, const FVoxelGenerationConfig& Config, float CurrentDensity) const
+{
+	const float X = WorldPos.X, Y = WorldPos.Y, Z = WorldPos.Z;
+	const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+	float SkyD = -2.f;
+
+	if (Context.SkylandCache.bHasSkyland)
+	{
+		SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(Context.SkylandCache, X, Y, Z, Config, 1);
+	}
+	else
+	{
+		const float SkyLowerBound = Context.SurfaceHeight + SC.MinAltitudeAboveTerrain - (SC.BaseIslandSize * SC.ThicknessRatio) - 400.f;
+		if (Z >= SkyLowerBound)
+		{
+			SkyD = FVoxelBiomeGenerators::GetSkylandDensity(X, Y, Z, Context.SurfaceHeight, Context.BiomeWeights, Config, 1);
+		}
+	}
+
+	if (Z < Context.SurfaceHeight + SC.MinAltitudeAboveTerrain) SkyD = -2.f;
+
+	return FMath::Max(SkyD, CurrentDensity);
+}
