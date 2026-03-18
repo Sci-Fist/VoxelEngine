@@ -71,7 +71,7 @@ public:
 		IVoxelDensityProvider*        InProvider,
 		float                         InFoliageDensity,   // legacy fallback density
 		float                         InMaxFoliageSlope,  // legacy fallback slope
-		const TMap<int32, float>&     InLocalDataCache,
+		struct FVoxelDataMap*         InDataMap,
 		TSharedPtr<struct FVoxelDensityChunk> InDenseChunk
 	);
 
@@ -126,8 +126,7 @@ private:
 	IVoxelDensityProvider* DensityProvider;
 	float                  FoliageDensity;   // legacy
 	float                  MaxFoliageSlope;  // legacy
-	TMap<int32, float>&    LocalDataCache;   // Wait, was this a ref or copy? Let's keep existing.
-	TMap<int32, float>     LocalDataCache;
+	struct FVoxelDataMap*  DataMap;
 	TSharedPtr<struct FVoxelDensityChunk> DenseChunk;
 
 	// --- Outputs ---

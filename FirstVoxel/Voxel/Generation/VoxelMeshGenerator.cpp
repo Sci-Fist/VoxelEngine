@@ -133,6 +133,11 @@ void FVoxelMeshGenerator::GenerateMesh(
 	TArray<FVector> CellVertices;  CellVertices.Init(FVector::ZeroVector, S3);
 	TArray<FVector> CellNormals;   CellNormals.Init(FVector::ZeroVector, S3);
 
+	TArray<int32> FlatMap;      FlatMap.Init(-1, S3);
+	TArray<int32> SlopeMap;     SlopeMap.Init(-1, S3);
+	TArray<int32> BackMap;      BackMap.Init(-1, S3);
+	TArray<int32> SlopeBackMap; SlopeBackMap.Init(-1, S3);
+
 	static const FIntVector CornerOffset[8] =
 	{
 		{0,0,0},{1,0,0},{1,1,0},{0,1,0},
@@ -244,46 +249,33 @@ void FVoxelMeshGenerator::GenerateMesh(
 	};
 
 
-	auto EmitTriangle = [&](FVoxelMeshData& Dest,
-
-		const FVector& V0, const FVector& V1, const FVector& V2,
-
-		const FVector& N0, const FVector& N1, const FVector& N2,
-
-		const FVector& FaceNorm,
-
-		const FColor&  VC)
-
+	auto EmitTriangle = [&](FVoxelMeshData& Dest, TArray<int32>& SectionIndices,
+		int32 i0, int32 i1, int32 i2, const FVector& FaceNorm, const FColor& VC)
 	{
-
-		// Validate face normal - must be normalized and non-zero
-
 		if (!FaceNorm.IsNormalized() || FaceNorm.Size() < 0.1f) return;
 
-		// Check for degenerate triangle (zero or near-zero area) Using SizeSquared to avoid sqrt overhead
-		const float AreaSq = FVector::CrossProduct(V1 - V0, V2 - V0).SizeSquared();
-		if (AreaSq < 0.01f) return; // Skip triangles with area < 0.1 cm²
+		const float AreaSq = FVector::CrossProduct(CellVertices[i1] - CellVertices[i0], CellVertices[i2] - CellVertices[i0]).SizeSquared();
+		if (AreaSq < 0.01f) return;
 
-		const int32 Base = Dest.Vertices.Num();
+		auto AppendVertex = [&](int32 cellIndex) -> int32 {
+			if (SectionIndices[cellIndex] != -1) return SectionIndices[cellIndex];
+			const int32 NewIdx = Dest.Vertices.Add(CellVertices[cellIndex]);
+			Dest.Normals.Add(CellNormals[cellIndex]);
+			Dest.UVs.Add(MakeUV(CellVertices[cellIndex], FaceNorm));
+			Dest.VertexColors.Add(VC);
+			static const FProcMeshTangent T(1, 0, 0);
+			Dest.Tangents.Add(T);
+			SectionIndices[cellIndex] = NewIdx;
+			return NewIdx;
+		};
 
-		Dest.Vertices.Add(V0); Dest.Vertices.Add(V1); Dest.Vertices.Add(V2);
+		const int32 idx0 = AppendVertex(i0);
+		const int32 idx1 = AppendVertex(i1);
+		const int32 idx2 = AppendVertex(i2);
 
-		Dest.Normals.Add(N0);  Dest.Normals.Add(N1);  Dest.Normals.Add(N2);
-
-		Dest.UVs.Add(MakeUV(V0, FaceNorm));
-
-		Dest.UVs.Add(MakeUV(V1, FaceNorm));
-
-		Dest.UVs.Add(MakeUV(V2, FaceNorm));
-
-		Dest.VertexColors.Add(VC); Dest.VertexColors.Add(VC); Dest.VertexColors.Add(VC);
-
-		static const FProcMeshTangent T(1, 0, 0);
-
-		Dest.Tangents.Add(T); Dest.Tangents.Add(T); Dest.Tangents.Add(T);
-
-		Dest.Triangles.Add(Base); Dest.Triangles.Add(Base+1); Dest.Triangles.Add(Base+2);
-
+		Dest.Triangles.Add(idx0);
+		Dest.Triangles.Add(idx1);
+		Dest.Triangles.Add(idx2);
 	};
 
 
@@ -327,64 +319,29 @@ void FVoxelMeshGenerator::GenerateMesh(
 		FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
 		FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh : OutMesh.SlopeBackMesh;
 
+		TArray<int32>& IndicesDest = bIsFlat ? FlatMap : SlopeMap;
+		TArray<int32>& BackIndicesDest = bIsFlat ? BackMap : SlopeBackMap;
+
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
-		// ---------------------------------------------------------------
-		// WINDING FIX: use a DETERMINISTIC rule, not the cross-product.
-		//
-		// The canonical quad order (i0, i1, i2, i3) is built so that
-		// the cross-product (v1-v0)x(v2-v0) always points in the -Axis
-		// direction in the ideal grid case.  When bD0Solid=true the face
-		// must point +Axis, so we need the REVERSED winding (v2,v1,v0).
-		// When bD0Solid=false the face must point -Axis, so the canonical
-		// winding (v0,v1,v2) is already correct.
-		//
-		// The old code used FVector::CrossProduct on actual vertex positions
-		// to decide winding at runtime.  Surface Nets vertices are averaged
-		// edge-intersection points that deviate from grid positions on curved
-		// terrain; that deviation can flip the cross-product sign and emit
-		// some quads with the winding reversed -> backface visible instead
-		// of the front face (the "checkerboard on slopes" artifact).
-		// ---------------------------------------------------------------
 		if (bD0Solid)
 		{
-			// Face points +Axis: use reversed winding (v2,v1,v0)
-			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, OutwardNormal, VC);
-			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, OutwardNormal, VC);
+			EmitTriangle(Dest, IndicesDest, i2, i1, i0, OutwardNormal, VC);
+			EmitTriangle(Dest, IndicesDest, i3, i2, i0, OutwardNormal, VC);
 
-			// Backface: flip winding only
-			EmitTriangle(BackDest, v0, v1, v2, n0, n1, n2, -OutwardNormal, VC);
-			EmitTriangle(BackDest, v0, v2, v3, n0, n2, n3, -OutwardNormal, VC);
+			EmitTriangle(BackDest, BackIndicesDest, i0, i1, i2, -OutwardNormal, VC);
+			EmitTriangle(BackDest, BackIndicesDest, i0, i2, i3, -OutwardNormal, VC);
 		}
 		else
 		{
-			// Face points -Axis: canonical winding (v0,v1,v2) is correct
-			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, OutwardNormal, VC);
-			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, OutwardNormal, VC);
+			EmitTriangle(Dest, IndicesDest, i0, i1, i2, OutwardNormal, VC);
+			EmitTriangle(Dest, IndicesDest, i0, i2, i3, OutwardNormal, VC);
 
-			// Backface: flip winding only
-			EmitTriangle(BackDest, v2, v1, v0, n2, n1, n0, -OutwardNormal, VC);
-			EmitTriangle(BackDest, v3, v2, v0, n3, n2, n0, -OutwardNormal, VC);
+			EmitTriangle(BackDest, BackIndicesDest, i2, i1, i0, -OutwardNormal, VC);
+			EmitTriangle(BackDest, BackIndicesDest, i3, i2, i0, -OutwardNormal, VC);
 		}
 
 
-		// Area 1: LOD Seams Improvement — Curtain Skirts for border quads
-		if (bBorder && bIsFlat)
-		{
-			const FVector Down(0, 0, -EffectiveVoxelSize * 1.2f); // drop slightly more than 1 voxel to cover rounding edges
-			
-			EmitTriangle(BackDest, v0, v1, v0 + Down, n0, n1, n0, OutwardNormal, VC);
-			EmitTriangle(BackDest, v1, v1 + Down, v0 + Down, n1, n1, n0, OutwardNormal, VC);
-
-			EmitTriangle(BackDest, v1, v2, v1 + Down, n1, n2, n1, OutwardNormal, VC);
-			EmitTriangle(BackDest, v2, v2 + Down, v1 + Down, n2, n2, n1, OutwardNormal, VC);
-
-			EmitTriangle(BackDest, v2, v3, v2 + Down, n2, n3, n2, OutwardNormal, VC);
-			EmitTriangle(BackDest, v3, v3 + Down, v2 + Down, n3, n3, n2, OutwardNormal, VC);
-
-			EmitTriangle(BackDest, v3, v0, v3 + Down, n3, n0, n3, OutwardNormal, VC);
-			EmitTriangle(BackDest, v0, v0 + Down, v3 + Down, n0, n0, n3, OutwardNormal, VC);
-		}
 	};
 
 	// 1. X-axis edges: surface between (X,Y,Z) and (X+1,Y,Z)

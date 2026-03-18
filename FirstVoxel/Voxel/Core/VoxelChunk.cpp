@@ -196,7 +196,7 @@ void AVoxelChunk::GenerateAsync()
 	}
 
 	// Retrieve local terrain data if data map is available
-	TMap<int32, float> LocalMap;
+	// TMap<int32, float> LocalMap;
 	if (DataMap)
 	{
 		const FVector Pos = GetActorLocation();
@@ -206,7 +206,7 @@ void AVoxelChunk::GenerateAsync()
 			FMath::FloorToInt(Pos.Y / Size),
 			FMath::FloorToInt(Pos.Z / Size));
 
-		DataMap->GetChunkData(GlobalChunkCoord, LocalMap);
+		// DataMap->GetChunkData(GlobalChunkCoord, LocalMap);
 	}
 
 	// Create generation task with all necessary parameters
@@ -220,7 +220,7 @@ void AVoxelChunk::GenerateAsync()
 		DensityProvider,               // Terrain density provider
 		FoliageDensity,                // Foliage placement density
 		MaxFoliageSlope,               // Maximum slope for foliage placement
-		LocalMap,                       // Local terrain modifications
+		DataMap,                        // Global voxel modifications Accessor
 		DenseChunk                      // Dense density node grid manager cache
 	);
 
@@ -256,7 +256,7 @@ void AVoxelChunk::GenerateSync()
 	static FVoxelDensityGenerator GlobalDensityGeneratorSync;
 	
 	// Retrieve local terrain data if data map is available
-	TMap<int32, float> LocalMap;
+	// TMap<int32, float> LocalMap;
 	if (DataMap)
 	{
 		const FVector Pos = GetActorLocation();
@@ -266,7 +266,7 @@ void AVoxelChunk::GenerateSync()
 			FMath::FloorToInt(Pos.Y / Size),
 			FMath::FloorToInt(Pos.Z / Size));
 
-		DataMap->GetChunkData(GlobalChunkCoord, LocalMap);
+		// DataMap->GetChunkData(GlobalChunkCoord, LocalMap);
 	}
 
 	// Create generation task with synchronous execution parameters
@@ -280,7 +280,7 @@ void AVoxelChunk::GenerateSync()
 		&GlobalDensityGeneratorSync,   // Synchronous density provider
 		FoliageDensity,                // Foliage placement density
 		MaxFoliageSlope,               // Maximum slope for foliage placement
-		LocalMap,                       // Local terrain modifications
+		DataMap,                        // Global voxel modifications Accessor
 		DenseChunk                      // Dense density node grid manager cache
 	);
 	

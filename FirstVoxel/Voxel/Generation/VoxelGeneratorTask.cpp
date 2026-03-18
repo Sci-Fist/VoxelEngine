@@ -46,7 +46,7 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     IVoxelDensityProvider*        InProvider,
     float                         InFoliageDensity,
     float                         InMaxFoliageSlope,
-    const TMap<int32, float>&     InLocalDataCache,
+    struct FVoxelDataMap*         InDataMap,
     TSharedPtr<struct FVoxelDensityChunk> InDenseChunk)
     : ChunkCoord     (InChunkCoord)
     , WorldOrigin    (InWorldOrigin)
@@ -57,7 +57,7 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     , DensityProvider(InProvider)
     , FoliageDensity (InFoliageDensity)
     , MaxFoliageSlope(InMaxFoliageSlope)
-    , LocalDataCache (InLocalDataCache)
+    , DataMap        (InDataMap)
     , DenseChunk     (InDenseChunk)
 {
     // Pre-cache the foliage slot schema from the config.
@@ -118,34 +118,6 @@ void FVoxelGeneratorTask::BuildDensityField()
     const int32 EffCS   = ChunkSize / StepSize;
 
     DenseChunk->Densities.SetNumUninitialized(TotalSamples);
-
-    // ---- Player voxel edits: sparse TMap -> flat dense array ----
-    // This allows the inner Z loop to do a constant-time array read instead
-    // of a hash-map lookup for every voxel.
-    TArray<float> DenseEdits;
-    const bool    bHasEdits = LocalDataCache.Num() > 0;
-    if (bHasEdits)
-    {
-        DenseEdits.SetNumUninitialized(TotalSamples);
-        for (int32 i = 0; i < TotalSamples; ++i) DenseEdits[i] = 1e9f; // sentinel: no override
-
-        // Unpack key (LX + LY*CS + LZ*CS^2) into the padded density grid index.
-        for (const auto& Pair : LocalDataCache)
-        {
-            const int32 Idx     = Pair.Key;
-            const int32 LZ      = Idx / (VoxelCS * VoxelCS);
-            const int32 Remnant = Idx % (VoxelCS * VoxelCS);
-            const int32 LY      = Remnant / VoxelCS;
-            const int32 LX      = Remnant % VoxelCS;
-
-            // Padded array: voxel (LX, LY, LZ) lives at index (LX+1, LY+1, LZ+1).
-            const int32 DenseIdx = (LX + 1)
-                                 + (LY + 1) * EffectiveSize
-                                 + (LZ + 1) * EffectiveSize * EffectiveSize;
-            if (DenseIdx >= 0 && DenseIdx < TotalSamples)
-                DenseEdits[DenseIdx] = Pair.Value;
-        }
-    }
 
     static FVoxelDensityGenerator FallbackGenerator;
     IVoxelDensityProvider* Provider = DensityProvider ? DensityProvider : &FallbackGenerator;
@@ -228,7 +200,20 @@ void FVoxelGeneratorTask::BuildDensityField()
             for (int32 Z = 0; Z < EffectiveSize; ++Z)
             {
                 const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
-                DenseChunk->Densities[Idx] = 2.0f;
+                const float WorldZ = WorldOrigin.Z + (Z - 1.f) * EffVoxelSize;
+                float D = 2.0f; 
+                if (DataMap)
+                {
+                    const int32 GX = FMath::FloorToInt(WorldX / VoxelSize);
+                    const int32 GY = FMath::FloorToInt(WorldY / VoxelSize);
+                    const int32 GZ = FMath::FloorToInt(WorldZ / VoxelSize);
+                    float Override;
+                    if (DataMap->GetDensity(FIntVector(GX, GY, GZ), Override))
+                    {
+                        D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
+                    }
+                }
+                DenseChunk->Densities[Idx] = D;
             }
             return;
         }
@@ -248,7 +233,20 @@ void FVoxelGeneratorTask::BuildDensityField()
             for (int32 Z = 0; Z < EffectiveSize; ++Z)
             {
                 const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
-                DenseChunk->Densities[Idx] = -2.0f; // constant air
+                const float WorldZ = WorldOrigin.Z + (Z - 1.f) * EffVoxelSize;
+                float D = -2.0f; 
+                if (DataMap)
+                {
+                    const int32 GX = FMath::FloorToInt(WorldX / VoxelSize);
+                    const int32 GY = FMath::FloorToInt(WorldY / VoxelSize);
+                    const int32 GZ = FMath::FloorToInt(WorldZ / VoxelSize);
+                    float Override;
+                    if (DataMap->GetDensity(FIntVector(GX, GY, GZ), Override))
+                    {
+                        D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
+                    }
+                }
+                DenseChunk->Densities[Idx] = D;
             }
             return;
         }
@@ -269,14 +267,16 @@ void FVoxelGeneratorTask::BuildDensityField()
             if (Config.Performance.bEnableSkylands)
                 D = SkylandPass.EvaluateVoxel(FVector(WorldX, WorldY, WorldZ), Context, Config, D);
 
-            // Apply player edits (constant-time dense array lookup).
-            if (bHasEdits)
+            if (DataMap)
             {
-                const float Override = DenseEdits[Idx];
-                if (Override != 1e9f)
+                const int32 GX = FMath::FloorToInt(WorldX / VoxelSize);
+                const int32 GY = FMath::FloorToInt(WorldY / VoxelSize);
+                const int32 GZ = FMath::FloorToInt(WorldZ / VoxelSize);
+                
+                float Override;
+                if (DataMap->GetDensity(FIntVector(GX, GY, GZ), Override))
                 {
-                    D = (Override < 0.f) ? FMath::Min(D, Override)
-                                         : FMath::Max(D, Override);
+                    D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
                 }
             }
             DenseChunk->Densities[Idx] = D;
