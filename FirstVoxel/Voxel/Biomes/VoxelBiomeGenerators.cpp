@@ -82,8 +82,10 @@ float FVoxelBiomeGenerators::GetPeaksHeight(
   const float nX = X + Off.X, nY = Y + Off.Y;
 
   const float WF = 0.0002f;
-  const float WarpX = FastNoise3D(nX * WF, nY * WF, 0.f) * 1000.f;  // was 2000
-  const float WarpY = FastNoise3D(nX * WF, nY * WF, 100.f) * 1000.f; // was 2000
+  // FIX: Disabled Domain Warping entirely on Peaks/Cliffs because 
+  // infinite-slope creases produce mesh folds that generate spikes on the ground.
+  const float WarpX = 0.f; 
+  const float WarpY = 0.f; 
 
   float Base = FBM((nX + WarpX) * PC.NoiseFrequency,
                    (nY + WarpY) * PC.NoiseFrequency,
@@ -92,10 +94,9 @@ float FVoxelBiomeGenerators::GetPeaksHeight(
 
   float Normalized = (Base + 1.f) * 0.5f;
   float Shaped = FMath::Pow(FMath::Clamp(Normalized, 0.f, 1.f), PC.Sharpness);
-  Shaped = FMath::Clamp(Shaped, 0.f, 1.f); // guarantee no overshoot into HeightMax
+  Shaped = FMath::Clamp(Shaped, 0.f, 1.f); // guarantee no overshoot into HeightMax detail
 
-  // Detail noise capped relative to height range so it can’t spike beyond HeightMax.
-  const float MaxDetail = (PC.HeightMax - PC.HeightMin) * 0.02f; // 2% of range
+  const float MaxDetail = (PC.HeightMax - PC.HeightMin) * 0.02f; 
   const float Detail = FastNoise3D(nX * PC.NoiseFrequency * 4.f,
                                    nY * PC.NoiseFrequency * 4.f, 0.f)
                        * FMath::Min(PC.DetailAmplitude, MaxDetail);
@@ -122,11 +123,10 @@ float FVoxelBiomeGenerators::GetCliffsHeight(
   const FVector Off = Config.GetSeedOffset();
   const float nX = X + Off.X, nY = Y + Off.Y;
 
-  // Moderate domain warp for organic cliff curvature (reduced from 1500 to 800
-  // so warp doesn't create micro-fold spikes at warp boundaries).
   const float WF = 0.00015f;
-  const float WarpX = FastNoise3D(nX * WF, nY * WF, 10.f) * 800.f;
-  const float WarpY = FastNoise3D(nX * WF, nY * WF, 110.f) * 800.f;
+  // FIX: Disabled Domain Warping for Cliff ridges to avoid micro-fold spikes on boundary seams.
+  const float WarpX = 0.f;
+  const float WarpY = 0.f;
 
   float Base = FBM((nX + WarpX) * CC.NoiseFrequency,
                    (nY + WarpY) * CC.NoiseFrequency,
@@ -322,13 +322,25 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     const int32 CellX = FMath::FloorToInt(X / GridSize);
     const int32 CellY = FMath::FloorToInt(Y / GridSize);
 
-    float SumAlt           = 0.f;
-    float SumThick         = 0.f;
-    float SumThresh        = 0.f;
-    float SumHeightNorm    = 0.f;
-    float SumShardFalloff  = 0.f;
+
+    float MaxW             = -1.f;
+    float BestSkyAlt       = 0.f;
+    float BestHalfThick    = 0.f;
+
+    float BestThreshold    = 0.f;
+
+    float BestHeightNorm   = 0.f;
+
+    float BestShardFalloff = 0.f;
+
+    float BestFreq         = 0.f;
+
+    float BestIslandSize   = 0.f;
+
+    float BestCellShardT   = 0.f;
     float SumIslandSize    = 0.f;
     float SumWeight        = 0.f;
+
 
     for (int32 dx = -1; dx <= 1; ++dx)
     for (int32 dy = -1; dy <= 1; ++dy)
@@ -451,31 +463,49 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             HalfThick = FMath::Min(HalfThick, MaxAllow);
         }
 
-        // Shape noise threshold: shards use a higher threshold so only the
-        // core of the noise field is solid — making them jagged and irregular.
-        // Islands use a lower threshold for solid, smooth interiors.
+        // shape threshold
         const float ShardThresholdBoost = FMath::Lerp(0.20f, 0.0f, CellShardT);
         const float Threshold = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, Prob)
                                 + ShardThresholdBoost;
 
+
         // Continuous blend weight
+
         const float W = FMath::Square(1.f - (Dist / IslandSize));
-        SumAlt          += SkyAlt    * W;
-        SumThick        += HalfThick * W;
-        SumThresh       += Threshold * W;
-        SumHeightNorm   += HeightNorm * W;
-        SumShardFalloff += ShardFalloff * W;
-        SumIslandSize   += IslandSize * W;
-        SumWeight       += W;
+
+        
+        // Accumulate for blended island size
+        SumIslandSize += IslandSize * W;
+        SumWeight += W;
+        
+
+        if (W > MaxW)
+
+        {
+            MaxW             = W;
+            BestSkyAlt       = SkyAlt;
+            BestHalfThick    = HalfThick;
+            BestThreshold    = Threshold;
+            BestHeightNorm   = HeightNorm;
+            BestShardFalloff = ShardFalloff;
+            BestIslandSize   = IslandSize;
+            BestCellShardT   = CellShardT;
+
+            const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
+            const float IslandFreq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
+            const float ShardFreq  = SC.ShapeFrequency * 6.0f;
+            BestFreq = FMath::Lerp(ShardFreq, IslandFreq, CellShardT);
+        }
     }
 
-    if (SumWeight <= 0.f) return Cache;
+    if (MaxW <= 0.f) return Cache;
 
-    Cache.SkyAlt       = SumAlt       / SumWeight;
-    Cache.HalfThick    = SumThick     / SumWeight;
-    Cache.Threshold    = SumThresh    / SumWeight;
-    Cache.HeightNorm   = SumHeightNorm / SumWeight;
-    Cache.ShardFalloff = SumShardFalloff / SumWeight;
+    Cache.SkyAlt       = BestSkyAlt;
+    Cache.HalfThick    = BestHalfThick;
+    Cache.Threshold    = BestThreshold;
+    Cache.HeightNorm   = BestHeightNorm;
+    Cache.ShardFalloff = BestShardFalloff;
+    Cache.Freq         = FMath::Max(BestFreq, 0.00025f);
 
     // Freq: shards need much higher frequency noise to look jagged.
     // Low shards: ShapeFrequency * 6  (high-freq = rough, spiky silhouette)

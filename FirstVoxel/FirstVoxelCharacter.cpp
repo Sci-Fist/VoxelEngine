@@ -493,7 +493,15 @@ void AFirstVoxelCharacter::ToggleFly()
 		// capsule is solid again when the movement mode snaps to ground.
 		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
-		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		
+		// Properly transition to walking to avoid stuck falling animation
+		// Use UpdateFloorFromAdjustment to force immediate floor detection
+		UCharacterMovementComponent* CMC = GetCharacterMovement();
+		CMC->Velocity = FVector::ZeroVector;
+		CMC->SetMovementMode(MOVE_Walking);
+		CMC->UpdateFloorFromAdjustment();
+		CMC->bJustTeleported = false;
+		
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode DISABLED"));
 	}
 	else
