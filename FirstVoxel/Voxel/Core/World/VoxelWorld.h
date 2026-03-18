@@ -100,18 +100,18 @@ public:
   /** Horizontal distance (in chunks) to generate around the player. Total
    * chunks: (2*Dist+1)^2. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
-  int32 RenderDistanceXY = 3;
+  int32 RenderDistanceXY = 5;
 
   /** Horizontal distance (in chunks) specifically for Skylands. High values
    * allow them to render far into the background with minimal performance hit.
    */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
-  int32 SkylandsRenderDistanceXY = 5; // Reduced from 8 for better frames
+  int32 SkylandsRenderDistanceXY = 8; // Increased from 5 for vista size
 
   /** Vertical distance (in chunks) to generate above/below the player. High
    * values allow for massive mountains and deep caves. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
-  int32 RenderDistanceZ = 2; // Reduced from 4 to save VRAM stacks
+  int32 RenderDistanceZ = 3; // Increased to 3
 
   /** Max background tasks allowed at once. Higher values speed up generation
    * but can cause framerate hitching or high CPU usage. */

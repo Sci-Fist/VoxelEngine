@@ -191,7 +191,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         const float MaxWorldZ = WorldOrigin.Z + (EffectiveSize + 1) * EffVoxelSize;
 
         // 1. Bedrock fully solid check
-        if (false && MaxWorldZ < Config.CaveTunnels.BedrockDepth)
+        if (MaxWorldZ < Config.CaveTunnels.BedrockDepth)
         {
             for (int32 Z = 0; Z < EffectiveSize; ++Z)
             {
@@ -211,7 +211,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             - (SC.BaseIslandSize * SC.ThicknessRatio)
             - 400.f;
 
-        if (false && MinWorldZ > SafeAirMinZ && MaxWorldZ < SkyLowerBound)
+        if (MinWorldZ > SafeAirMinZ && MaxWorldZ < SkyLowerBound)
         {
             for (int32 Z = 0; Z < EffectiveSize; ++Z)
             {

@@ -538,9 +538,9 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	}
 
 	// FIX: Reveal terrain mesh NOW — geometry + material are both fully ready.
-	// Previously the mesh component was visible from spawn with no sections,
-	// causing the invisible-hull pop visible before the player.
 	ProceduralMesh->SetVisibility(true);
+	ProceduralMesh->UpdateBounds();
+	if (BackfaceMesh) BackfaceMesh->UpdateBounds();
 
 	// --- 💊 DEFER VISIBILITY FIX ---
 	// Reveal the entire actor and trigger physics collision ONLY after 
