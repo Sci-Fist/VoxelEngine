@@ -128,9 +128,42 @@ void FVoxelGeneratorTask::BuildDensityField()
     const FVoxelCavePass    CavePass;
     const FVoxelSkylandPass SkylandPass;
 
-    // Allocate column caches — every entry is overwritten in the parallel loop.
+
     ColumnWeights.SetNumUninitialized(EffCS * EffCS);
+
     ColumnSurfaceH.SetNumUninitialized(EffCS * EffCS);
+
+
+    // Precompute skyland caches at full resolution (actual voxel grid) for LOD-independent generation.
+    // This ensures skylands appear consistently across all LODs.
+    SkylandColumnCaches.SetNum(ChunkSize);
+
+    for (int32 i = 0; i < ChunkSize; ++i)
+    {
+        SkylandColumnCaches[i].SetNum(ChunkSize);
+        for (int32 j = 0; j < ChunkSize; ++j)
+        {
+            const float CacheX = WorldOrigin.X + i * VoxelSize;
+            const float CacheY = WorldOrigin.Y + j * VoxelSize;
+            
+            FVoxelBiomeWeightMap Weights = Provider->GetBiomeWeights(CacheX, CacheY, Config);
+
+            // Apply performance toggles to match main generation pipeline
+            if (!Config.Performance.bEnableForest)  Weights.SetWeight(EVoxelBiome::Forest,  0.f);
+            if (!Config.Performance.bEnableDesert)  Weights.SetWeight(EVoxelBiome::Desert,  0.f);
+            if (!Config.Performance.bEnablePeaks)   Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
+
+            if (!Config.Performance.bEnableCliffs)  Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
+            if (!Config.Performance.bEnableMesa)    Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
+            if (!Config.Performance.bEnableCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
+            Weights.Normalize();
+            
+            const float SurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(CacheX, CacheY, Weights, Config);
+            
+            SkylandColumnCaches[i][j] = FVoxelBiomeGenerators::GetSkylandColumnCache(
+                CacheX, CacheY, SurfaceHeight, Weights, Config);
+        }
+    }
 
     // ---- Main density loop ----
     // Parallelized across both X and Y dimensions to fully utilize multi-core CPUs.
@@ -143,6 +176,7 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         const float WorldX = WorldOrigin.X + (X - 1.f) * EffVoxelSize;
         const float WorldY = WorldOrigin.Y + (Y - 1.f) * EffVoxelSize;
+
 
         // ---- Per-column work (O(n^2)) ----
         // Biome weights and surface height are the same for the entire
@@ -183,14 +217,75 @@ void FVoxelGeneratorTask::BuildDensityField()
         // ---- Per-column preparation (O(N²)) ----
         const float MaxWorldZ = WorldOrigin.Z + (EffectiveSize + 1) * EffVoxelSize;
 
+
+
         FColumnContext Context;
+
         Context.SurfaceHeight = SurfaceHeight;
+
         Context.BiomeWeights  = Weights;
+
         Context.MaxWorldZ     = MaxWorldZ;
 
+
+
         if (Config.Performance.bEnableSurface)  SurfacePass.PrepareColumn(WorldX, WorldY, Config, Context);
+
         if (Config.Performance.bEnableCaves)    CavePass.PrepareColumn(WorldX, WorldY, Config, Context);
-        if (Config.Performance.bEnableSkylands) SkylandPass.PrepareColumn(WorldX, WorldY, Config, Context);
+
+
+
+        if (Config.Performance.bEnableSkylands)
+
+        {
+
+            // Early-out optimization: if column is safely below skyland belt, skip cache lookup
+
+            const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+
+            const float SkyLowerBound = Context.SurfaceHeight 
+
+                + SC.MinAltitudeAboveTerrain 
+
+                - (SC.BaseIslandSize * SC.ThicknessRatio) 
+
+                - 1000.f; // safety margin
+
+            
+
+            if (Context.MaxWorldZ < SkyLowerBound)
+
+            {
+
+                Context.SkylandCache.bHasSkyland = false;
+
+            }
+
+            else
+
+            {
+
+                // Use precomputed cache for LOD-independent skyland placement
+
+                const int32 ActualX = (X - 1) * StepSize;
+
+                const int32 ActualY = (Y - 1) * StepSize;
+
+                if (ActualX >= 0 && ActualX < ChunkSize && ActualY >= 0 && ActualY < ChunkSize)
+                {
+                    Context.SkylandCache = SkylandColumnCaches[ActualX][ActualY];
+                }
+                else
+                {
+                    // Boundary fallback for padding dimensions to prevent cracks
+                    Context.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(WorldX, WorldY, Context.SurfaceHeight, Context.BiomeWeights, Config);
+                }
+
+            }
+
+        }
+
+
 
         // ---- Column Range Checks for Early-Out (Area 2 Optimization) ----
         const float MinWorldZ = WorldOrigin.Z - EffVoxelSize;

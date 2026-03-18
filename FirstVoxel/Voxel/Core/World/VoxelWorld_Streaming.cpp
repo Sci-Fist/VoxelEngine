@@ -79,7 +79,6 @@ void AVoxelWorld::UpdateChunkStreaming()
 		const FVoxelBiomeManager::FWeightsAndHeight Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(
 			PlayerPos.X, PlayerPos.Y, Config);
 		const float PlayerSurfH   = Wh.SurfaceHeight;
-		const float RoundedSurfH  = FMath::GridSnap(PlayerSurfH, 1000.f);
 
 		const float HeightNormSky    = FMath::Clamp(PlayerSurfH / SC.MaxTerrainReference, 0.f, 1.f);
 		const float RoughnessNormSky = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
@@ -103,7 +102,7 @@ void AVoxelWorld::UpdateChunkStreaming()
 		// skyland chunks were never spawned — skylands were completely invisible.
 		static constexpr float AbsoluteSkyAnchor = 15000.f; // must match GetSkylandColumnCache
 		const float ShardT     = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TerrainStrSky);
-		const float DecoupledH = FMath::Lerp(AbsoluteSkyAnchor, RoundedSurfH, ShardT);
+		const float DecoupledH = FMath::Lerp(AbsoluteSkyAnchor, PlayerSurfH, ShardT);
 		CachedSkyAltWorld      = DecoupledH + AltBase
 		                       + ShardT * (CachedCurvedH * SC.HeightAltitudeBonus
 		                                  + CachedCurvedR * SC.RoughnessAltitudeBonus);
@@ -117,10 +116,11 @@ void AVoxelWorld::UpdateChunkStreaming()
 		                          SC.BaseIslandSize + CachedCurvedH * SC.HeightSizeBonus + CachedCurvedR * SC.RoughnessSizeBonus);
 	const float HalfThickCm   = FMath::Max(200.f, IslandSize * SC.ThicknessRatio);
 	const int32 SkyThickness  = FMath::CeilToInt(HalfThickCm / ChunkWorldSize) + 2;
-	const int32 SkyZCoordCenter = FMath::RoundToInt(SkyAltWorld / ChunkWorldSize);
 	
-	// Build desired chunk set for streaming
-	TSet<FIntVector> Desired;
+		// Build desired chunk set for streaming
+
+		TSet<FIntVector> Desired;
+
 
 	// 1. Ground area: Track local heightmap profile per-column
 	// This prevents mountain peaks/valleys from unloading when the player stands on the opposite altitude extremum.
@@ -148,14 +148,26 @@ void AVoxelWorld::UpdateChunkStreaming()
 		Desired.Add(PlayerCoord + FIntVector(x, y, z));
 	}
 
+
 	// 2. Skylands Pass: Separate volume for floating islands with different render distance
+
 	// This uses a larger range to maintain distance visibility without overloading ground chunks
-	for (int32 z = -SkyThickness; z <= SkyThickness; ++z)
+
+	// Use continuous Z bounds (no rounding) to prevent churn when SkyAltWorld varies smoothly
+	const float HalfThickWorld = HalfThickCm; // world units (cm)
+	const int32 SkyZMin = FMath::FloorToInt((SkyAltWorld - HalfThickWorld) / ChunkWorldSize);
+	const int32 SkyZMax = FMath::CeilToInt((SkyAltWorld + HalfThickWorld) / ChunkWorldSize);
+
+	for (int32 z = SkyZMin; z <= SkyZMax; ++z)
 	for (int32 y = -SkylandsRenderDistanceXY; y <= SkylandsRenderDistanceXY; ++y)
+
 	for (int32 x = -SkylandsRenderDistanceXY; x <= SkylandsRenderDistanceXY; ++x)
+
 	{
-		Desired.Add(FIntVector(PlayerCoord.X + x, PlayerCoord.Y + y, SkyZCoordCenter + z));
+
+		Desired.Add(FIntVector(PlayerCoord.X + x, PlayerCoord.Y + y, z));
 	}
+
 
 	// Remove chunks that are no longer in the desired set
 	TArray<FIntVector> ToRemove;

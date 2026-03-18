@@ -380,10 +380,25 @@ float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos, const FColumnCon
 	const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
 	float SkyD = -2.f;
 
+
 	if (Context.SkylandCache.bHasSkyland)
+
 	{
-		SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(Context.SkylandCache, X, Y, Z, Config, 1);
+
+		// FIX: Recover original coordinates (without seed offset) from the cache's base coordinates.
+		// The cache's WX_base/WY_base already include the seed offset. Passing X,Y (which are
+
+		// effective-cell corners) directly causes double offset, breaking skyland placement.
+
+		const FVector Off = Config.GetSeedOffset();
+
+		const float X_orig = Context.SkylandCache.WX_base - Off.X;
+
+		const float Y_orig = Context.SkylandCache.WY_base - Off.Y;
+		SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(Context.SkylandCache, X_orig, Y_orig, Z, Config, 1);
+
 	}
+
 	else
 	{
 		const float SkyLowerBound = Context.SurfaceHeight + SC.MinAltitudeAboveTerrain - (SC.BaseIslandSize * SC.ThicknessRatio) - 400.f;

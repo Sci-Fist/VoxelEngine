@@ -58,6 +58,7 @@
 #include "Math/Vector.h"
 #include "Voxel/Core/VoxelDensityChunk.h"
 #include "Math/IntVector.h"
+#include "Biomes/VoxelBiomeGenerators.h"
 
 class FVoxelGeneratorTask
 {
@@ -150,6 +151,11 @@ private:
 	TArray<float> Densities;
 	TArray<FVoxelBiomeWeightMap> ColumnWeights;  // Cache for foliage speedups
 	TArray<float>               ColumnSurfaceH;  // Surface height per column, same indexing as ColumnWeights
+
+	// Precomputed skyland caches for LOD-independent generation.
+	// Indexed by actual voxel coordinates: [i][j] where i,j in [0, ChunkSize-1].
+	// This ensures the same skyland presence regardless of LOD step size.
+	TArray<TArray<FSkylandColumnCache>> SkylandColumnCaches;
 
 	// Water source positions (world-voxel coords) detected during generation.
 	TArray<FIntVector> WaterSources;
