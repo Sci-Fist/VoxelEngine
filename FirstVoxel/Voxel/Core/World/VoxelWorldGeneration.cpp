@@ -687,42 +687,29 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 		return DistA < DistB;
 	});
 
-	// Generate spawn area chunks with throttling to prevent deadlock
-	int32 SpawnChunksGenerated = 0;
-	const int32 MaxSpawnChunksPerTick = 3; // Limit spawn chunk generation
-	
+	// All spawn-area chunks use bSyncCollision=true so their physics collision
+	// body is cooked synchronously. This prevents IsCollisionReady() from
+	// staying false after the mesh upload, which would keep the player in
+	// the hover-lock indefinitely.
 	for (const FIntVector& Coord : SpawnAreaCoords)
 	{
-		// Only spawn if not already generated during world generation
 		if (!LoadedChunks.Contains(Coord))
-		{
-			if (SpawnChunksGenerated < MaxSpawnChunksPerTick)
-			{
-				SpawnChunk(Coord, true);
-				SpawnChunksGenerated++;
-			}
-		}
+			SpawnChunk(Coord, /*bSyncCollision=*/true);
 		InitialSpawnCoords.Add(Coord);
 	}
 
-	// Additional safety: spawn chunks directly below the player if they don't exist
-	// This ensures terrain generates below the player even if the initial 3x3x3 didn't cover it
-	const FIntVector PlayerChunkBelow = SpawnCoord + FIntVector(0, 0, -1);
-	if (!LoadedChunks.Contains(PlayerChunkBelow))
-	{
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawning additional chunk below player at %s"), *PlayerChunkBelow.ToString());
-		SpawnChunk(PlayerChunkBelow);
-		InitialSpawnCoords.Add(PlayerChunkBelow);
-	}
-
-	// Spawn one more chunk below that to ensure solid ground
+	// Safety: ensure the two chunks directly below the player exist and
+	// use synchronous collision cooking so IsCollisionReady() passes quickly.
+	const FIntVector PlayerChunkBelow  = SpawnCoord + FIntVector(0, 0, -1);
 	const FIntVector PlayerChunkBelow2 = SpawnCoord + FIntVector(0, 0, -2);
+
+	if (!LoadedChunks.Contains(PlayerChunkBelow))
+		SpawnChunk(PlayerChunkBelow, /*bSyncCollision=*/true);
+	InitialSpawnCoords.Add(PlayerChunkBelow);
+
 	if (!LoadedChunks.Contains(PlayerChunkBelow2))
-	{
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawning additional chunk 2 below player at %s"), *PlayerChunkBelow2.ToString());
-		SpawnChunk(PlayerChunkBelow2);
-		InitialSpawnCoords.Add(PlayerChunkBelow2);
-	}
+		SpawnChunk(PlayerChunkBelow2, /*bSyncCollision=*/true);
+	InitialSpawnCoords.Add(PlayerChunkBelow2);
 
 	// Spawn additional skyland chunks if needed (only if not already handled above)
 	if (bFoundSkyland && SpawnChunkZ != SpawnCoord.Z)

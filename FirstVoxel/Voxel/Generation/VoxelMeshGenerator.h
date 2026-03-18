@@ -140,6 +140,7 @@ private:
 		const FVector& P1, float D1,
 		const FVector& P2, float D2);
 
+public:
 	static FVector ComputeNormal(
 		const TArray<float>& Densities,
 		int32 X, int32 Y, int32 Z,

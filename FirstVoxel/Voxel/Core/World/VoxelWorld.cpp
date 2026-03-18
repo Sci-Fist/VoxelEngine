@@ -220,164 +220,171 @@ void AVoxelWorld::Tick(float DeltaTime)
 
 	DrainGenerationQueue();
 
-	// ── Initial Spawn Hover Lock ─────────────────────────────────────
+	// ── Initial Spawn Hover Lock ────────────────────────────────────────────
+	//
+	// DESIGN: The player is held invisible at TargetCoordsZ with MOVE_None until
+	// ALL spawn-area chunks have completed mesh upload AND physics collision body
+	// cooking. Only then do we place the player on the ground and release.
+	//
+	// Waiting for collision (IsCollisionReady) rather than just mesh upload
+	// (IsReady) is the key fix — async collision cooking can take 1-3 extra frames
+	// after the mesh sections are uploaded, and releasing too early causes the
+	// character to fall through the terrain with no physics body to land on.
+	// ──────────────────────────────────────────────────────────────────────────
 	if (!bWaitingForInitialSpawn)
 	{
-		SpawnWaitAccum = 0.f;
+		SpawnWaitAccum  = 0.f;
+		SpawnDelayAccum = 0.f;
 	}
 	else
 	{
 		SpawnWaitAccum += DeltaTime;
-		// FIX: Increased timeout to 30 seconds to allow for slower chunk generation
-		// This ensures the spawn area has enough time to generate completely
-		const bool bTimedOut = (SpawnWaitAccum > 30.f);
 
-		bool bAllReady = bTimedOut;
+		// Hard timeout: 45 s. Generous to handle slow machines.
+		const bool bTimedOut = (SpawnWaitAccum > 45.f);
+
+		// Count how many spawn-area chunks have their COLLISION body ready
+		// (not just mesh uploaded). Collision cooking is async and finishes
+		// 1-3 frames after CreateMeshSection — IsCollisionReady() checks the
+		// physics body instance is non-null and valid.
+		int32 CollisionReadyCount = 0;
+		int32 TotalCount          = InitialSpawnCoords.Num();
+		bool  bAllCollisionReady  = bTimedOut; // treat timeout as "ready enough"
+
 		if (!bTimedOut)
 		{
-			bAllReady = true;
-			int32 ReadyCount = 0;
-			int32 TotalCount = InitialSpawnCoords.Num();
-			
+			bAllCollisionReady = true;
 			for (const FIntVector& C : InitialSpawnCoords)
 			{
 				AVoxelChunk** Ptr = LoadedChunks.Find(C);
-				if (Ptr == nullptr)
+				if (!Ptr || !(*Ptr)->IsCollisionReady())
 				{
-					UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Chunk (%d,%d,%d) not found in LoadedChunks"), C.X, C.Y, C.Z);
-					bAllReady = false;
+					bAllCollisionReady = false;
 					break;
 				}
-				if (!(*Ptr)->IsReady())
-				{
-					UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Chunk (%d,%d,%d) not ready"), C.X, C.Y, C.Z);
-					bAllReady = false;
-					break;
-				}
-				ReadyCount++;
+				++CollisionReadyCount;
 			}
-			
-			UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Spawn progress %d/%d chunks ready (%.1f%%)"), 
-			       ReadyCount, TotalCount, (float)ReadyCount / (float)TotalCount * 100.0f);
-			
-			// FIX: Update load bar progress during spawn area generation
-			if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+		}
+		else
+		{
+			// Timeout: count however many are mesh-ready for the progress bar
+			for (const FIntVector& C : InitialSpawnCoords)
 			{
-				if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
-				{
-					HUD->bShowLoadBar = true;
-					HUD->bShowTitleScreen = false; // Hide title screen during spawn area generation
-					HUD->LoadProgress = (float)ReadyCount / (float)TotalCount; // Update progress 0.0 to 1.0
-				}
+				AVoxelChunk** Ptr = LoadedChunks.Find(C);
+				if (Ptr && (*Ptr)->IsReady()) ++CollisionReadyCount;
+			}
+		}
+
+		// Update the HUD load bar with collision-ready progress (0 → 1)
+		if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+		{
+			if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+			{
+				HUD->bShowLoadBar     = true;
+				HUD->bShowTitleScreen = false;
+				HUD->LoadProgress     = (TotalCount > 0)
+					? FMath::Min((float)CollisionReadyCount / (float)TotalCount, 0.99f)
+					: 0.f;
+				// Cap at 0.99 while waiting — the bar snaps to 1.0 on actual release
+				// so the player can see it "complete" when the game starts.
 			}
 		}
 
 		APawn* SpawnPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
-		if (SpawnPlayer != nullptr)
+		if (!SpawnPlayer) return;
+
+		if (!bAllCollisionReady)
 		{
-			if (!bAllReady || SpawnDelayAccum < SpawnHoldDelay)
+			// ── HOVER LOCK: keep player frozen at TargetCoordsZ ──────────────
+			FVector HoverPos   = SpawnPlayer->GetActorLocation();
+			HoverPos.Z         = TargetCoordsZ;
+			SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
+
+			if (ACharacter* Ch = Cast<ACharacter>(SpawnPlayer))
 			{
-				if (bAllReady)
+				if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
 				{
-					SpawnDelayAccum += DeltaTime;
+					CMC->SetMovementMode(EMovementMode::MOVE_None);
+					CMC->bJustTeleported = true;
 				}
-				// FIX: Enhanced hover-lock positioning with visual feedback
-				// Move player to the calculated spawn height immediately, don't keep them at sky-hold
-				FVector HoverPos = SpawnPlayer->GetActorLocation();
-				// Always move player to the calculated spawn height, regardless of current position
-				HoverPos.Z = TargetCoordsZ;
-				SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
-				
-				// Keep movement frozen during hover-lock.
-				// bJustTeleported=true tells the CMC to flush its floor cache so
-				// the position override above is respected this tick.
-				if (ACharacter* Character = Cast<ACharacter>(SpawnPlayer))
-				{
-					if (UCharacterMovementComponent* CMC = Character->GetCharacterMovement())
-					{
-						CMC->SetMovementMode(EMovementMode::MOVE_None);
-						CMC->bJustTeleported = true;
-					}
-				}
+			}
+		}
+		else
+		{
+			// ── ALL COLLISION READY: release the player ────────────────────
+			if (bTimedOut)
+			{
+				UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn timed out (%.1fs). Releasing with %d/%d collision-ready chunks."),
+					SpawnWaitAccum, CollisionReadyCount, TotalCount);
 			}
 			else
 			{
-				if (bTimedOut)
-				{
-					UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn hover-lock timed out after %.1f seconds. Proceeding with available chunks."), SpawnWaitAccum);
-				}
-				else
-				{
-					UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawn ready at Z=%.2f"), TargetCoordsZ);
-				}
-				
-				// FIX: Properly release player from hover-lock and enable movement
-				bWaitingForInitialSpawn = false;
-				SpawnWaitAccum = 0.f;
-				InitialSpawnCoords.Empty();
-				
-				// Mark load bar complete and hide it so the HUD returns to gameplay mode.
-				if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-				{
-					if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
-					{
-						HUD->LoadProgress  = 1.0f;
-						HUD->bShowLoadBar  = false; // FIX: was never cleared — load bar stayed on screen permanently
-					}
-				}
-				
-				// Release player from hover-lock: place exactly on ground, enable collision,
-				// then switch to MOVE_Falling so ProcessLanded fires within 1-2 frames.
-				if (SpawnPlayer)
-				{
-					// Step 1: Re-enable collision first so the line trace hits terrain.
-					SpawnPlayer->SetActorEnableCollision(true);
+				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: All %d spawn chunks have collision. Releasing player."), TotalCount);
+			}
 
-					// Step 2: Line-trace straight down from the hover position to find
-					// the exact ground surface. This snaps the player to just above the
-					// terrain so ProcessLanded fires within 1-2 physics frames instead
-					// of after a long freefall from TargetCoordsZ (which is 3000cm up).
-					const FVector TraceStart = SpawnPlayer->GetActorLocation();
-					const FVector TraceEnd   = TraceStart + FVector(0.f, 0.f, -100000.f);
-					FHitResult GroundHit;
-					FCollisionQueryParams TraceParams;
-					TraceParams.AddIgnoredActor(SpawnPlayer);
-					const bool bFoundGround = GetWorld()->LineTraceSingleByChannel(
-						GroundHit, TraceStart, TraceEnd, ECC_WorldStatic, TraceParams);
+			// Dismantle hover-lock state
+			bWaitingForInitialSpawn = false;
+			SpawnWaitAccum  = 0.f;
+			SpawnDelayAccum = 0.f;
+			InitialSpawnCoords.Empty();
 
-					if (bFoundGround)
-					{
-						// Place player 120cm above the hit point (capsule half-height ~96cm + 24cm margin).
-						// This ensures the capsule bottom just touches the floor surface so
-						// the very first CMC sweep detects the floor and fires ProcessLanded.
-						FVector LandPos = SpawnPlayer->GetActorLocation();
-						LandPos.Z = GroundHit.ImpactPoint.Z + 120.f;
-						SpawnPlayer->SetActorLocation(LandPos, false, nullptr, ETeleportType::TeleportPhysics);
-					}
+			// Complete the load bar
+			if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+				if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+				{ HUD->LoadProgress = 1.0f; HUD->bShowLoadBar = false; }
 
-					// Step 3: Show the player now that we are at the right height.
-					SpawnPlayer->SetActorHiddenInGame(false);
+			// ── Place player precisely on the ground ────────────────────────
+			// Collision is confirmed live, so re-enable it and line-trace to find
+			// the exact surface. We place the player's capsule just above the hit
+			// point (capsule half-height 96cm + 5cm clearance = 101cm).
+			SpawnPlayer->SetActorEnableCollision(true);
 
-					// Step 4: Release movement via MOVE_Falling + bJustTeleported.
-					// MOVE_Falling tells UE "check for a floor this tick".
-					// bJustTeleported flushes the CMC's stale floor cache so it
-					// probes immediately rather than on the next movement frame.
-					// When the capsule hits the ground ProcessLanded fires automatically,
-					// switching to MOVE_Walking and resetting the animation state.
-					if (ACharacter* Character = Cast<ACharacter>(SpawnPlayer))
-					{
-						if (UCharacterMovementComponent* CMC = Character->GetCharacterMovement())
-						{
-							CMC->SetMovementMode(EMovementMode::MOVE_Falling);
-							CMC->bJustTeleported = true;
-							// Zero out any accumulated velocity from the hover-lock period
-							// so the character doesn't shoot sideways on release.
-							CMC->Velocity = FVector::ZeroVector;
-						}
-					}
+			const FVector TraceOrigin = SpawnPlayer->GetActorLocation();
+			FHitResult    GroundHit;
+			FCollisionQueryParams QP;
+			QP.AddIgnoredActor(SpawnPlayer);
+
+			const bool bHit = GetWorld()->LineTraceSingleByChannel(
+				GroundHit, TraceOrigin,
+				TraceOrigin + FVector(0.f, 0.f, -150000.f),
+				ECC_WorldStatic, QP);
+
+			if (bHit)
+			{
+				FVector LandPos   = TraceOrigin;
+				LandPos.Z         = GroundHit.ImpactPoint.Z + 101.f; // 96cm capsule half + 5cm
+				SpawnPlayer->SetActorLocation(LandPos, false, nullptr, ETeleportType::TeleportPhysics);
+				UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Placed player at ground Z=%.1f (hit Z=%.1f)"),
+					LandPos.Z, GroundHit.ImpactPoint.Z);
+			}
+			else
+			{
+				UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Ground trace missed — player stays at hover height. Terrain collision may not be ready."));
+			}
+
+			// Show the player
+			SpawnPlayer->SetActorHiddenInGame(false);
+
+			// ── Restore walking movement ────────────────────────────────────
+			// We use MOVE_Walking (not MOVE_Falling) because:
+			//  • Collision is confirmed ready (IsCollisionReady passed above).
+			//  • The player is already placed at ground level by the trace above.
+			//  • MOVE_Walking + UpdateFloorFromAdjustment immediately snaps the
+			//    capsule to the floor and triggers the correct grounded anim state.
+			//  • MOVE_Falling relies on the physics simulation to detect landing,
+			//    which can take several frames and leaves the character in the
+			//    falling animation until ProcessLanded fires.
+			if (ACharacter* Ch = Cast<ACharacter>(SpawnPlayer))
+			{
+				if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
+				{
+					CMC->Velocity        = FVector::ZeroVector;
+					CMC->SetMovementMode(EMovementMode::MOVE_Walking);
+					// UpdateFloorFromAdjustment forces an immediate floor probe so the
+					// CMC knows it's grounded right now, not on the next physics tick.
+					CMC->UpdateFloorFromAdjustment();
+					CMC->bJustTeleported = false; // clear flag so normal movement resumes
 				}
-				
-				// Remainder of release logic completes normally or simply ends here
 			}
 		}
 	}

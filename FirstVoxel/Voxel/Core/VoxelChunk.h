@@ -161,8 +161,27 @@ public:
 	/** Water voxel simulation state.  Populated in ApplyMesh(), updated by FVoxelWaterSimulator. */
 	FVoxelWaterData WaterData;
 
-	bool IsReady()      const { return bMeshApplied; }
-	bool IsGenerating() const { return bGenerating;  }
+	bool IsReady()          const { return bMeshApplied; }
+	bool IsGenerating()     const { return bGenerating;  }
+
+	/**
+	 * Returns true when the physics collision body is fully cooked and ready.
+	 * This is STRONGER than IsReady() — IsReady() fires when mesh data is uploaded
+	 * but async collision cooking may still be in-flight. The spawn hover-lock
+	 * must wait for this before releasing the player, otherwise the character
+	 * falls through terrain that has no physics body yet.
+	 */
+	bool IsCollisionReady() const
+	{
+		if (!bMeshApplied || !IsValid(ProceduralMesh)) return false;
+
+		// If the mesh is empty (full air/solid), there is no collison to cook.
+		if (MeshOutput.FlatMesh.Vertices.Num() == 0 && MeshOutput.SlopeMesh.Vertices.Num() == 0)
+			return true;
+
+		return ProceduralMesh->GetBodyInstance() != nullptr
+			&& ProceduralMesh->GetBodyInstance()->IsValidBodyInstance();
+	}
 	
 	FORCEINLINE UProceduralMeshComponent* GetProceduralMesh() const { return ProceduralMesh; }
 

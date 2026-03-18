@@ -186,6 +186,41 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (LX >= 0 && LX < EffCS && LY >= 0 && LY < EffCS)
             ColumnWeights[LX + LY * EffCS] = Weights;
 
+        // ---- Column Range Checks for Early-Out (Area 2 Optimization) ----
+        const float MinWorldZ = WorldOrigin.Z - EffVoxelSize;
+        const float MaxWorldZ = WorldOrigin.Z + (EffectiveSize + 1) * EffVoxelSize;
+
+        // 1. Bedrock fully solid check
+        if (false && MaxWorldZ < Config.CaveTunnels.BedrockDepth)
+        {
+            for (int32 Z = 0; Z < EffectiveSize; ++Z)
+            {
+                const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
+                Densities[Idx] = 2.0f;
+            }
+            return;
+        }
+
+        // 2. Air column check (above surface, below skylands)
+        const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+        const float OverhangMaxDist = Config.Performance.bEnableOverhangs ? Config.Overhangs.MaxDistFromSurface : 0.f;
+        const float SafeAirMinZ = SurfaceHeight + OverhangMaxDist + 200.f;
+        
+        const float SkyLowerBound = SurfaceHeight
+            + SC.MinAltitudeAboveTerrain
+            - (SC.BaseIslandSize * SC.ThicknessRatio)
+            - 400.f;
+
+        if (false && MinWorldZ > SafeAirMinZ && MaxWorldZ < SkyLowerBound)
+        {
+            for (int32 Z = 0; Z < EffectiveSize; ++Z)
+            {
+                const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
+                Densities[Idx] = -2.0f; // constant air
+            }
+            return;
+        }
+
         // ---- Per-voxel work (O(n^3)) ----
         for (int32 Z = 0; Z < EffectiveSize; ++Z)
         {
@@ -258,7 +293,7 @@ void FVoxelGeneratorTask::CalculateFoliage()
     PerFoliageTransforms.Reset();
     PerFoliageMeshes.Reset();
 
-    if (MeshOutput.FlatMesh.Vertices.Num() == 0) return;
+    if (bIsFullAir || bIsFullSolid) return;
 
     // Size output arrays to match the pre-cached slot count.
     PerFoliageTransforms.SetNum(FoliageSlots.Num());
@@ -266,120 +301,80 @@ void FVoxelGeneratorTask::CalculateFoliage()
     for (int32 s = 0; s < FoliageSlots.Num(); ++s)
         PerFoliageMeshes[s] = FoliageSlots[s].Mesh;
 
-    const auto& Tris   = MeshOutput.FlatMesh.Triangles;
-    const auto& Verts  = MeshOutput.FlatMesh.Vertices;
-    const auto& Colors = MeshOutput.FlatMesh.VertexColors;
-
-    // These are constant for every triangle in this chunk -- compute once.
     const int32 EffCS        = ChunkSize / StepSize;
     const float EffVoxelSize = VoxelSize * StepSize;
+    const int32 EffectiveSize = EffCS;
 
-    // Track total mesh count to detect chunk filling
-    int32 TotalMeshCount = 0;
-
-    // Process every triangle in the flat (top-facing) mesh section.
-    for (int32 i = 0; i + 2 < Tris.Num(); i += 3)
+    auto RandHashFloat = [](int32 x, int32 y, int32 s, int32 seed) -> float
     {
-        const FVector v0 = Verts[Tris[i]];
-        const FVector v1 = Verts[Tris[i + 1]];
-        const FVector v2 = Verts[Tris[i + 2]];
+        uint32 h = (uint32)(x * 73856093 ^ y * 19349663 ^ s * 83492791 ^ seed);
+        h = (h ^ (h >> 16)) * 0x45d9f3b;
+        h = (h ^ (h >> 16));
+        return (float)(h & 0xFFFFFF) / 16777215.f; // 0xFFFFFF
+    };
 
-        const FVector FaceNormal  = FVector::CrossProduct(v1 - v0, v2 - v0).GetSafeNormal();
-        const float   SlopeZ      = FVector::DotProduct(FaceNormal, FVector::UpVector);
-        const FVector Center      = (v0 + v1 + v2) / 3.f;
-        const FVector WorldCenter = WorldOrigin + Center;
+    // Iterate the 2D inner columns
+    for (int32 LY = 0; LY < EffCS; ++LY)
+    for (int32 LX = 0; LX < EffCS; ++LX)
+    {
+        const int32 CacheIdx = LX + LY * EffCS;
+        if (!ColumnWeights.IsValidIndex(CacheIdx)) continue;
 
-        // ---- Map triangle centre to cached column weights and get surface height ----
-        const int32 gX = FMath::Clamp(FMath::RoundToInt(Center.X / EffVoxelSize), 0, EffCS - 1);
-        const int32 gY = FMath::Clamp(FMath::RoundToInt(Center.Y / EffVoxelSize), 0, EffCS - 1);
-
-        FVoxelBiomeWeightMap TriWeights;
-        const int32 CacheIdx = gX + gY * EffCS;
-        if (ColumnWeights.IsValidIndex(CacheIdx))
-            TriWeights = ColumnWeights[CacheIdx];
-        else
-            TriWeights = FVoxelBiomeManager::GetBiomeWeightsStatic(WorldCenter.X, WorldCenter.Y, Config);
-
-        // FIX: Get surface height to validate altitude relative to terrain, not absolute Z
+        const FVoxelBiomeWeightMap& weights = ColumnWeights[CacheIdx];
         const float SurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(
-            WorldCenter.X, WorldCenter.Y, TriWeights, Config);
+            WorldOrigin.X + LX * EffVoxelSize, WorldOrigin.Y + LY * EffVoxelSize, weights, Config);
 
-        // ---- Cheap gate: skip triangles that cannot satisfy any slot's filters ----
-        bool bAnyCanPass = false;
-        if (bHasPerBiomeFoliage)
-        {
-            for (const FFoliageSlot& Slot : FoliageSlots)
-            {
-                if (!Slot.Mesh) continue;
-                const FVoxelFoliageEntry& Entry = Config.GetBiomeRender(Slot.Biome).FoliageTypes[Slot.EntryIdx];
-                
-                // FIX: Check absolute world Z against Min/Max gates
-                // This allows dry lowlands (like craters) to have foliage
-                if (SlopeZ >= Entry.MinSlopeAlignment
-                    && WorldCenter.Z >= Entry.MinWorldZ
-                    && WorldCenter.Z <= Entry.MaxWorldZ)
-                {
-                    bAnyCanPass = true;
-                    break;
-                }
-            }
-        }
-        else
-        {
-            bAnyCanPass = (SlopeZ >= MaxFoliageSlope);
-        }
+        // Map height to local cell Z for normal lookup
+        const int32 CellZ = FMath::Clamp(FMath::RoundToInt((SurfaceHeight - WorldOrigin.Z) / EffVoxelSize) + 1, 1, EffectiveSize + 1);
+        const FVector Normal = FVoxelMeshGenerator::ComputeNormal(Densities, LX + 1, LY + 1, CellZ, EffectiveSize);
+        const float SlopeZ = Normal.Z;
 
-        if (!bAnyCanPass) continue;
+        const FVector ColumnWorldPos(WorldOrigin.X + LX * EffVoxelSize, WorldOrigin.Y + LY * EffVoxelSize, SurfaceHeight);
 
-        // ---- Per-biome foliage system ----
         if (bHasPerBiomeFoliage)
         {
             for (int32 s = 0; s < FoliageSlots.Num(); ++s)
             {
-                const FFoliageSlot&   Slot  = FoliageSlots[s];
+                const FFoliageSlot& Slot = FoliageSlots[s];
                 if (!Slot.Mesh) continue;
 
                 const FVoxelFoliageEntry& Entry = Config.GetBiomeRender(Slot.Biome).FoliageTypes[Slot.EntryIdx];
 
                 if (SlopeZ < Entry.MinSlopeAlignment) continue;
-                if (TriWeights.GetWeight(Slot.Biome) < Entry.MinBiomeWeight) continue;
-                
-                // FIX: Check absolute Z against Min/Max gates
-                if (WorldCenter.Z < Entry.MinWorldZ || WorldCenter.Z > Entry.MaxWorldZ) continue;
+                if (weights.GetWeight(Slot.Biome) < Entry.MinBiomeWeight) continue;
+                if (ColumnWorldPos.Z < Entry.MinWorldZ || ColumnWorldPos.Z > Entry.MaxWorldZ) continue;
 
-                // Scale Attempts by Area ratio (StepSize^2) so foliage density is uniform across LODs
-                const int32 ScaledAttempts = Entry.SpawnAttemptsPerTriangle * (StepSize * StepSize);
-                // FIX: Further reduce foliage spawn attempts to lower mesh count from 100 to 30 per triangle
-                const int32 ClampedAttempts = FMath::Clamp(ScaledAttempts, 0, 30);  // Reduced from 100
-                for (int32 Attempt = 0; Attempt < ClampedAttempts; ++Attempt)
+                const int32 Attempts = Entry.SpawnAttemptsPerTriangle; // keep standard as base
+                for (int32 Attempt = 0; Attempt < Attempts; ++Attempt)
                 {
-                    if (FMath::FRand() >= Entry.SpawnChance) continue;
+                    const float Roll = RandHashFloat(LX, LY, s * 100 + Attempt, Config.Seed);
+                    if (Roll >= Entry.SpawnChance) continue;
 
-                    // Uniform random point inside the triangle (barycentric method).
-                    float r1 = FMath::FRand(), r2 = FMath::FRand();
-                    if (r1 + r2 > 1.f) { r1 = 1.f - r1; r2 = 1.f - r2; }
-                    const FVector SpawnPos = v0 + r1 * (v1 - v0) + r2 * (v2 - v0)
-                                          + FVector(0.f, 0.f, Entry.HeightOffset);
+                    // Deterministic jitter inside the column box
+                    const float JitterX = RandHashFloat(LX, LY, Attempt * 7, Config.Seed) * EffVoxelSize;
+                    const float JitterY = RandHashFloat(LX, LY, Attempt * 13, Config.Seed) * EffVoxelSize;
+
+                    const FVector LocalPos = FVector(
+                        LX * EffVoxelSize + JitterX, 
+                        LY * EffVoxelSize + JitterY, 
+                        SurfaceHeight - WorldOrigin.Z + Entry.HeightOffset);
 
                     FRotator Rot = FRotator::ZeroRotator;
                     if (Entry.bAlignToSurface)
                     {
-                        Rot = FaceNormal.ToOrientationRotator();
-                        Rot.Pitch += 90.f; // face-normal -> standing-on-normal
+                        Rot = Normal.ToOrientationRotator();
+                        Rot.Pitch += 90.f;
                     }
-                    Rot.Yaw = Entry.bRandomYaw ? FMath::FRand() * 360.f : Entry.FixedYaw;
+                    Rot.Yaw = Entry.bRandomYaw ? RandHashFloat(LX, LY, Attempt * 19, Config.Seed) * 360.f : Entry.FixedYaw;
 
-                    const float Scale = FMath::FRandRange(Entry.ScaleMin, Entry.ScaleMax);
-                    PerFoliageTransforms[s].Add(FTransform(Rot, SpawnPos, FVector(Scale)));
+                    const float Scale = FMath::Lerp(Entry.ScaleMin, Entry.ScaleMax, RandHashFloat(LX, LY, Attempt * 23, Config.Seed));
+
+                    PerFoliageTransforms[s].Add(FTransform(Rot, LocalPos, FVector(Scale)));
                 }
             }
         }
-        else
-        {
-            ProcessLegacyFoliage(Center, SlopeZ, TriWeights, WorldCenter);
-        }
-
     }
+// End of grid-based foliage generation
 
     const int32 MaxMeshesPerChunk = 15000;
     TrimFoliageToCap(MaxMeshesPerChunk);

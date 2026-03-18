@@ -278,7 +278,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 	// bD0Solid: true when the voxel on the D0 side of the edge is solid.
 	//           Determines which winding produces an outward-facing front-face.
 	auto EmitQuad = [&](int32 i0, int32 i1, int32 i2, int32 i3,
-	                    int32 ColX, int32 ColY, bool bD0Solid)
+	                    int32 ColX, int32 ColY, bool bD0Solid, bool bBorder)
 	{
 		if (VertexIndices[i0] < 0 || VertexIndices[i1] < 0 ||
 		    VertexIndices[i2] < 0 || VertexIndices[i3] < 0) return;
@@ -328,6 +328,24 @@ void FVoxelMeshGenerator::GenerateMesh(
 			EmitTriangle(BackDest, v0, v1, v2, n0, n1, n2, -GeomNormal, VC);
 			EmitTriangle(BackDest, v0, v2, v3, n0, n2, n3, -GeomNormal, VC);
 		}
+
+		// Area 1: LOD Seams Improvement — Curtain Skirts for border quads
+		if (bBorder && bIsFlat)
+		{
+			const FVector Down(0, 0, -EffectiveVoxelSize * 1.2f); // drop slightly more than 1 voxel to cover rounding edges
+			
+			EmitTriangle(Dest, v0, v1, v0 + Down, n0, n1, n0, GeomNormal, VC);
+			EmitTriangle(Dest, v1, v1 + Down, v0 + Down, n1, n1, n0, GeomNormal, VC);
+
+			EmitTriangle(Dest, v1, v2, v1 + Down, n1, n2, n1, GeomNormal, VC);
+			EmitTriangle(Dest, v2, v2 + Down, v1 + Down, n2, n2, n1, GeomNormal, VC);
+
+			EmitTriangle(Dest, v2, v3, v2 + Down, n2, n3, n2, GeomNormal, VC);
+			EmitTriangle(Dest, v3, v3 + Down, v2 + Down, n3, n3, n2, GeomNormal, VC);
+
+			EmitTriangle(Dest, v3, v0, v3 + Down, n3, n0, n3, GeomNormal, VC);
+			EmitTriangle(Dest, v0, v0 + Down, v3 + Down, n0, n0, n3, GeomNormal, VC);
+		}
 	};
 
 	// 1. X-axis edges: surface between (X,Y,Z) and (X+1,Y,Z)
@@ -339,9 +357,10 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const float D1 = Densities[Idx(X+1, Y, Z, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
+			const bool bBorder = (X == 1 || X == EffectiveSize || Y == 1 || Y == EffectiveSize);
 			EmitQuad(Idx(X, Y,   Z,   S), Idx(X, Y,   Z-1, S),
 			         Idx(X, Y-1, Z-1, S), Idx(X, Y-1, Z,   S),
-			         X, Y, D0 > 0.f);
+			         X, Y, D0 > 0.f, bBorder);
 		}
 	}
 
@@ -354,9 +373,10 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const float D1 = Densities[Idx(X, Y+1, Z, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
+			const bool bBorder = (X == 1 || X == EffectiveSize || Y == 1 || Y == EffectiveSize);
 			EmitQuad(Idx(X,   Y, Z,   S), Idx(X-1, Y, Z,   S),
 			         Idx(X-1, Y, Z-1, S), Idx(X,   Y, Z-1, S),
-			         X, Y, D0 > 0.f);
+			         X, Y, D0 > 0.f, bBorder);
 		}
 	}
 
@@ -369,9 +389,10 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const float D1 = Densities[Idx(X, Y, Z+1, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
+			const bool bBorder = (X == 1 || X == EffectiveSize || Y == 1 || Y == EffectiveSize);
 			EmitQuad(Idx(X,   Y,   Z, S), Idx(X,   Y-1, Z, S),
 			         Idx(X-1, Y-1, Z, S), Idx(X-1, Y,   Z, S),
-			         X, Y, D0 > 0.f);
+			         X, Y, D0 > 0.f, bBorder);
 		}
 	}
 }
