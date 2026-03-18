@@ -74,9 +74,9 @@ void AVoxelWorld::GenerateWorldDeferred()
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering GenerateWorld on PlayerStart %s"), *CandidatePos.ToString());
 	}
 
-	// FIX: Prioritize Crater Spawn is now handled mathematically inside VoxelBiomeManager.cpp
-	// boosting crater weights around coordinate (0,0) smoothly for any seed.
-	// No coordinate relocation Search is needed here anymore.
+	// FIX: Prioritize Crater Spawn by searching for a high-weight crater zone nearby.
+	CandidatePos = FindCraterSpawnLocation(CandidatePos, Config);
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Relocated candidate pos to crater spawn at %s"), *CandidatePos.ToString());
 	
 	// FIX: Only search for conflicts in standalone game builds, not in PIE
 	// In PIE mode, we want to generate terrain exactly where the VoxelWorld actor is placed
@@ -465,7 +465,7 @@ void AVoxelWorld::DrainGenerationQueue()
 	if (!GetWorld()) return;
 
 	const bool bIsEditor = !GetWorld()->IsGameWorld();
-	const int32 Limit = bIsEditor ? 2 : 3; // Throttled from 8 to 3 to prevent frame budget overrun
+	const int32 Limit = bIsEditor ? 2 : 6; // Increased from 3 to 6 to balance streaming speed with frame rate
 
 	int32 ProcessedThisTick = 0;
 	while (ProcessedThisTick < Limit && QueueHead < GenerationQueue.Num())
