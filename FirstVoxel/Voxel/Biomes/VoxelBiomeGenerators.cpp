@@ -133,12 +133,9 @@ float FVoxelBiomeGenerators::GetCliffsHeight(
                    15.f, CC.Octaves, 2.1f, 0.55f,
                    Config.Performance.MaxNoiseOctaves);
 
-  // Ridged noise: (1 - Abs(FBM)) creates sharp ridgelines.
-  // Clamped to [0,1] and raised to Sharpness (1.8) for defined cliff faces
-  // without the extreme spikes that the old 3.6 power caused.
-  float Ridge = 1.f - FMath::Abs(Base);
-  Ridge = FMath::Clamp(Ridge, 0.f, 1.f);
-  float Shaped = FMath::Pow(Ridge, CC.Sharpness); // Sharpness=1.8 is safe
+  // Billow noise: FMath::Abs(Base) creates broad rounded tops instead of razor ridges
+  float Shaped = FMath::Pow(FMath::Abs(Base), CC.Sharpness); 
+  Shaped = FMath::Clamp(Shaped, 0.f, 1.f);
 
   // Terrace: floor-snap to create cliff ledge steps.
   if (CC.TerraceSteps > 0 && CC.TerraceFactor > 0.f)
@@ -217,10 +214,10 @@ float FVoxelBiomeGenerators::GetCraterHeight(
 
   // Abrupt cut-off removed to prevent tall pillars/cones forming due to noise peaks inside the basin.
 
-  const float Denominator = 1.f - FMath::Abs(CRC.ImpactThreshold);
+  const float Denominator = 1.f - CRC.ImpactThreshold;
   float NormalizedDepth = 0.f;
   if (Denominator > 0.001f) {
-    NormalizedDepth = (FMath::Abs(Impact) - FMath::Abs(CRC.ImpactThreshold)) / Denominator;
+    NormalizedDepth = (Impact - CRC.ImpactThreshold) / Denominator;
   }
   NormalizedDepth = FMath::Clamp(NormalizedDepth, 0.f, 1.f);
   
@@ -456,8 +453,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         // evaluated against the cell's own terrain, not the query column.
         const float CellShardT = FMath::SmoothStep(0.0f, SC.ShardTransitionStrength, TerrainStr);
 
-        // Minimum ShardFalloff gate: skip cells with truly zero terrain strength.
-        if (ShardFalloff < 0.008f) continue;
+        // Minimum ShardFalloff gate: disabled to allow sparse absolute-Altitude shards over plains
+        // if (ShardFalloff < 0.008f) continue;
 
         const float cnX = CenterX + Off.X;
         const float cnY = CenterY + Off.Y;
@@ -617,7 +614,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             BestCellShardT   = CellShardT;
 
             const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
-            const float IslandFreq = SC.ShapeFrequency / FMath::Sqrt(SizeRatio);
+            const float IslandFreq = SC.ShapeFrequency / SizeRatio;
             const float ShardFreq  = SC.ShapeFrequency * 6.0f;
             BestFreq = FMath::Lerp(ShardFreq, IslandFreq, CellShardT);
 
