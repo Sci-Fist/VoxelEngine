@@ -410,8 +410,8 @@ void FVoxelMeshGenerator::GenerateMesh(
 		const float D1 = Densities[Idx(X, Y+1, Z, S)];
 		if ((D0 > 0.f) != (D1 > 0.f))
 		{
-			EmitQuad(Idx(X,   Y, Z,   S), Idx(X,   Y, Z-1, S),
-			         Idx(X-1, Y, Z-1, S), Idx(X-1, Y, Z,   S),
+			EmitQuad(Idx(X,   Y, Z,   S), Idx(X-1, Y, Z,   S),
+			         Idx(X-1, Y, Z-1, S), Idx(X,   Y, Z-1, S),
 			         X, Y, D0 > 0.f);
 		}
 	}
