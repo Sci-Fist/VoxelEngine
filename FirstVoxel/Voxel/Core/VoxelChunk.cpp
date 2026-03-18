@@ -58,6 +58,16 @@ AVoxelChunk::AVoxelChunk()
 	ProceduralMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	ProceduralMesh->bUseComplexAsSimpleCollision = true;
 	ProceduralMesh->bUseAsyncCooking = true;
+
+	// Initialize visual-only backface mesh component (no collision)
+	BackfaceMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("BackfaceMesh"));
+	if (BackfaceMesh)
+	{
+		BackfaceMesh->SetupAttachment(RootComponent);
+		BackfaceMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		BackfaceMesh->bUseComplexAsSimpleCollision = false;
+		BackfaceMesh->SetCastShadow(true);
+	}
 	
 	// FIX: Ensure proper culling and rendering settings for terrain mesh
 	ProceduralMesh->SetCastShadow(true);
@@ -354,7 +364,15 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	// ── Upload terrain mesh sections ──────────────────────────────────────
 	// Clear existing mesh sections and upload new geometry
 	ProceduralMesh->ClearAllMeshSections();
+	if (BackfaceMesh) BackfaceMesh->ClearAllMeshSections();
+
 	UploadSection(0, Out.FlatMesh, FlatMat, FlatMeshName);
+
+	// Upload backfaces to dedicated visual-only component (no collision)
+	if (BackfaceMesh)
+	{
+		UploadSection(0, Out.BackMesh, FlatMat, FString::Printf(TEXT("BackMesh_%s"), *ChunkCoordStr), BackfaceMesh);
+	}
 
 	// ── Per-biome foliage system (Recycled / Pooled) ──────────────────────
 	// Handle biome-specific foliage placement with efficient component reuse
@@ -507,16 +525,15 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	}
 }
 
-void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName)
+void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName, UProceduralMeshComponent* TargetMesh)
 {
+	UProceduralMeshComponent* MeshToUse = TargetMesh ? TargetMesh : ProceduralMesh;
+
 	// Safety check: ensure we have valid data and mesh component
-	if (Data.Vertices.Num() == 0 || !IsValid(ProceduralMesh)) return;
+	if (Data.Vertices.Num() == 0 || !IsValid(MeshToUse)) return;
 
 	// Create mesh section with vertex color data
-	// IMPORTANT: Using the FColor overload correctly uploads the biome vertex colors
-	// baked by FVoxelMeshGenerator. Using the LinearColor overload with an empty array
-	// was silently discarding all vertex color data, making every biome look identical.
-	ProceduralMesh->CreateMeshSection(
+	MeshToUse->CreateMeshSection(
 		SectionIndex,
 		Data.Vertices,        // Vertex positions
 		Data.Triangles,       // Triangle indices
@@ -524,11 +541,11 @@ void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, 
 		Data.UVs,             // Texture coordinates
 		Data.VertexColors,    // Biome vertex colors (CRITICAL for visual variety)
 		Data.Tangents,        // Vertex tangents for lighting
-		(LOD <= 1) && (SectionIndex == 0) // OPTIMIZATION: Build collision mesh only for highest and mid-detail chunks, and restrict to Section 0
+		(LOD <= 1) && (SectionIndex == 0) && (MeshToUse == ProceduralMesh) // OPTIMIZATION: Only build collision for main ProceduralMesh
 	);
 
 	// Apply material if provided
-	if (Mat) ProceduralMesh->SetMaterial(SectionIndex, Mat);
+	if (Mat) MeshToUse->SetMaterial(SectionIndex, Mat);
 
 	// Note: UProceduralMeshComponent doesn't have SetSectionName method
 	// Biome-specific naming is handled through the section name parameter

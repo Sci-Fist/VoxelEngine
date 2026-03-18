@@ -206,6 +206,7 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	UProceduralMeshComponent* ProceduralMesh;
 
+
 	/** Separate translucent mesh component for voxel water surfaces. */
 	UPROPERTY(VisibleAnywhere)
 	UProceduralMeshComponent* WaterMesh;
@@ -244,6 +245,10 @@ private:
 
 	/** Transition progress (0.0 to 1.0) for smooth LOD blending. */
 	float TransitionProgress { 0.0f };
+	
+	/** Visual-only mesh component for backfaces (no collision) */
+	UPROPERTY(VisibleAnywhere)
+	class UProceduralMeshComponent* BackfaceMesh;
 
 	/** Time when transition started for timing-based blending. */
 	float TransitionStartTime { 0.0f };
@@ -252,7 +257,7 @@ private:
 	static constexpr float TransitionDuration = 0.2f;
 
 	void ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask);
-	void UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName = FString());
+	void UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName = FString(), class UProceduralMeshComponent* TargetMesh = nullptr);
 
 	/** Build water surface mesh from WaterData. Internal — call RebuildWaterMesh() instead. */
 	void BuildWaterMeshInternal();

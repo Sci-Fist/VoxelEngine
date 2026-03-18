@@ -240,7 +240,7 @@ public:
 
   /** Minimum height above terrain when snapping the player to ground (cm). */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn")
-  float SafeSpawnHeightOffset = 1500.f;
+  float SafeSpawnHeightOffset = 3000.f;
 
   /**
    * Randomizes the seed and regenerates the world from scratch.
@@ -491,6 +491,8 @@ private:
   // FIX: Replaces static-local SpawnWaitTime in Tick() to avoid MSVC C2181
   // and to reset properly between PIE sessions.
   float SpawnWaitAccum = 0.f;
+  float SpawnDelayAccum = 0.f;
+  static constexpr float SpawnHoldDelay = 2.0f;
 
   FVector SnapToVoxelGrid(const FVector &WorldPos) const;
 

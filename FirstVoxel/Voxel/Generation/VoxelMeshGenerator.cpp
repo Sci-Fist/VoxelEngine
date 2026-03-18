@@ -367,6 +367,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 
 		// Unified mesh buffer — continuous vertex blending
 		FVoxelMeshData& Dest = OutMesh.FlatMesh;
+		FVoxelMeshData& BackDest = OutMesh.BackMesh;
 
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
@@ -376,12 +377,20 @@ void FVoxelMeshGenerator::GenerateMesh(
 			// Standard CCW winding when D1 is solid (points normal into D0 air space)
 			EmitTriangle(Dest, v0, v1, v2, n0, n1, n2, VC);
 			EmitTriangle(Dest, v0, v2, v3, n0, n2, n3, VC);
+
+			// Backface (Flipped CCW and inverted normals for visual depth)
+			EmitTriangle(BackDest, v2, v1, v0, -n2, -n1, -n0, VC);
+			EmitTriangle(BackDest, v3, v2, v0, -n3, -n2, -n0, VC);
 		}
 		else
 		{
 			// Flipped CCW winding when D0 is solid (ensures normals point outward into D1 air space)
 			EmitTriangle(Dest, v2, v1, v0, n2, n1, n0, VC);
 			EmitTriangle(Dest, v3, v2, v0, n3, n2, n0, VC);
+
+			// Backface (Flipped CCW and inverted normals for visual depth)
+			EmitTriangle(BackDest, v0, v1, v2, -n0, -n1, -n2, VC);
+			EmitTriangle(BackDest, v0, v2, v3, -n0, -n2, -n3, VC);
 		}
 	};
 

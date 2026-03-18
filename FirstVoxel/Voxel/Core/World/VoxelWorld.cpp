@@ -272,8 +272,12 @@ void AVoxelWorld::Tick(float DeltaTime)
 		APawn* SpawnPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
 		if (SpawnPlayer != nullptr)
 		{
-			if (!bAllReady)
+			if (!bAllReady || SpawnDelayAccum < SpawnHoldDelay)
 			{
+				if (bAllReady)
+				{
+					SpawnDelayAccum += DeltaTime;
+				}
 				// FIX: Enhanced hover-lock positioning with visual feedback
 				// Move player to the calculated spawn height immediately, don't keep them at sky-hold
 				FVector HoverPos = SpawnPlayer->GetActorLocation();
