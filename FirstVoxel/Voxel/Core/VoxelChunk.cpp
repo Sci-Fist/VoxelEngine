@@ -209,6 +209,11 @@ void AVoxelChunk::GenerateAsync()
 		// DataMap->GetChunkData(GlobalChunkCoord, LocalMap);
 	}
 
+	if (!DenseChunk.IsValid())
+	{
+		DenseChunk = MakeShared<FVoxelDensityChunk>();
+	}
+
 	// Create generation task with all necessary parameters
 	CurrentTask = MakeShared<FVoxelGeneratorTask>(
 		ChunkCoord,                    // Chunk coordinates for world positioning
@@ -267,6 +272,11 @@ void AVoxelChunk::GenerateSync()
 			FMath::FloorToInt(Pos.Z / Size));
 
 		// DataMap->GetChunkData(GlobalChunkCoord, LocalMap);
+	}
+
+	if (!DenseChunk.IsValid())
+	{
+		DenseChunk = MakeShared<FVoxelDensityChunk>();
 	}
 
 	// Create generation task with synchronous execution parameters
