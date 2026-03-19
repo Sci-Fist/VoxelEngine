@@ -625,6 +625,13 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
 	if (!Player) return;
 
+	// Synchronize ForcedCraterCenter into the global configuration so
+	// GetWeightsAndSurfaceHeightStatic evaluates the TRUE modified terrain height.
+	if (!SpawnTargetPos.IsZero())
+	{
+		GenerationConfig.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
+	}
+
 	const FVoxelGenerationConfig& Config = GetEffectiveConfig();
 
 	// FIX: Do NOT use Player->GetActorLocation() here.
@@ -738,6 +745,8 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Crater spawn - using surface height %.2f + offset %.2f = %.2f"), Surface, SafeOffset, TargetZ);
 	}
 	
+	UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Final Spawn Teleport Candidate Pos=(%.2f, %.2f) Surface=%.2f TargetZ=%.2f CraterWeight=%.2f bFoundSkyland=%d"), Pos.X, Pos.Y, Surface, TargetZ, CraterWeight, bFoundSkyland ? 1 : 0);
+
 	Pos.Z = TargetZ;
 	TargetCoordsZ = TargetZ; // FIX: Ensure Loading Wait Screen parks player above ground
 	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);

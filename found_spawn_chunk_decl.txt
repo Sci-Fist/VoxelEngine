@@ -1,0 +1,3 @@
+35: //   VoxelWorldGeneration.cpp     GenerateWorldDeferred, SpawnChunk,
+64: //   SpawnChunk BEFORE GenerateAsync(); decremented in the OnGenerationComplete
+553: void SpawnChunk(const FIntVector &Coord, bool bSyncCollision = false);

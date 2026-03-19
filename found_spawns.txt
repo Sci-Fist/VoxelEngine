@@ -1,0 +1,7 @@
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorld.h:528: FVector SpawnTargetPos = FVector::ZeroVector;
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:141: SpawnTargetPos = CandidatePos;
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:186: // FIX: Use SpawnTargetPos strictly computed on the GameThread
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:190: FVector Anchor = SpawnTargetPos;
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:191: UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering generation bounds on SpawnTargetPos %s"), *Anchor.ToString());
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:603: Chunk->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:639: FVector Pos = SpawnTargetPos;

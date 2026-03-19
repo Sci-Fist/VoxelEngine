@@ -300,6 +300,13 @@ void AVoxelWorld::UpdateChunkStreaming() {
       else if (Chunk->LOD > 0 && DistSq < L1ISq)
         TargetLOD = 0;
 
+      // FIX: Force LOD 0 for spawn-area chunks while waiting for initial spawn
+      // This guarantees they bake with collision (LOD <= 1 rule) even if the 
+      // player resides held at a high coordinate parking altitude.
+      if (bWaitingForInitialSpawn && InitialSpawnCoords.Contains(It.Key)) {
+        TargetLOD = 0;
+      }
+
       // --- 🛡️ Integrated Close-Range Safety (LOD 0 Detail Safeguard) ---
       static constexpr float DetailSafeguardRange =
           3.2f; // within 3 chunks, ensure top detail
