@@ -357,8 +357,15 @@ void UVoxelPauseMenu::HandleConfirmInput()
 AVoxelWorld* UVoxelPauseMenu::FindVoxelWorld() const
 {
     if (!OwnerHUD || !OwnerHUD->GetWorld()) return nullptr;
+    
+    // Use TActorIterator safely with proper null checking
     for (TActorIterator<AVoxelWorld> It(OwnerHUD->GetWorld()); It; ++It)
-        return *It;
+    {
+        if (It && *It)
+        {
+            return *It; // Return the first valid found
+        }
+    }
     return nullptr;
 }
 

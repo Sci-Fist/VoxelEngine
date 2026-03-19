@@ -74,8 +74,15 @@ void AFirstVoxelPlayerController::EnsureMapWidget()
 AVoxelWorld* AFirstVoxelPlayerController::FindVoxelWorld() const
 {
     if (!GetWorld()) return nullptr;
+    
+    // Use TActorIterator safely with proper null checking
     for (TActorIterator<AVoxelWorld> It(GetWorld()); It; ++It)
-        return *It; // Return the first found
+    {
+        if (It && *It)
+        {
+            return *It; // Return the first valid found
+        }
+    }
     return nullptr;
 }
 

@@ -97,20 +97,23 @@ void AVoxelWorld::GenerateWorldDeferred()
 		bFoundConflict = false;
 		for (TActorIterator<AVoxelWorld> It(GetWorld()); It; ++It)
 		{
-			AVoxelWorld* Other = *It;
-			if (Other == this) continue;
-
-			float DistanceXY = FVector::Dist2D(CandidatePos, Other->GetActorLocation());
-			if (DistanceXY < JumpStep)
+			if (It && *It)
 			{
-				CandidatePos.X += JumpStep;
-				if (FMath::Abs(CandidatePos.X) > 1000000.f)
+				AVoxelWorld* Other = *It;
+				if (Other == this) continue;
+
+				float DistanceXY = FVector::Dist2D(CandidatePos, Other->GetActorLocation());
+				if (DistanceXY < JumpStep)
 				{
-					CandidatePos.X = 0.f;
-					CandidatePos.Y += JumpStep;
+					CandidatePos.X += JumpStep;
+					if (FMath::Abs(CandidatePos.X) > 1000000.f)
+					{
+						CandidatePos.X = 0.f;
+						CandidatePos.Y += JumpStep;
+					}
+					bFoundConflict = true;
+					break; 
 				}
-				bFoundConflict = true;
-				break; 
 			}
 		}
 	}

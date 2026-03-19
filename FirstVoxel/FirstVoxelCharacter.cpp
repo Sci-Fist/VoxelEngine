@@ -602,7 +602,12 @@ AVoxelWorld* AFirstVoxelCharacter::FindAndCacheVoxelWorld()
 {
 	if (CachedVoxelWorld) return CachedVoxelWorld;
 
-	CachedVoxelWorld = Cast<AVoxelWorld>(UGameplayStatics::GetActorOfClass(GetWorld(), AVoxelWorld::StaticClass()));
+	// Safely get the first VoxelWorld actor with proper null checking
+	AActor* FoundActor = UGameplayStatics::GetActorOfClass(GetWorld(), AVoxelWorld::StaticClass());
+	if (FoundActor)
+	{
+		CachedVoxelWorld = Cast<AVoxelWorld>(FoundActor);
+	}
 	return CachedVoxelWorld;
 }
 
