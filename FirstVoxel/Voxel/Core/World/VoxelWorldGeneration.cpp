@@ -183,29 +183,12 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 	// 4. Calculate generation bounds
 	// Center generation on the player position when in PIE mode, or on the VoxelWorld actor location otherwise.
 	// This ensures terrain generates around the player when pressing Play.
-	FVector Anchor;
-	if (GetWorld()->IsGameWorld())
-	{
-		// In PIE mode, center generation on the player position
-		APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
-		if (Player)
-		{
-			Anchor = Player->GetActorLocation();
-			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering generation on player position %s"), *Anchor.ToString());
-		}
-		else
-		{
-			// Fallback to VoxelWorld location if no player found
-			Anchor = GetActorLocation();
-			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: No player found, using VoxelWorld location %s"), *Anchor.ToString());
-		}
-	}
-	else
-	{
-		// In editor viewport, use VoxelWorld actor location
-		Anchor = GetActorLocation();
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Editor mode - using VoxelWorld location %s"), *Anchor.ToString());
-	}
+	// FIX: Use SpawnTargetPos strictly computed on the GameThread
+	// Previously called Player->GetActorLocation() from ThreadPool, which was setting
+	// bounds to line 415's High Altitude Parking coordinates (Altitude 100000!),
+	// causing chunks to generate in space instead of on the actual ground crater level.
+	FVector Anchor = SpawnTargetPos;
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering generation bounds on SpawnTargetPos %s"), *Anchor.ToString());
 	
 	FIntVector Origin = WorldToChunkCoord(Anchor);
 	
@@ -771,30 +754,31 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	TargetCoordsZ = TargetZ;
 	CachedSurfaceHeight = Surface;
 
-	// CRITICAL FIX: Align spawn chunk generation with player position
-	// Previous: SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, Surface))
-	// Problem: Creates 15m gap between terrain generation (at surface) and player (at TargetZ)
-	// Solution: Generate spawn chunks at player height (TargetZ) to eliminate vertical gap
+	// CRITICAL FIX: Generate all chunks from the absolute surface level up to the drop height.
+	// Previous versions either only spawned at the surface or only spawned at the drop height,
+	// missing collision support at either end when the drop offset was large.
 	const FIntVector SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, TargetZ));
-	const float ChunkHeight = ChunkSize * VoxelSize;
-	const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
+	const FIntVector GroundCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, Surface));
+	const int32 SpawnChunkZ = SpawnCoord.Z; // Re-added to support downstream Skyland check-bounds 
+	
+	const int32 MinZ = FMath::Min(SpawnCoord.Z, GroundCoord.Z) - 1;
+	const int32 MaxZ = FMath::Max(SpawnCoord.Z, GroundCoord.Z) + 1;
 
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Spawning spawn area chunks around position %s (Z=%.2f)"), 
 	       *FVector(Pos.X, Pos.Y, TargetZ).ToString(), TargetZ);
 
-	// Spawn chunks in a focused grid around the spawn position
-	// This ensures the player has solid ground without overwhelming the generation system
-	// FIX: Set RadiusXY to 4 to create a 9x9 area (from -4 to +4 = 9 chunks total)
-	// This gives us a 9x9 grid of high-priority chunks to wait for without triggering timeouts.
 	TArray<FIntVector> SpawnAreaCoords;
-	const int32 RadiusXY = 4; 
+	const int32 RadiusXY = 1; 
 	for (int32 x = -RadiusXY; x <= RadiusXY; ++x)
 	{
 		for (int32 y = -RadiusXY; y <= RadiusXY; ++y)
 		{
-			for (int32 z = -1; z <= 1; ++z)
+			for (int32 z = MinZ; z <= MaxZ; ++z)
 			{
-				FIntVector NeighborCoord = SpawnCoord + FIntVector(x, y, z);
+				FIntVector NeighborCoord = SpawnCoord;
+				NeighborCoord.X += x;
+				NeighborCoord.Y += y;
+				NeighborCoord.Z = z;
 				SpawnAreaCoords.Add(NeighborCoord);
 			}
 		}
