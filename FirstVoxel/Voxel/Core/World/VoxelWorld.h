@@ -115,9 +115,12 @@ public:
   int32 RenderDistanceZ = 3; // Increased to 3
 
   /** Max background tasks allowed at once. Higher values speed up generation
-   * but can cause framerate hitching or high CPU usage. */
+   * but can cause framerate hitching or high CPU usage.
+   * FIX: Reduced from 12 to 6 to reduce thread pool pressure.
+   * 12 chunks generating simultaneously = 3.6M density samples in-flight,
+   * competing with game thread, physics, and rendering. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Performance")
-  int32 MaxConcurrentGenerations = 12;
+  int32 MaxConcurrentGenerations = 6;
 
   /** Distance from player where LOD1 (Lower Detail) chunks begin. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|LOD")

@@ -346,9 +346,14 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   const float DistFromCenter = FMath::Sqrt(dx * dx + dy * dy);
   
   // Central crater dominance falloff
-  // Central crater dominance falloff: solid inside the rim, fading outside
+  // FIX: Ensure 100% crater magnitude inside the rim basin (up to RimEnd=0.92).
+  // Old: SmoothStep(1.3, 0.85, ...) started fading at 0.85, diluting rim by 24% at peak.
+  // New: SmoothStep starts fading at RimEnd+0.05 = 0.97, so rim peak gets full 100% magnitude.
+  // Fade completes at RimEnd + 0.38 = 1.30 (same outer boundary as before).
   const float CenterDistNorm = DistFromCenter / CRC.CentralCraterRadius;
-  const float CentralDominance = FMath::SmoothStep(1.3f, 0.85f, CenterDistNorm); 
+  const float FadeStart = CRC.RimEnd + 0.05f; // Start fading just beyond rim peak
+  const float FadeEnd = CRC.RimEnd + 0.38f;   // Complete fade ~68m beyond 180m radius
+  const float CentralDominance = FMath::SmoothStep(FadeEnd, FadeStart, CenterDistNorm); 
   
   // Base terrain height
    // Ambient rolling noise for surrounding terrain to prevent flat lands
@@ -409,7 +414,10 @@ float FVoxelBiomeGenerators::GetCraterHeight(
       CentralHeight += SlabCurve;
     } else {
       // Outside rim: GRADUAL slope like a real meteor crater rim
-      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + 0.25f, NormalizedDist); 
+      // FIX: Replace absolute 0.25f cutoff with relative RimPeakLength.
+      // Old: RimEnd + 0.25f = 0.92 + 0.25 = 1.17 (absolute, didn't scale with crater)
+      // New: RimEnd + RimPeakLength = 0.92 + 0.15 = 1.07 (relative to crater size)
+      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + CRC.RimPeakLength, NormalizedDist); 
       const float RimPeak = LocalPlains + RandomRimHeight * 1.5f;
       const float DropTarget = LocalPlains + RandomRimHeight * 0.4f; 
       CentralHeight = FMath::Lerp(RimPeak, DropTarget, DropT);

@@ -196,6 +196,11 @@ TArray<FIntVector> FVoxelWaterSimulator::Step()
         FVoxelWaterData* D = Pair.Value.Data;
         if (!D) continue;
 
+        // FIX: Skip chunks with no water to avoid processing 4,096 empty cells per chunk.
+        // This is the single biggest water simulation performance win — most chunks
+        // contain no water at all, yet were being fully iterated every step.
+        if (!D->HasAnyWater()) continue;
+
         // Calculate world coordinates for chunk origin
         const FIntVector Base(CC.X * ChunkSize, CC.Y * ChunkSize, CC.Z * ChunkSize);
 

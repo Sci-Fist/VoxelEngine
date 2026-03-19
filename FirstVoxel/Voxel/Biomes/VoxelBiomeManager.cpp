@@ -122,8 +122,14 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     // crater without any biome map corruption at world origin.
 
     // --- Ocean: low altitude below sea-level ---
-    const float ForestHeight = FVoxelBiomeGenerators::GetForestHeight(X, Y, Config);
-    float OceanW = FMath::SmoothStep(Config.SeaLevel - 200.f, Config.SeaLevel - 800.f, ForestHeight);
+    // FIX: Only calculate ForestHeight when needed. Previously it was always computed
+    // (5 noise calls) just for Ocean detection, even when Forest was disabled.
+    float OceanW = 0.f;
+    if (Config.Performance.bEnableForest)
+    {
+        const float ForestHeight = FVoxelBiomeGenerators::GetForestHeight(X, Y, Config);
+        OceanW = FMath::SmoothStep(Config.SeaLevel - 200.f, Config.SeaLevel - 800.f, ForestHeight);
+    }
 
     // --- Crater Override Mask ---
     // Make craters completely override other biomes when active

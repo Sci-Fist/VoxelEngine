@@ -298,10 +298,14 @@ float FVoxelSurfacePass::EvaluateVoxel(const FVector& WorldPos, const FColumnCon
 		if (Z > Config.SeaLevel && DistFromSurface < OC.MaxDistFromSurface && SteepnessWeight > 0.05f)
 		{
 			const float NearSurface = FMath::Clamp(1.f - DistFromSurface / OC.MaxDistFromSurface, 0.f, 1.f);
+			// FIX: Cache GetSeedOffset() once instead of calling 3x per voxel.
+			// GetSeedOffset() runs 3 LCG hashes — previously called 3 times = 9 hashes per overhang voxel.
+			// Now cached = 3 hashes total.
+			const FVector SeedOff = Config.GetSeedOffset();
 			const float Overhang = FMath::PerlinNoise3D(FVector(
-				(X + Config.GetSeedOffset().X) * OC.NoiseFrequency,
-				(Y + Config.GetSeedOffset().Y) * OC.NoiseFrequency,
-				(Z + Config.GetSeedOffset().Z) * OC.NoiseFrequency * 1.8f));
+				(X + SeedOff.X) * OC.NoiseFrequency,
+				(Y + SeedOff.Y) * OC.NoiseFrequency,
+				(Z + SeedOff.Z) * OC.NoiseFrequency * 1.8f));
 			SurfD += Overhang * NearSurface * OC.Amplitude * SteepnessWeight;
 		}
 	}
