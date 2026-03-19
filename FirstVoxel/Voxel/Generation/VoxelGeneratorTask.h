@@ -161,6 +161,7 @@ public:
 	 * Exposed so AVoxelChunk can build FVoxelWaterData::SolidCells without re-running noise.
 	 */
 	const TArray<float>& GetDensities() const { return Densities; }
+	const FIntVector& GetChunkCoord() const { return ChunkCoord; }
 
 private:
 	// --- Inputs ---

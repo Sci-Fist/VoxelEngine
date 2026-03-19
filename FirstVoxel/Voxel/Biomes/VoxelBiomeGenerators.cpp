@@ -350,7 +350,8 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   // Old: SmoothStep(1.3, 0.85, ...) started fading at 0.85, diluting rim by 24% at peak.
   // New: SmoothStep starts fading at RimEnd+0.05 = 0.97, so rim peak gets full 100% magnitude.
   // Fade completes at RimEnd + 0.38 = 1.30 (same outer boundary as before).
-  const float CenterDistNorm = DistFromCenter / CRC.CentralCraterRadius;
+  const float CraterRadius = CRC.CentralCraterRadius * 0.50f; // Scale down for tighter crater (Half Radius)
+  const float CenterDistNorm = DistFromCenter / CraterRadius;
   const float FadeStart = 0.92f + 0.05f; // Start fading just beyond rim peak (RimEnd=0.92)
   const float FadeEnd = 0.92f + 0.38f;   // Complete fade ~68m beyond 180m radius
   const float CentralDominance = FMath::SmoothStep(FadeEnd, FadeStart, CenterDistNorm); 
@@ -362,9 +363,9 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   float TotalHeight = BasePlains;
 
   // 1. CENTRAL CRATER - dominates near origin
-  if (DistFromCenter < CRC.CentralCraterRadius * 1.5f) {
+  if (DistFromCenter < CraterRadius * 1.5f) {
     // Central crater shape calculation
-    const float NormalizedDist = FMath::Clamp(DistFromCenter / CRC.CentralCraterRadius, 0.f, 1.f);
+    const float NormalizedDist = FMath::Clamp(DistFromCenter / CraterRadius, 0.f, 1.f);
     
     // Rim zone definitions - WIDER rim for visible walls
     const float RimStart = 0.65f;   
@@ -377,7 +378,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     
     // Calculate base rim height with minimum constraint - DRAMATIC rim
     const float MinRimHeight = FMath::Abs(CRC.CentralCraterDepth) * 1.5f; 
-    const float BaseRimHeight = FMath::Max(CRC.CentralCraterRimHeight, MinRimHeight) * 4.0f; // Heightened rim from 3.0x up to 4.0x    
+    const float BaseRimHeight = FMath::Max(CRC.CentralCraterRimHeight, MinRimHeight) * 1.5f; // Adjusted for more realistic slope
     // Add random variation to rim height for natural appearance
     const float RimVariation = FastNoise3D(nX * 0.0005f, nY * 0.0005f, 0.f) * 0.3f;
     const float RandomRimHeight = BaseRimHeight * (1.0f + RimVariation * 0.2f); 
@@ -425,31 +426,24 @@ float FVoxelBiomeGenerators::GetCraterHeight(
 
     // --- CONTINUOUS DETAIL OVERLAYS (No Jumps) ---
 
-    // 2. Add Curved Rim Edge (Pointy Outward/Inward)
+    // --- DETAILS IN THE RIM ZONE ---
     const float EdgeNoise = FastNoise3D(nX * 0.003f, nY * 0.003f, 0.f);
     const float EdgeCurve = FMath::Sin(EdgeNoise * 3.14159f) * 500.f; 
     float EdgeFade = 0.f;
-    if (NormalizedDist >= RimStart && NormalizedDist <= RimEnd) {
-      EdgeFade = (NormalizedDist - RimStart) / (RimEnd - RimStart);
-    } else if (NormalizedDist > RimEnd && NormalizedDist < RimEnd + 0.05f) {
-      EdgeFade = 1.0f - (NormalizedDist - RimEnd) / 0.05f;
-    }
-    CentralHeight += EdgeCurve * FMath::SmoothStep(0.f, 1.f, EdgeFade);
 
-    // 3. Organic Wall Noise (Jagged Rocky Wall)
-    if (NormalizedDist >= RimStart && NormalizedDist <= RimEnd) {
-      const float WallNoise = FastNoise3D(nX * 0.002f, nY * 0.002f, 0.f) * CRC.RimNoiseAmplitude * 0.8f;
-      const float FadeT = (NormalizedDist - RimStart) / (RimEnd - RimStart);
-      const float WallFade = FMath::SmoothStep(0.f, 0.1f, FadeT); // fade from 0 at RimStart
-      CentralHeight += WallNoise * WallFade * FMath::Exp(-FadeT * 10.0f);
-    }
-    
-    // -------------------------------------------------------------------
-    // 4. WALL STRUCTURES: Ledges, Buttresses, and Outcrops (Inner Cliff)
-    // -------------------------------------------------------------------
     if (NormalizedDist >= RimStart && NormalizedDist <= RimEnd) {
       const float RimT = (NormalizedDist - RimStart) / (RimEnd - RimStart);
-      const float Ang = FMath::Atan2(nY, nX);
+
+      // 2. Curved Rim Edge
+      EdgeFade = RimT;
+
+      // 3. Organic Wall Noise (Jagged Rocky Wall)
+      const float WallNoise = FastNoise3D(nX * 0.002f, nY * 0.002f, 0.f) * CRC.RimNoiseAmplitude * 0.8f;
+      const float WallFade = FMath::SmoothStep(0.f, 0.1f, RimT);
+      CentralHeight += WallNoise * WallFade * FMath::Exp(-RimT * 10.0f);
+
+      // 4. WALL STRUCTURES
+      const float Ang = FMath::Atan2(dy, dx); // FIX: Use dy, dx for crater-relative angle
 
       // --- 📌 LEDGES: Flat horizontal shelves on the cliff sides ---
       if ((RimT > 0.20f && RimT < 0.35f) || (RimT > 0.55f && RimT < 0.68f)) {
@@ -476,7 +470,11 @@ float FVoxelBiomeGenerators::GetCraterHeight(
         const float RibFade = FMath::SmoothStep(0.4f, 0.7f, RibNoise);
         CentralHeight += 600.f * RibFade * FMath::Sin(RimT * 3.14159f * 4.0f); // Ribs curving with slope
       }
+    } else if (NormalizedDist > RimEnd && NormalizedDist < RimEnd + 0.05f) {
+      EdgeFade = 1.0f - (NormalizedDist - RimEnd) / 0.05f;
     }
+
+    CentralHeight += EdgeCurve * FMath::SmoothStep(0.f, 1.f, EdgeFade);
 
     // 5. Enhanced Rock Formations at base (Floor-Wall transition)
     const float RockMin = RimStart * 0.75f;
@@ -1025,12 +1023,6 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         }
 
         
-        // Ensure larger islands get lower threshold to merge noise features into a single disc
-        // Without this, large islands would be many small peaks instead of one coherent shape
-        if (CellShardT > 0.5f) {
-            const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
-            Threshold -= FMath::Log2(SizeRatio) * 0.05f;  // Lower threshold for larger islands
-        }
 
 
 

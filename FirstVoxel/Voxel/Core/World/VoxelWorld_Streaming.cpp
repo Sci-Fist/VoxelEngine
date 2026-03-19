@@ -316,6 +316,11 @@ void AVoxelWorld::UpdateChunkStreaming() {
       if (DistSq < SafeRangeDistSq)
         TargetLOD = 0;
 
+      if (TargetLOD != Chunk->LOD) {
+        UE_LOG(LogVoxelWorld, Log,
+               TEXT("VoxelWorld: Chunk (%d,%d,%d) changing LOD from %d to %d"),
+               It.Key.X, It.Key.Y, It.Key.Z, Chunk->LOD, TargetLOD);
+      }
       DesiredLODs.Add(It.Key, TargetLOD);
     }
   }
@@ -419,11 +424,6 @@ void AVoxelWorld::UpdateChunkStreaming() {
         FMath::Abs(Local.X) + FMath::Abs(Local.Y) + FMath::Abs(Local.Z);
     int32 PriorityScore = DistSq;
 
-    // Boost priority for very close chunks (within 2 chunks)
-    if (ManhattanDist <= CloseRange) {
-      PriorityScore =
-          FMath::Max(1, DistSq / 100); // Strong priority boost for close chunks
-    }
 
     SortedQueue.Add(TPair<int32, FIntVector>(PriorityScore, C));
   }

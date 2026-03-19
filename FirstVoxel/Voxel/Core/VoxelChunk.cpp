@@ -228,6 +228,8 @@ void AVoxelChunk::GenerateAsync()
 		DenseChunk = MakeShared<FVoxelDensityChunk>();
 	}
 
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelChunk: GenerateAsync called for (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+
 	// Create generation task with all necessary parameters
 	CurrentTask = MakeShared<FVoxelGeneratorTask>(
 		ChunkCoord,                    // Chunk coordinates for world positioning
@@ -409,7 +411,11 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	
 	// Set biome-specific mesh section names for debugging and profiling
 	FString FlatMeshName = FString::Printf(TEXT("FlatMesh_%s_%s"), *BiomeName, *ChunkCoordStr);
-	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelChunk: ApplyMesh for Chunk %s (LOD %d). Flat=%d verts, Slope=%d verts"), *ChunkCoordStr, LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
+	const FIntVector& TaskCoord = CompletedTask->GetChunkCoord();
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelChunk: ApplyMesh for Chunk (%d,%d,%d) [TaskCoord=(%d,%d,%d)] (LOD %d). Flat=%d verts, Slope=%d verts"), 
+		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, 
+		TaskCoord.X, TaskCoord.Y, TaskCoord.Z, 
+		LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
 	
 	// ── Upload terrain mesh sections ──────────────────────────────────────
 	// Clear existing mesh sections and upload new geometry

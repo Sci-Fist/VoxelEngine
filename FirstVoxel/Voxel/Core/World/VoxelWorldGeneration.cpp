@@ -451,8 +451,7 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
 
 	Chunk->ChunkCoord = Coord;
 	
-	const float SizeInCm = ChunkSize * VoxelSize;
-	Chunk->SetActorLocation(FVector(Coord.X * SizeInCm, Coord.Y * SizeInCm, Coord.Z * SizeInCm));
+	Chunk->SetActorLocation(ChunkCoordToWorld(Coord));
 
 	ConfigureChunk(Chunk);
 
