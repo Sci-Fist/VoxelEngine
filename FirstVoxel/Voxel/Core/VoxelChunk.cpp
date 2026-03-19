@@ -409,9 +409,12 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	
 	// Set biome-specific mesh section names for debugging and profiling
 	FString FlatMeshName = FString::Printf(TEXT("FlatMesh_%s_%s"), *BiomeName, *ChunkCoordStr);
+	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelChunk: ApplyMesh for Chunk %s (LOD %d). Flat=%d verts, Slope=%d verts"), *ChunkCoordStr, LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
+	
 	// ── Upload terrain mesh sections ──────────────────────────────────────
 	// Clear existing mesh sections and upload new geometry
-	ProceduralMesh->ClearAllMeshSections();
+	// PROCEDURAL_COLLISION_FIX: Remove ClearAllMeshSections() to prevent momentary 
+	// frame-blanking or invisibility drops during LOD mesh-uploads.
 	if (BackfaceMesh) BackfaceMesh->ClearAllMeshSections();
 
 	// Section 0: Flats
@@ -622,12 +625,10 @@ void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, 
 	// Safety check: ensure we have valid data and mesh component
 	if (Data.Vertices.Num() == 0 || !IsValid(MeshToUse)) return;
 
-	// Build collision for ALL sections on the main ProceduralMesh at LOD 0/1.
-	// FIX: The old code only built collision for SectionIndex == 0 (flat faces).
-	// Slope/cliff faces (section 1) had NO collision, so the player would fall
-	// through any wall or cliff steeper than the SlopeThreshold. Both sections
-	// on ProceduralMesh need collision; BackfaceMesh never needs it.
-	const bool bBuildCollision = (MeshToUse == ProceduralMesh) && (LOD <= 1);
+	// Build collision for ALL sections on the main ProceduralMesh.
+	// FIX: The old code cut off collision for LOD > 1, making players fall through
+	// terrain at distant loads. Enabling for all LOD fixes fall-through safely.
+	const bool bBuildCollision = (MeshToUse == ProceduralMesh);
 
 	MeshToUse->CreateMeshSection(
 		SectionIndex,

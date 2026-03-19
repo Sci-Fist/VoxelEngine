@@ -1,0 +1,46 @@
+--- MATCH AT LINE 414 ---
+404: 		default: BiomeName = "Mixed";
+405: 	}
+406: 
+407: 	// Generate chunk coordinate string for mesh naming
+408: 	FString ChunkCoordStr = FString::Printf(TEXT("%d_%d_%d"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+409: 	
+410: 	// Set biome-specific mesh section names for debugging and profiling
+411: 	FString FlatMeshName = FString::Printf(TEXT("FlatMesh_%s_%s"), *BiomeName, *ChunkCoordStr);
+412: 	// ── Upload terrain mesh sections ──────────────────────────────────────
+413: 	// Clear existing mesh sections and upload new geometry
+414: 	ProceduralMesh->ClearAllMeshSections();
+415: 	if (BackfaceMesh) BackfaceMesh->ClearAllMeshSections();
+416: 
+417: 	// Section 0: Flats
+418: 	UploadSection(0, Out.FlatMesh, FlatMat, FlatMeshName);
+419: 	
+420: 	// Section 1: Slopes (Outward with physics)
+421: 	UploadSection(1, Out.SlopeMesh, SlopeMat, FString::Printf(TEXT("SlopeMesh_%s"), *ChunkCoordStr));
+422: 
+423: 	// Upload backfaces to dedicated visual-only component (no collision)
+
+
+--- MATCH AT LINE 799 ---
+789: 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWater: Chunk %s emitted %d procedural water vertices (Ocean/Pools)"), 
+790: 		*ChunkCoord.ToString(), Vertices.Num()));
+791: }
+792: 
+793: void AVoxelChunk::ClearMesh()
+794: {
+795: 	// Increment generation ID to invalidate any pending operations
+796: 	++GenerationId;
+797: 	
+798: 	// Clear terrain mesh sections and hide component
+799: 	ProceduralMesh->ClearAllMeshSections();
+800: 	ProceduralMesh->SetVisibility(false); // hide until next ApplyMesh reveals it
+801: 	
+802: 	// Clear water mesh sections and hide component
+803: 	WaterMesh->ClearAllMeshSections();
+804: 	WaterMesh->SetVisibility(false);
+805: 	
+806: 	// Reset water simulation data
+807: 	WaterData.Reset();
+808: 	
+
+

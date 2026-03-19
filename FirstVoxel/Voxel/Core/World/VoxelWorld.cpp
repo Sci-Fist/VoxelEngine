@@ -334,20 +334,36 @@ void AVoxelWorld::Tick(float DeltaTime) {
       FCollisionShape SweepCap = FCollisionShape::MakeSphere(30.f);
 
       bool bHit = GetWorld()->SweepSingleByChannel(
-          GroundHit, StartPos, EndPos, FQuat::Identity, ECC_WorldStatic,
+          GroundHit, StartPos, EndPos, FQuat::Identity, ECC_Visibility,
           SweepCap, QP);
 
       if (!bHit) {
         // FALLBACK: If sphere sweep misses, try a simple line trace.
-        // Sphere sweep can fail if the sweep shape starts penetrating or grazing
-        // steep faces.
         bHit = GetWorld()->LineTraceSingleByChannel(
-            GroundHit, StartPos, EndPos, ECC_WorldStatic, QP);
+            GroundHit, StartPos, EndPos, ECC_Visibility, QP);
         if (bHit) {
           UE_LOG(LogVoxelWorld, Log,
                  TEXT("VoxelWorld: Sphere sweep missed, but Line trace hit at "
                       "Z=%.1f"),
                  GroundHit.ImpactPoint.Z);
+        } else {
+          // VERBOSE LOGGING: Diagnose why trace missed even though chunk is loaded
+          UE_LOG(LogVoxelWorld, Warning, 
+                 TEXT("VoxelWorld: ADVANCED TRACE MISS! StartPos=%s EndPos=%s"),
+                 *StartPos.ToString(), *EndPos.ToString());
+
+          const FIntVector SpawnCoord = WorldToChunkCoord(StartPos);
+          if (AVoxelChunk** ChunkPtr = LoadedChunks.Find(SpawnCoord)) {
+              if (AVoxelChunk* Chunk = *ChunkPtr) {
+                  UE_LOG(LogVoxelWorld, Log, 
+                         TEXT("VoxelWorld: StartPos is inside chunk %s which is FOUND in LoadedChunks. CollisionReady=%d"),
+                         *SpawnCoord.ToString(), Chunk->IsCollisionReady() ? 1 : 0);
+              }
+          } else {
+              UE_LOG(LogVoxelWorld, Warning, 
+                     TEXT("VoxelWorld: StartPos occupies chunk %s which is MISSING from LoadedChunks!"),
+                     *SpawnCoord.ToString());
+          }
         }
       }
 

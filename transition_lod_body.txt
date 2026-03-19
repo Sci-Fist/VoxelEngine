@@ -1,0 +1,15 @@
+void AVoxelChunk::TransitionToLOD(int32 NewLOD)
+{
+	if (NewLOD == LOD) return;
+	if (bGenerating) return; // already mid-transition; let it finish
+
+	PreviousMesh        = MeshOutput;
+	TargetLOD           = NewLOD;
+	MeshState           = EChunkMeshState::Transitioning;
+	TransitionProgress  = 0.0f;
+	TransitionStartTime = GetWorld()->GetTimeSeconds();
+
+	LOD = NewLOD;
+	SetActorTickEnabled(true); // Enable tick to drive transition progress
+	GenerateAsync();
+}

@@ -1,0 +1,25 @@
+--- MATCH AT LINE 618 ---
+616: }
+617: 
+618: void AVoxelChunk::UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName, UProceduralMeshComponent* TargetMesh)
+619: {
+620: 	UProceduralMeshComponent* MeshToUse = TargetMesh ? TargetMesh : ProceduralMesh;
+621: 
+622: 	// Safety check: ensure we have valid data and mesh component
+623: 	if (Data.Vertices.Num() == 0 || !IsValid(MeshToUse)) return;
+624: 
+625: 	// Build collision for ALL sections on the main ProceduralMesh at LOD 0/1.
+626: 	// FIX: The old code only built collision for SectionIndex == 0 (flat faces).
+627: 	// Slope/cliff faces (section 1) had NO collision, so the player would fall
+628: 	// through any wall or cliff steeper than the SlopeThreshold. Both sections
+629: 	// on ProceduralMesh need collision; BackfaceMesh never needs it.
+630: 	const bool bBuildCollision = (MeshToUse == ProceduralMesh) && (LOD <= 1);
+631: 
+632: 	MeshToUse->CreateMeshSection(
+633: 		SectionIndex,
+634: 		Data.Vertices,
+635: 		Data.Triangles,
+636: 		Data.Normals,
+637: 		Data.UVs,
+
+

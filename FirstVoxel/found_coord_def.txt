@@ -1,0 +1,11 @@
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorld.cpp:608: FIntVector AVoxelWorld::WorldToChunkCoord(const FVector &WorldPos) const {
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorld.h:241: FIntVector WorldToChunkCoord(const FVector &WorldPos) const;
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:193: FIntVector Origin = WorldToChunkCoord(Anchor);
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:283: const FIntVector SpawnCoord = WorldToChunkCoord(Anchor);
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:770: const FIntVector SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, TargetZ));
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldGeneration.cpp:771: const FIntVector GroundCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, Surface));
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldModification.cpp:64: // FIX: Use WorldToChunkCoord which correctly accounts for GetActorLocation()
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldModification.cpp:68: const FIntVector MinChunkCoord = WorldToChunkCoord(WorldPosition - FVector(Radius));
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorldModification.cpp:69: const FIntVector MaxChunkCoord = WorldToChunkCoord(WorldPosition + FVector(Radius));
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorld_Streaming.cpp:66: const FIntVector PlayerChunkCoord = WorldToChunkCoord(CurrentPos);
+c:\Users\Butch\Documents\Unreal Projects\FirstVoxel\Source\FirstVoxel\Voxel\Core\World\VoxelWorld_Streaming.cpp:70: FIntVector PlayerCoord = WorldToChunkCoord(PlayerPos);
