@@ -203,10 +203,11 @@ float FVoxelBiomeGenerators::GetMesaHeight(
 //  - Secondary craters appear in surrounding area with natural distribution
 //  - Distance-based falloff creates radial pattern from center
 //  - Steep rim walls for dramatic appearance
+//  - Flat crater floor for proper impact basin
 //  - Natural rim erosion for realistic weathering
 //
 //  HIERARCHY:
-//  1. Central Crater: Large primary impact with deep basin and high rim
+//  1. Central Crater: Large primary impact with deep flat basin and high rim
 //  2. Secondary Craters: Smaller impacts around the primary crater
 //  3. Tertiary Craters: Very small impacts in the surrounding area
 // ============================================================
@@ -231,31 +232,35 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     // Central crater shape calculation
     const float NormalizedDist = FMath::Clamp(DistFromCenter / CRC.CentralCraterRadius, 0.f, 1.f);
     
-    // Rim profile: steep transition from plains to rim peak
-    const float RimCenter = 0.12f;
-    const float RimWidth = CRC.RimWidth;
-    const float RimT = FMath::Max(0.f, 1.f - FMath::Square((NormalizedDist - RimCenter) / RimWidth));
-    
-    // Rim height with erosion effect
-    const float ErodedRimHeight = CRC.CentralCraterRimHeight * (1.f - CRC.RimErosion * 0.5f);
-    const float RimPeak = BasePlains + ErodedRimHeight;
-    
-    // Floor depth
-    const float FloorStart = 0.17f;
-    const float WallEnd = 0.25f;
-    const float FloorT = FMath::SmoothStep(FloorStart, WallEnd, FMath::Min(NormalizedDist, WallEnd));
-    const float FloorDepth = BasePlains + CRC.CentralCraterDepth * FloorT;
-    
-    // Rim noise for natural irregularity
-    const float RimNoise = FastNoise3D(nX * 0.0012f, nY * 0.0012f, 0.f) * CRC.RimNoiseAmplitude;
+    // CRATER SHAPE: Create proper impact crater profile
+    // 0.0 = center (deep floor), 1.0 = far outside crater
     
     float CentralHeight;
-    if (NormalizedDist <= RimCenter) {
-      const float t = FMath::SmoothStep(0.f, RimCenter, NormalizedDist);
-      CentralHeight = FMath::Lerp(BasePlains, RimPeak + RimNoise * t, t);
+    
+    // Rim zone: steep rise from plains to rim peak
+    const float RimStart = 0.08f;
+    const float RimEnd = 0.15f;
+    if (NormalizedDist < RimStart) {
+      // Inside rim: flat floor or gentle slope to center
+      const float FloorDepth = BasePlains + CRC.CentralCraterDepth;
+      CentralHeight = FloorDepth;
+    } else if (NormalizedDist < RimEnd) {
+      // Rim wall: steep transition from floor to rim peak
+      const float RimT = FMath::SmoothStep(RimStart, RimEnd, NormalizedDist);
+      const float RimPeak = BasePlains + CRC.CentralCraterRimHeight;
+      const float FloorDepth = BasePlains + CRC.CentralCraterDepth;
+      CentralHeight = FMath::Lerp(FloorDepth, RimPeak, RimT);
     } else {
-      const float t = FMath::SmoothStep(RimCenter, WallEnd, FMath::Min(NormalizedDist, WallEnd));
-      CentralHeight = FMath::Lerp(RimPeak + RimNoise * t, FloorDepth, t);
+      // Outside rim: gradual transition back to plains
+      const float PlainsT = FMath::SmoothStep(RimEnd, 0.25f, NormalizedDist);
+      const float RimPeak = BasePlains + CRC.CentralCraterRimHeight;
+      CentralHeight = FMath::Lerp(RimPeak, BasePlains, PlainsT);
+    }
+    
+    // Add rim noise for natural irregularity
+    const float RimNoise = FastNoise3D(nX * 0.0012f, nY * 0.0012f, 0.f) * CRC.RimNoiseAmplitude;
+    if (NormalizedDist < 0.25f) {
+      CentralHeight += RimNoise * FMath::Exp(-NormalizedDist * 4.0f); // Noise fades toward rim edge
     }
     
     // Apply central crater with distance-based blending
@@ -263,7 +268,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   }
 
   // 2. SECONDARY CRATERS - scattered around central area
-  if (DistFromCenter > CRC.CentralCraterRadius * 0.5f) {
+  if (DistFromCenter > CRC.CentralCraterRadius * 0.3f) {
     // Secondary crater placement noise
     const float SecondaryFreq = CRC.ImpactFrequency * 2.5f;
     float SecondaryImpact = FastNoise3D(nX * SecondaryFreq, nY * SecondaryFreq, 300.f);
@@ -282,28 +287,32 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     if (SecondaryNorm > 0.1f) {
       // Calculate secondary crater properties
       const float SecondarySize = FMath::Lerp(1500.f, CRC.SecondaryCraterMaxRadius, SecondaryNorm);
-      const float SecondaryDepth = FMath::Lerp(-2000.f, -4000.f, SecondaryNorm);
-      const float SecondaryRimHeight = FMath::Lerp(2500.f, 4500.f, SecondaryNorm);
+      const float SecondaryDepth = FMath::Lerp(-1500.f, -3500.f, SecondaryNorm);
+      const float SecondaryRimHeight = FMath::Lerp(2000.f, 4000.f, SecondaryNorm);
       
-      // Distance from secondary crater center
-      const float SecondaryDist = DistFromCenter * 0.8f + SecondaryNorm * 5000.f;
+      // Distance from secondary crater center (offset to avoid overlap)
+      const float SecondaryDist = DistFromCenter * 0.9f + SecondaryNorm * 3000.f;
       const float SecondaryNormalizedDist = FMath::Clamp(SecondaryDist / SecondarySize, 0.f, 1.f);
       
-      // Secondary rim profile
-      const float SecondaryRimCenter = 0.15f;
-      const float SecondaryRimWidth = CRC.RimWidth * 1.2f;
-      const float SecondaryRimT = FMath::Max(0.f, 1.f - FMath::Square((SecondaryNormalizedDist - SecondaryRimCenter) / SecondaryRimWidth));
-      
-      const float SecondaryRimPeak = BasePlains + SecondaryRimHeight;
-      const float SecondaryFloorDepth = BasePlains + SecondaryDepth;
-      
+      // Secondary crater shape
       float SecondaryHeight;
-      if (SecondaryNormalizedDist <= SecondaryRimCenter) {
-        const float t = FMath::SmoothStep(0.f, SecondaryRimCenter, SecondaryNormalizedDist);
-        SecondaryHeight = FMath::Lerp(BasePlains, SecondaryRimPeak, t);
+      const float SecondaryRimStart = 0.10f;
+      const float SecondaryRimEnd = 0.18f;
+      
+      if (SecondaryNormalizedDist < SecondaryRimStart) {
+        // Flat floor
+        SecondaryHeight = BasePlains + SecondaryDepth;
+      } else if (SecondaryNormalizedDist < SecondaryRimEnd) {
+        // Rim wall
+        const float RimT = FMath::SmoothStep(SecondaryRimStart, SecondaryRimEnd, SecondaryNormalizedDist);
+        const float RimPeak = BasePlains + SecondaryRimHeight;
+        const float FloorDepth = BasePlains + SecondaryDepth;
+        SecondaryHeight = FMath::Lerp(FloorDepth, RimPeak, RimT);
       } else {
-        const float t = FMath::SmoothStep(SecondaryRimCenter, 0.3f, FMath::Min(SecondaryNormalizedDist, 0.3f));
-        SecondaryHeight = FMath::Lerp(SecondaryRimPeak, SecondaryFloorDepth, t);
+        // Transition back to plains
+        const float PlainsT = FMath::SmoothStep(SecondaryRimEnd, 0.30f, SecondaryNormalizedDist);
+        const float RimPeak = BasePlains + SecondaryRimHeight;
+        SecondaryHeight = FMath::Lerp(RimPeak, BasePlains, PlainsT);
       }
       
       // Blend secondary crater with existing terrain
@@ -313,23 +322,23 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   }
 
   // 3. TERTIARY CRATERS - very small impacts in surrounding area
-  if (DistFromCenter > CRC.CentralCraterRadius) {
+  if (DistFromCenter > CRC.CentralCraterRadius * 0.8f) {
     const float TertiaryFreq = CRC.ImpactFrequency * 8.0f;
     float TertiaryImpact = FastNoise3D(nX * TertiaryFreq, nY * TertiaryFreq, 400.f);
     
     const float TertiaryThreshold = 0.6f;
     if (TertiaryImpact > TertiaryThreshold) {
-      const float TertiaryDepth = -800.f - (TertiaryImpact * 400.f);
-      const float TertiarySize = 800.f + (TertiaryImpact * 1200.f);
+      const float TertiaryDepth = -600.f - (TertiaryImpact * 300.f);
+      const float TertiarySize = 600.f + (TertiaryImpact * 1000.f);
       
-      const float TertiaryDist = DistFromCenter * 1.2f;
+      const float TertiaryDist = DistFromCenter * 1.1f;
       const float TertiaryNormalizedDist = FMath::Clamp(TertiaryDist / TertiarySize, 0.f, 1.f);
       
       // Simple bowl shape for tertiary craters
       const float BowlShape = FMath::Pow(1.f - TertiaryNormalizedDist, 2.f);
       const float TertiaryHeight = BasePlains + (TertiaryDepth * BowlShape);
       
-      TotalHeight = FMath::Lerp(TotalHeight, TertiaryHeight, 0.15f);
+      TotalHeight = FMath::Lerp(TotalHeight, TertiaryHeight, 0.1f);
     }
   }
 
@@ -341,7 +350,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
 
   // Apply floor detail only where terrain is below base plains (crater areas)
   if (TotalHeight < BasePlains) {
-    TotalHeight += FloorNoise * 0.3f; // Subtle floor texture
+    TotalHeight += FloorNoise * 0.2f; // Subtle floor texture
   }
 
   return TotalHeight;

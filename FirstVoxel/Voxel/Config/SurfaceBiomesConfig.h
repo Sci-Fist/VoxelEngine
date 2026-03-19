@@ -1,8 +1,5 @@
-
 // =============================================================================
-
 // SurfaceBiomesConfig.h
-
 // =============================================================================
 //
 
@@ -327,190 +324,170 @@ struct FMesaBiomeConfig
 
 
 // ============================================================
-
 //  SURFACE — CRATER BIOME
-
 // ============================================================
-
 //
 // Impact crater generation creates depressions with raised rims using a
-// two-zone height profile: outer rim (elevated) and inner floor (depressed).
-// The algorithm uses a low-frequency placement noise to determine crater
-// centers, then applies smooth transitions to avoid Surface Nets artifacts.
-
+// hierarchical system: one large central crater with smaller surrounding impacts.
+// The algorithm uses distance-based falloff and multiple noise layers to create
+// a natural impact crater field with dramatic central features.
 //
-// ── CRATER SHAPE PARAMETERS ───────────────────────────────────────────────
+// ── HIERARCHICAL CRATER SYSTEM ─────────────────────────────────────────────
 //
-
-//  Frequency:          Controls crater density (inverse of typical spacing).
-//                      0.00002 = ~1 crater per 50 km² (rare, large)
-//                      0.00005 = ~1 crater per 20 km² (moderate)
-//                      0.00010 = frequent small craters (every few km)
-//                      ↓ Lower = rarer but larger craters
-
-//                      ↑ Higher = more craters but smaller footprint
+//  Central Crater:   Large primary impact with deep basin and high rim
+//  Secondary Craters: Smaller impacts around the primary crater
+//  Tertiary Craters:  Very small impacts in the surrounding area
 //
-//  Depth:              Crater floor depth relative to base plains (NEGATIVE cm).
-
-//                      -1000 to -3000 = shallow basins (10-30m deep)
-//                      -4500 to -8000 = deep impacts (45-80m deep)
-//                      -10000+ = extremely deep (can cause terrain discontinuities)
-
-//                      NOTE: Combined with RimHeight, this controls total relief.
-
+// ── CENTRAL CRATER PARAMETERS ──────────────────────────────────────────────
 //
-//  RimHeight:          Raised rim elevation above base plains (POSITIVE cm).
-//                      2000-4000 = modest rim (20-40m)
-
-//                      5000-8000 = dramatic crater walls (50-80m)
-//                      Should be similar magnitude to |Depth| for balanced relief.
+//  CentralCraterRadius:    Radius of the main central crater (cm)
+//                          10000-20000 = 100-200m diameter (recommended)
+//                          Controls the size of the dominant central feature
 //
-//  RimWidth:           Transition width from plains to rim peak (normalized 0-1).
-//                      THIS IS THE KEY PARAMETER FOR WALL VISIBILITY.
-//                      0.05-0.15 = very steep walls (sharp, dramatic craters)
-
-//                      0.20-0.40 = gentle slopes (subtle basins)
-//                      Smaller values create narrow transition zones → steeper visible walls.
-//                      Larger values create broad slopes → walls appear gradual/hidden.
+//  CentralCraterDepth:     Depth of central crater floor (NEGATIVE cm)
+//                          -5000 to -8000 = 50-80m deep (recommended)
+//                          Creates the main basin for the central impact
 //
-//  RimNoiseAmplitude:  Vertical irregularity added to rim edge (cm).
-//                      50-150 = smooth rim (clean edges)
-
-//                      200-400 = jagged rim (natural erosion look)
-//                      500+ = pillar spikes at zone boundaries (artifact)
-
-//                      Keep ≤ 200 for clean crater walls without stalagmite artifacts.
+//  CentralCraterRimHeight: Height of central crater rim (POSITIVE cm)
+//                          6000-8000 = 60-80m high walls (recommended)
+//                          Creates dramatic central crater walls
 //
-// ── CRATER DETAIL & DISTORTION ─────────────────────────────────────────────
+// ── SECONDARY CRATER PARAMETERS ────────────────────────────────────────────
 //
-//  ShapeDistortion:    Low-frequency warping of crater circularity (0-1).
-
-//                      0.0 = perfect circles (artificial)
-//                      0.1-0.3 = natural organic shapes (recommended)
-//                      >0.5 = chaotic blobs that blend poorly with adjacent biomes.
-
+//  SecondaryCraterDensity: Density of smaller craters around central (0-1)
+//                          0.2-0.5 = sparse to moderate distribution
+//                          Controls how many smaller impacts appear
 //
-//  BorderIrregularity: Additional edge noise (0-1). Works with ShapeDistortion.
-//                      Keep total (ShapeDistortion + BorderIrregularity) < 0.5
-
-//                      to maintain clean biome transitions.
+//  SecondaryCraterMaxRadius: Maximum radius for secondary craters (cm)
+//                            3000-6000 = 30-60m diameter (recommended)
+//                            Limits the size of surrounding impacts
 //
-//  BuildingNoiseFrequency / Amplitude:  Floor surface detail (small-scale height variation).
-//                      Frequency: 0.001-0.003 (typical)
-//                      Amplitude: 100-300 cm (subtle floor roughness)
+// ── RIM PARAMETERS ─────────────────────────────────────────────────────────
 //
-//  CraterSizeMultiplier: Scales crater diameter.
-//                      1.0 = default size (as determined by placement noise)
-//                      2.0 = 2x larger craters (cover more area)
-
-//                      0.5 = half-size craters (more numerous)
-//                      NOTE: Larger values require lower Frequency to avoid overlap.
+//  RimWidth:             Transition width from plains to rim peak (normalized 0-1)
+//                        0.08-0.15 = steep walls (recommended for dramatic craters)
+//                        0.15-0.25 = moderate slopes
+//                        0.25+ = gentle slopes (subtle basins)
 //
-// ── PLACEMENT & OVERRIDE ───────────────────────────────────────────────────
+//  RimNoiseAmplitude:    Vertical irregularity added to rim edge (cm)
+//                        100-250 = natural rim detail (recommended)
+//                        300+ = jagged rim (may cause artifacts)
 //
-//  ImpactThreshold:    Placement field threshold (normalized -1 to 1).
-
-//                      Controls how much of the placement noise field qualifies
-//                      as crater territory. Lower = more area considered for craters.
-//                      Typical: -0.8 to -0.5
-//                      (Advanced: adjust only if you understand the placement curve)
+//  RimErosion:           Natural weathering effect on crater rims (0-1)
+//                        0.0 = sharp, artificial rims
+//                        0.2-0.5 = natural weathered appearance
 //
-//  bForceCraterAtOrigin: If true, boosts crater weight at world anchor (0,0).
-
-//                        Useful for ensuring player spawns in a crater basin.
-//                        Coordinate offset controlled by ForcedCraterCenter.
+// ── DISTRIBUTION CONTROL ───────────────────────────────────────────────────
 //
-
-//  ForcedCraterCenter:  World XY offset for forced crater placement (cm).
-
-//                       Default (0,0) centers on world origin.
-//                       Set to player spawn coordinates for guaranteed crater spawn.
+//  CraterDistribution:   Radial pattern strength (0-1)
+//                        0.0 = random distribution
+//                        0.7-0.9 = strong radial pattern from center
+//                        1.0 = perfect radial symmetry
+//
+//  ImpactFrequency:      Controls overall crater density
+//                        0.00001-0.00005 = rare, large craters
+//                        0.0001-0.0003 = moderate density
 //
 // ── TUNING WORKFLOW ────────────────────────────────────────────────────────
-//  1. Start with: Depth=-2500, RimHeight=3000, RimWidth=0.20, RimNoiseAmplitude=100
-//  2. Adjust RimWidth to control wall steepness (lower = steeper)
-//  3. Tune Depth/RimHeight ratio for desired relief (keep similar magnitudes)
-//  4. Reduce RimNoiseAmplitude if you see pillar spikes at rim edges
-//  5. Adjust Frequency/CraterSizeMultiplier to control crater size distribution
-//  6. Use ShapeDistortion/BorderIrregularity for natural crater shapes (<0.3 total)
+//  1. Set CentralCraterRadius for desired main crater size (15000 = 150m)
+//  2. Adjust CentralCraterDepth/RimHeight for dramatic relief (6000/-7000)
+//  3. Set RimWidth to 0.10-0.15 for steep, visible walls
+//  4. Configure SecondaryCraterDensity for surrounding impacts (0.3)
+//  5. Use CraterDistribution for radial pattern (0.8)
+//  6. Fine-tune RimErosion for natural appearance (0.3)
 //
 // ── COMMON ISSUES ──────────────────────────────────────────────────────────
-//  • No visible crater walls → RimWidth too high (>0.4) → reduce to 0.15-0.25
-//  • Pillar spikes at rim → RimNoiseAmplitude too high (>300) → reduce to 100-150
-//  • Craters too large → CraterSizeMultiplier too high or Frequency too low
-//  • Chaotic crater shapes → ShapeDistortion + BorderIrregularity > 0.5 → reduce
-
-//  • Terrain discontinuities → Depth too extreme (< -10000) → moderate to -4500
+//  • No central crater → CentralCraterRadius too small or depth too shallow
+//  • Walls too gentle → Reduce RimWidth to 0.10-0.15
+//  • Too many small craters → Reduce SecondaryCraterDensity
+//  • Unnatural distribution → Increase CraterDistribution for radial pattern
+//  • Rim artifacts → Reduce RimNoiseAmplitude to 100-200
 //
 // ── ALGORITHM NOTES ───────────────────────────────────────────────────────
-
-//  The crater height function uses a normalized depth index (0=plains, 1=center).
-//  Rim profile: parabolic falloff centered at RimCenter (0.12) with RimWidth.
-//  Floor profile: SmoothStep from RimCenter to WallEnd (0.25) with FloorSlope.
-//  All transitions are C1-continuous to prevent Surface Nets vertex pillars.
+//  Uses distance-based falloff from world center to create hierarchical crater
+//  system. Central crater dominates near origin, secondary craters appear in
+//  surrounding area with natural distribution patterns.
 // =============================================================================
 USTRUCT(BlueprintType)
 struct FCraterBiomeConfig
 {
     GENERATED_BODY()
 
+    // Central Crater Configuration
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
+    float CentralCraterRadius = 25000.f;  // Increased from 15000 for larger central crater
 
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float Frequency = 0.00002f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
+    float CentralCraterDepth = -5000.f;  // Reduced depth for more natural crater
 
-// IMPACT CRATER CONFIGURATION: Dramatic impact basins with high rims
-// Depth: 45m deep for substantial impact basins
-// RimHeight: 55m high walls for dramatic crater rims
-// RimWidth: 22% transition zone for visible, steep walls
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float Depth = -4500.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
+    float CentralCraterRimHeight = 4000.f;  // Reduced rim height for less extreme walls
 
-// High rim walls for dramatic crater appearance
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float RimHeight = 5500.f;
+    // Secondary Crater Configuration
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Secondary Craters")
+    float SecondaryCraterDensity = 0.6f;  // Increased from 0.35 for more surrounding craters
 
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float ImpactThreshold = -0.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Secondary Craters")
+    float SecondaryCraterMaxRadius = 8000.f;  // Increased from 5000 for larger secondary craters
 
-// Moderate noise amplitude for natural rim detail without artifacts
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float RimNoiseAmplitude = 150.f;
+    // Rim Configuration
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rim")
+    float RimWidth = 0.18f;  // Increased from 0.12 for more gradual rim transition
 
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float FloorNoiseAmplitude = 300.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rim")
+    float RimNoiseAmplitude = 120.f;  // Reduced from 180 for smoother rim
 
-// Better transition zone for visible crater walls
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float RimWidth = 0.22f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rim")
+    float RimErosion = 0.25f;  // Reduced from 0.35 for less weathered appearance
 
+    // Distribution Control
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Distribution")
+    float CraterDistribution = 0.7f;  // Reduced from 0.85 for more natural distribution
 
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float FloorSlope = 0.60f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Distribution")
+    float ImpactFrequency = 0.00008f;  // Increased from 0.00003 for more frequent impacts
 
-// Moderate distortion for natural crater shapes
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float ShapeDistortion = 0.15f;
+    // Legacy compatibility parameters
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float Depth = -4500.f;
 
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float BorderIrregularity = 0.20f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float RimHeight = 5500.f;
 
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float BuildingNoiseFrequency = 0.0015f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float Frequency = 0.00002f;
 
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float BuildingNoiseAmplitude = 350.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float ImpactThreshold = -0.5f;
 
-// Default size multiplier for appropriately sized craters
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-float CraterSizeMultiplier = 3.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float FloorNoiseAmplitude = 300.f;
 
-/** If true, forces a crater biome boost at the world origin so players always spawn in a crater basin. */
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-bool bForceCraterAtOrigin = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float FloorSlope = 0.60f;
 
-/** Coordinate offset anchor location to center the forced crater boost over (e.g., spawn coordinates). */
-UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Craters")
-FVector2D ForcedCraterCenter = FVector2D(0.f, 0.f);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float ShapeDistortion = 0.15f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float BorderIrregularity = 0.20f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float BuildingNoiseFrequency = 0.0015f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float BuildingNoiseAmplitude = 350.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    float CraterSizeMultiplier = 3.0f;
+
+    /** If true, forces a crater biome boost at the world origin so players always spawn in a crater basin. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    bool bForceCraterAtOrigin = true;
+
+    /** Coordinate offset anchor location to center the forced crater boost over (e.g., spawn coordinates). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
+    FVector2D ForcedCraterCenter = FVector2D(0.f, 0.f);
 };
 
 // ============================================================
