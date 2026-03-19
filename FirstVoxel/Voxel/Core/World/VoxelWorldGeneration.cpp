@@ -65,39 +65,9 @@ void AVoxelWorld::GenerateWorldDeferred()
 	// 0. Reconcile existing chunks to avoid "stacking" - MUST run on game thread
 	DiscoverExistingChunks();
 
-	// 1. Integrated Smart Area Search - moved to async task
-	TWeakObjectPtr<AVoxelWorld> WeakThis(this);
-	
-	// Use async task to prevent main thread blocking
-	Async(EAsyncExecution::ThreadPool, [WeakThis]()
-	{
-		AVoxelWorld* Self = WeakThis.Get();
-		if (!Self || Self->bShutdown) return;
-
-		// Heavy computation moved to background thread
-		Self->PerformWorldDiscoveryAndBoundsCalculation();
-		
-		// Return to game thread to finalize setup
-		AsyncTask(ENamedThreads::GameThread, [WeakThis]()
-		{
-			AVoxelWorld* Self = WeakThis.Get();
-			if (!Self || Self->bShutdown) return;
-			
-			Self->FinalizeGenerationSetup();
-		});
-	});
-}
-
-void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
-{
-	if (!GetWorld() || bShutdown) return;
-
-	// Distance to jump between world seeds to avoid overlap
-	float WorldRadius = RenderDistanceXY * ChunkSize * VoxelSize;
-	float JumpStep = WorldRadius * 3.f; 
-
+	// 1. World conflict detection - MUST run on game thread (TActorIterator requirement)
 	FVector CandidatePos = GetActorLocation();
-
+	
 	// Prioritise centering generation on the PlayerStart to accurately match Play Mode centering
 	TArray<AActor*> PlayerStarts;
 	UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PlayerStarts);
@@ -152,6 +122,33 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Relocated to suitable area at %s"), *CandidatePos.ToString());
 	}
 	SpawnTargetPos = CandidatePos;
+
+	// 1. Integrated Smart Area Search - moved to async task
+	TWeakObjectPtr<AVoxelWorld> WeakThis(this);
+	
+	// Use async task to prevent main thread blocking
+	Async(EAsyncExecution::ThreadPool, [WeakThis]()
+	{
+		AVoxelWorld* Self = WeakThis.Get();
+		if (!Self || Self->bShutdown) return;
+
+		// Heavy computation moved to background thread
+		Self->PerformWorldDiscoveryAndBoundsCalculation();
+		
+		// Return to game thread to finalize setup
+		AsyncTask(ENamedThreads::GameThread, [WeakThis]()
+		{
+			AVoxelWorld* Self = WeakThis.Get();
+			if (!Self || Self->bShutdown) return;
+			
+			Self->FinalizeGenerationSetup();
+		});
+	});
+}
+
+void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
+{
+	if (!GetWorld() || bShutdown) return;
 
 	// 3. Ensure DataMap is initialized (critical for editor calls)
 	if (!bInitialized)
