@@ -34,7 +34,7 @@
 // Fill-level constants
 // ---------------------------------------------------------------------------
 static constexpr uint8 WATER_EMPTY  = 0;
-static constexpr uint8 WATER_FULL   = 64;
+static constexpr uint8 WATER_FULL   = 8;
 static constexpr uint8 WATER_SOURCE = 255;   // permanent — never drained
 
 // ---------------------------------------------------------------------------

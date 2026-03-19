@@ -6,79 +6,60 @@
 /**
  * FVoxelChunkManager
  *
- * World Access Layer for managing sparse dense density buffers across loaded
+ * World access layer for managing sparse dense density buffers across loaded
  * chunk grids.
  *
- * This manager provides a centralized interface for accessing and managing
- * FVoxelDensityChunk instances that store scalar density values for smooth
- * Surface Nets interpolation. It implements a lazy allocation pattern where
- * chunks are created on-demand when requested.
+ * Provides a centralized TMap from chunk coordinates to FVoxelDensityChunk
+ * instances. Chunks are allocated lazily on first access and freed when
+ * Clear() is called or the manager is destroyed.
  *
  * THREAD SAFETY:
- * - All public methods are thread-safe and can be called from any thread
- * - Internal TMap operations are protected by the manager's design
- * - Chunk allocation is atomic and thread-safe
+ * - NOT thread-safe. All methods must be called from the game thread.
+ * - TMap is not safe for concurrent reads + writes.
+ * - Background generation tasks must not call GetOrCreateChunk() directly;
+ *   they receive a pre-allocated TSharedPtr from ConfigureChunk() on the GT.
+ *
+ * USAGE PATTERN:
+ *   AVoxelWorld::ConfigureChunk() calls GetOrCreateChunk() on the game thread,
+ *   stores the result in AVoxelChunk::DenseChunk (TSharedPtr), and passes it
+ *   to the background FVoxelGeneratorTask. The task reads from the shared
+ *   pointer without calling this manager directly.
  *
  * MEMORY MANAGEMENT:
- * - Uses TSharedPtr for automatic memory management of density chunks
- * - Chunks are reference-counted and automatically cleaned up when no longer
- * referenced
- * - Clear() method provides explicit cleanup when needed
- *
- * PERFORMANCE CHARACTERISTICS:
- * - O(log n) lookup time for existing chunks (TMap red-black tree)
- * - O(log n) insertion time for new chunks
- * - Memory overhead: ~16 bytes per chunk entry in the map
- * - Chunks are allocated only when needed (lazy initialization)
+ * - Uses TSharedPtr for automatic lifetime management of density chunks.
+ * - Chunks are reference-counted: alive as long as AVoxelChunk holds a ref.
+ * - Clear() releases all map references; chunks kept alive by chunks survive.
  */
-struct FVoxelChunkManager {
-  /** Active dense scalar buffers indexed by chunk coordinates (e.g.,
-   * FIntVector(0,0,0)). */
-  TMap<FIntVector, TSharedPtr<FVoxelDensityChunk>> DenseChunks;
+struct FVoxelChunkManager
+{
+    /** Active dense scalar buffers indexed by chunk coordinate. */
+    TMap<FIntVector, TSharedPtr<FVoxelDensityChunk>> DenseChunks;
 
-  /**
-   * Returns the Density Chunk at the specified coordinate, allocating a new one
-   * if not present.
-   *
-   * This method implements lazy allocation - if a chunk doesn't exist at the
-   * given coordinate, a new FVoxelDensityChunk is created, initialized with the
-   * specified grid size, and stored in the internal map before being returned.
-   *
-   * @param Coord     The chunk coordinate in grid space (e.g.,
-   * FIntVector(0,0,0))
-   * @param GridSize  The size of the grid for the new chunk (number of voxels
-   * per side)
-   * @return          Shared pointer to the existing or newly created density
-   * chunk
-   *
-   * @note Thread-safe: Multiple threads can call this method simultaneously
-   * @note Memory: Returns a shared pointer that automatically manages chunk
-   * lifetime
-   * @note Performance: O(log n) lookup, O(log n) insertion for new chunks
-   */
-  TSharedPtr<FVoxelDensityChunk> GetOrCreateChunk(const FIntVector &Coord,
-                                                  int32 GridSize) {
-    if (TSharedPtr<FVoxelDensityChunk> *Ptr = DenseChunks.Find(Coord)) {
-      return *Ptr;
+    /**
+     * Returns the density chunk at Coord, allocating one if none exists.
+     *
+     * GAME-THREAD ONLY. Do not call from background tasks.
+     *
+     * @param Coord     Chunk coordinate (e.g. FIntVector(0,0,0)).
+     * @param GridSize  Voxels per side for a newly allocated chunk.
+     * @return          Shared pointer to the existing or newly created chunk.
+     */
+    TSharedPtr<FVoxelDensityChunk> GetOrCreateChunk(const FIntVector& Coord, int32 GridSize)
+    {
+        if (TSharedPtr<FVoxelDensityChunk>* Ptr = DenseChunks.Find(Coord))
+            return *Ptr;
+
+        TSharedPtr<FVoxelDensityChunk> NewChunk = MakeShared<FVoxelDensityChunk>();
+        NewChunk->Init(GridSize);
+        DenseChunks.Add(Coord, NewChunk);
+        return NewChunk;
     }
 
-    TSharedPtr<FVoxelDensityChunk> NewChunk = MakeShared<FVoxelDensityChunk>();
-    NewChunk->Init(GridSize);
-    DenseChunks.Add(Coord, NewChunk);
-    return NewChunk;
-  }
-
-  /**
-   * Clears all dense caches and removes all managed chunks.
-   *
-   * This method empties the internal TMap, releasing all references to managed
-   * FVoxelDensityChunk instances. If no other references to these chunks exist,
-   * they will be automatically destroyed and their memory freed.
-   *
-   * @note Thread-safe: Can be called from any thread
-   * @note Performance: O(n) where n is the number of managed chunks
-   * @note Memory: Releases all chunk references, potentially freeing
-   * significant memory
-   */
-  void Clear() { DenseChunks.Empty(); }
+    /**
+     * Release all map references to managed chunks.
+     * Chunks still referenced by AVoxelChunk::DenseChunk remain alive.
+     *
+     * GAME-THREAD ONLY.
+     */
+    void Clear() { DenseChunks.Empty(); }
 };

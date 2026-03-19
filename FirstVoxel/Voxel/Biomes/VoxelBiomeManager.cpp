@@ -83,52 +83,25 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
                       * FMath::SmoothStep(0.0f, 0.2f, 1.f - FMath::Abs(Erosion - 0.4f));
 
     // Craters: rare, driven by a separate low-frequency noise not related to Temp/Erosion.
-    // Uses the Z=200 slice as a pseudo-2D crater placement field.
+    // Uses the Z=200 slice as a pseudo-2D crater placement field to avoid
+    // 2D Perlin noise aliasing artifacts at certain coordinate ranges.
+    // Frequency is halved (*0.5f) to produce larger, smoother crater zones.
     const float CraterNoise = FMath::PerlinNoise3D(FVector(
         (X + Off.X) * (Config.Craters.Frequency * 0.5f),
         (Y + Off.Y) * (Config.Craters.Frequency * 0.5f),
         200.f));
 
+    // SmoothStep remaps crater noise to a 0-1 weight.
+    // The +0.1f creates a dead-zone near the threshold to prevent
+    // near-zero crater weights from bleeding into other biomes.
     float CratersW = FMath::SmoothStep(
         Config.Craters.ImpactThreshold + 0.1f,
         Config.Craters.ImpactThreshold,
         CraterNoise);
 
-    // FIX: Force crater weight at world origin so player always spawns in a crater.
-    // This allows fully randomized seeds but re-introduces a smooth radial override 
-    // at coordinate (0,0) to guarantee a crater basin on any initial layout.
-    if (Config.Craters.bForceCraterAtOrigin)
-    {
-        const float dx = X - Config.Craters.ForcedCraterCenter.X;
-        const float dy = Y - Config.Craters.ForcedCraterCenter.Y;
-        const float DistSq = dx * dx + dy * dy;
-        const float Dist = FMath::Sqrt(DistSq);
-        
-        // FIX: Smooth crater boundary to prevent chunk instability at zone edges
-        // Old: Hard cutoff at radius caused biome weight oscillation
-        // New: Smooth transition from full crater weight to normal blending
-        const float Radius = Config.Craters.CentralCraterRadius * 1.2f;
-        const float TransitionWidth = 2000.0f; // 20m smooth transition zone
-        
-        if (Dist < Radius + TransitionWidth)
-        {
-            // Smooth transition from 1.0 at center to 0.0 at boundary
-            float Factor = 1.0f;
-            if (Dist > Radius)
-            {
-                // Smooth step transition at boundary
-                const float t = (Dist - Radius) / TransitionWidth;
-                Factor = FMath::Clamp(1.0f - t, 0.0f, 1.0f);
-            }
-            else
-            {
-                // Full weight inside crater zone
-                Factor = 1.0f;
-            }
-            
-            CratersW += Factor * 0.85f; // ensure dominance after scale normalization
-        }
-    }
+    // NOTE: Forced crater system removed. 
+    // FindCraterSpawnLocation() in VoxelWorldGeneration.cpp always finds a natural crater
+    // and centers the world on it, so the player always spawns in a natural crater.
 
     // NOTE: The old hard-coded origin crater boost was removed.
     // AVoxelWorld::GenerateWorldDeferred() uses FindCraterSpawnLocation() to
@@ -147,18 +120,11 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     }
 
     // --- Crater Override Mask ---
-    // Make craters completely override other biomes when active
-    if (CratersW > 0.01f)
-    {
-        ForestW = 0.f; DesertW = 0.f; PeaksW  = 0.f; CliffsW = 0.f; MesaW   = 0.f; OceanW  = 0.f;
-    }
-    else
-    {
-        const float SafeCraterFactor = 1.0f - CratersW;
-        ForestW *= SafeCraterFactor; DesertW *= SafeCraterFactor;
-        PeaksW  *= SafeCraterFactor; CliffsW *= SafeCraterFactor;
-        MesaW   *= SafeCraterFactor; OceanW  *= SafeCraterFactor;
-    }
+    // Make craters blend smoothly with other biomes.
+    const float SafeCraterFactor = 1.0f - CratersW;
+    ForestW *= SafeCraterFactor; DesertW *= SafeCraterFactor;
+    PeaksW  *= SafeCraterFactor; CliffsW *= SafeCraterFactor;
+    MesaW   *= SafeCraterFactor; OceanW  *= SafeCraterFactor;
 
     // Ocean Override: Suppress others if Ocean is dominant to solidify biome type
     if (OceanW > 0.6f)
@@ -187,6 +153,11 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     return Map;
 }
 
+/** Convenience wrapper that computes biome weights and surface height in one call.
+ *  Avoids duplicate GetSeedOffset() and weight computation when both are needed.
+ *  @param X, Y   World position in cm.
+ *  @param Config  Generation configuration.
+ *  @return Struct containing both the weight map and blended surface height. */
 FVoxelBiomeManager::FWeightsAndHeight FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(float X, float Y, const FVoxelGenerationConfig& Config)
 {
     FWeightsAndHeight Out;
@@ -226,6 +197,10 @@ float FVoxelBiomeManager::GetSurfaceHeightStatic(float X, float Y, const FVoxelB
     return Height;
 }
 
+/** Sample the temperature noise field at (X, Y).
+ *  Returns a normalized value in [0, 1] where 0 = cold, 1 = hot.
+ *  Uses 2D Perlin noise with the seed offset applied for reproducibility.
+ *  The *0.5f + 0.5f remaps [-1, 1] noise output to [0, 1] range. */
 float FVoxelBiomeManager::GetTemperatureWithSeed(float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff)
 {
     return FMath::PerlinNoise2D(FVector2D(
@@ -234,6 +209,11 @@ float FVoxelBiomeManager::GetTemperatureWithSeed(float X, float Y, const FVoxelG
         * 0.5f + 0.5f;
 }
 
+/** Sample the erosion noise field at (X, Y).
+ *  Returns a normalized value in [0, 1] where 0 = flat, 1 = rugged.
+ *  The +100.f spatial offset decorrelates erosion from temperature noise
+ *  so the two fields produce independent biome distributions.
+ *  The *0.5f + 0.5f remaps [-1, 1] noise output to [0, 1] range. */
 float FVoxelBiomeManager::GetErosionWithSeed(float X, float Y, const FVoxelGenerationConfig& Config, const FVector& SeedOff)
 {
     return FMath::PerlinNoise2D(FVector2D(

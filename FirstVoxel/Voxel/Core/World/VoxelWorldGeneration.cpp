@@ -80,18 +80,15 @@ void AVoxelWorld::GenerateWorldDeferred()
 		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering GenerateWorld on PlayerStart %s"), *CandidatePos.ToString());
 	}
 
-	// CRITICAL FIX: Find crater spawn location when bForceCraterSpawn is enabled
-	// This ensures the player spawns in the middle of a crater when clicking "Generate World"
-	if (bForceCraterSpawn)
+	// CRITICAL FIX: Always find a natural crater spawn location
+	// This ensures the player always spawns in the middle of a natural crater
+	const FVoxelGenerationConfig& Config = GetEffectiveConfig();
+	FVector CraterPos = FindCraterSpawnLocation(CandidatePos, Config);
+	if (CraterPos != CandidatePos)
 	{
-		const FVoxelGenerationConfig& Config = GetEffectiveConfig();
-		FVector CraterPos = FindCraterSpawnLocation(CandidatePos, Config);
-		if (CraterPos != CandidatePos)
-		{
-			UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Found crater spawn location at %s (moved from %s)"), 
-				*CraterPos.ToString(), *CandidatePos.ToString());
-			CandidatePos = CraterPos;
-		}
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Found natural crater spawn location at %s (moved from %s)"), 
+			*CraterPos.ToString(), *CandidatePos.ToString());
+		CandidatePos = CraterPos;
 	}
 
 	// FIX: Only search for conflicts in standalone game builds, not in PIE

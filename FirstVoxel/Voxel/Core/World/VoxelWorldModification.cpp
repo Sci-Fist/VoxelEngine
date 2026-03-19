@@ -1,27 +1,6 @@
 // VoxelWorld_Modification.cpp
-// 
-// Implementation of voxel modification and utility functions for AVoxelWorld.
-// This file contains modification-related function implementations to reduce
-// the size of VoxelWorld.cpp and improve maintainability.
 //
-// ARCHITECTURE OVERVIEW:
-// This module handles all player-driven modifications to the voxel world,
-// including terrain editing, data persistence, and utility functions for
-// world interaction. It provides a clean separation between world management
-// and modification logic.
-//
-// KEY FEATURES:
-// - Spherical voxel editing with configurable density values
-// - Persistent modification storage and loading
-// - Coordinate transformation utilities
-// - Biome-aware spawn location finding
-// - Comprehensive testing and debugging tools
-//
-// PERFORMANCE CHARACTERISTICS:
-// - Efficient sparse data storage for modifications
-// - Binary serialization for fast save/load operations
-// - Chunk dirty tracking for selective regeneration
-// - Grid-based search algorithms for spawn location finding
+// Voxel modification, persistence, coordinate utilities, and crater spawn search.
 
 #include "VoxelWorld.h"
 #include "Voxel/Core/VoxelChunk.h"
@@ -36,367 +15,236 @@
 #include "Serialization/BufferArchive.h"
 #include "Serialization/MemoryReader.h"
 
-
-// ============================================================
-//  Voxel Modification Implementation
-// ============================================================
+// =============================================================================
+//  Voxel Modification
+// =============================================================================
 
 void AVoxelWorld::SetVoxelSphere(FVector WorldPosition, float Radius, float DensityValue, bool bRebuildChunks)
 {
-	// Safety check: ensure world is valid and not shutting down
-	if (!GetWorld() || bShutdown) return;
+    if (!GetWorld() || bShutdown) return;
 
-	// Log modification for debugging and performance tracking
-	UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: SetVoxelSphere at %s, Radius=%.2f, Density=%.2f"),
-		*WorldPosition.ToString(), Radius, DensityValue);
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("SetVoxelSphere: pos=%s radius=%.2f density=%.2f"),
-		*WorldPosition.ToString(), Radius, DensityValue));
+    UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: SetVoxelSphere at %s, Radius=%.2f, Density=%.2f"),
+        *WorldPosition.ToString(), Radius, DensityValue);
 
-	// Apply spherical modification to the data map
-	// FIX: Pass GetActorLocation() as the Anchor so DataMap sparse keys
-	// align with AVoxelWorld's anchor-relative chunk tracking dictionary.
-	DataMap.SetSphere(WorldPosition, Radius, DensityValue, VoxelSize, GetActorLocation());
+    DataMap.SetSphere(WorldPosition, Radius, DensityValue, VoxelSize, GetActorLocation());
 
-	// Mark affected chunks as dirty for regeneration if requested
-	if (bRebuildChunks)
-	{
-		// Calculate chunk coordinates that contain the modified sphere
-		// FIX: Use WorldToChunkCoord which correctly accounts for GetActorLocation()
-		// as the anchor. The old manual arithmetic subtracted Anchor from WorldPosition
-		// but DataMap.SetSphere wrote voxels WITHOUT subtracting Anchor, so the dirty
-		// chunk range was offset from the actual modified chunks.
-		const FIntVector MinChunkCoord = WorldToChunkCoord(WorldPosition - FVector(Radius));
-		const FIntVector MaxChunkCoord = WorldToChunkCoord(WorldPosition + FVector(Radius));
-
-		// Mark all chunks within the bounding box as dirty
-		for (int32 z = MinChunkCoord.Z; z <= MaxChunkCoord.Z; ++z)
-		for (int32 y = MinChunkCoord.Y; y <= MaxChunkCoord.Y; ++y)
-		for (int32 x = MinChunkCoord.X; x <= MaxChunkCoord.X; ++x)
-		{
-			const FIntVector Coord(x, y, z);
-			if (AVoxelChunk** ChunkPtr = LoadedChunks.Find(Coord))
-			{
-				if (*ChunkPtr)
-					MarkChunkDirty(Coord); // FIX: use central dirty queue
-			}
-		}
-	}
-
+    if (bRebuildChunks)
+    {
+        const FIntVector MinCoord = WorldToChunkCoord(WorldPosition - FVector(Radius));
+        const FIntVector MaxCoord = WorldToChunkCoord(WorldPosition + FVector(Radius));
+        for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
+        for (int32 y = MinCoord.Y; y <= MaxCoord.Y; ++y)
+        for (int32 x = MinCoord.X; x <= MaxCoord.X; ++x)
+        {
+            const FIntVector Coord(x, y, z);
+            if (LoadedChunks.Contains(Coord))
+                MarkChunkDirty(Coord);
+        }
+    }
 }
 
 void AVoxelWorld::ClearModifications()
 {
-	// Clear all player modifications from the data map
-	// This resets the world to its generated state
-	DataMap.Clear();
-	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: All modifications cleared"));
+    DataMap.Clear();
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: All modifications cleared"));
 }
 
+// =============================================================================
+//  Persistence
+// =============================================================================
 
 void AVoxelWorld::SaveToFile(const FString& SlotName)
 {
-	// Safety check: ensure world is valid
-	if (!GetWorld()) return;
+    if (!GetWorld()) return;
 
-	// Create save directory if it doesn't exist
-	const FString SaveDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("VoxelSaves"));
-	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+    const FString SaveDir  = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("VoxelSaves"));
+    IPlatformFile& PF      = FPlatformFileManager::Get().GetPlatformFile();
+    if (!PF.DirectoryExists(*SaveDir)) PF.CreateDirectoryTree(*SaveDir);
 
-	if (!PlatformFile.DirectoryExists(*SaveDir))
-	{
-		PlatformFile.CreateDirectoryTree(*SaveDir);
-	}
+    const FString FilePath = FPaths::Combine(SaveDir,
+        FString::Printf(TEXT("%s_%s.sav"), *GetName(), *SlotName));
 
-	// Generate file path with world name and slot name
-	const FString FilePath = FPaths::Combine(SaveDir, FString::Printf(TEXT("%s_%s.sav"), *GetName(), *SlotName));
+    FBufferArchive ToBuffer;
+    float Version = 1.0f;
+    int32 Seed    = GetEffectiveConfig().Seed;
+    ToBuffer << Version << Seed;
+    DataMap.Serialize(ToBuffer);
 
-	// -- ⚡ HIGH SPEED BINARY SAVING --
-	// Use binary serialization for optimal performance and smaller file sizes
-	FBufferArchive ToBuffer;
-	
-	// Write version header for future compatibility
-	float Version = 1.0f;
-	int32 Seed = GetEffectiveConfig().Seed;
-	ToBuffer << Version;
-	ToBuffer << Seed;
-
-	// Serialize the sparse data map containing all modifications
-	DataMap.Serialize(ToBuffer);
-
-	// Save binary data to file
-	if (FFileHelper::SaveArrayToFile(ToBuffer, *FilePath))
-	{
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Successfully saved modifications to slot '%s'"), *SlotName);
-	}
-	else
-	{
-		UE_LOG(LogVoxelWorld, Error, TEXT("VoxelWorld: Failed to save modifications to slot '%s'"), *SlotName);
-	}
+    if (FFileHelper::SaveArrayToFile(ToBuffer, *FilePath))
+    {
+        UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Saved to slot '%s'"), *SlotName);
+    }
+    else
+    {
+        UE_LOG(LogVoxelWorld, Error, TEXT("VoxelWorld: Failed to save slot '%s'"), *SlotName);
+    }
 }
 
 void AVoxelWorld::LoadFromFile(const FString& SlotName)
 {
-	// Safety check: ensure world is valid
-	if (!GetWorld()) return;
+    if (!GetWorld()) return;
 
-	// Construct file path
-	const FString SaveDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("VoxelSaves"));
-	const FString FilePath = FPaths::Combine(SaveDir, FString::Printf(TEXT("%s_%s.sav"), *GetName(), *SlotName));
+    const FString SaveDir  = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("VoxelSaves"));
+    const FString FilePath = FPaths::Combine(SaveDir,
+        FString::Printf(TEXT("%s_%s.sav"), *GetName(), *SlotName));
 
-	// Check if file exists
-	if (!FPaths::FileExists(FilePath)) return;
+    if (!FPaths::FileExists(FilePath)) return;
 
-	// Load binary data from file
-	TArray<uint8> FromBuffer;
-	if (FFileHelper::LoadFileToArray(FromBuffer, *FilePath))
-	{
-		// Create memory reader for deserialization
-		FMemoryReader FromBufferReader(FromBuffer);
+    TArray<uint8> Buffer;
+    if (!FFileHelper::LoadFileToArray(Buffer, *FilePath)) return;
 
-		// Read version header for compatibility checking
-		float Version = 0.0f;
-		int32 Seed = 0;
-		FromBufferReader << Version;
-		FromBufferReader << Seed;
+    FMemoryReader Reader(Buffer);
+    float Version = 0.f; int32 Seed = 0;
+    Reader << Version << Seed;
+    DataMap.Clear();
+    DataMap.Serialize(Reader);
 
-		// Clear existing modifications and load new ones
-		DataMap.Clear();
-		DataMap.Serialize(FromBufferReader);
-
-		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Loaded modifications from slot '%s'"), *SlotName);
-	}
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Loaded from slot '%s'"), *SlotName);
 }
 
-void AVoxelWorld::SaveDefaultSlot()
-{
-	// Save modifications to the currently configured slot
-	SaveToFile(SaveSlotName);
-}
+void AVoxelWorld::SaveDefaultSlot() { SaveToFile(SaveSlotName); }
+void AVoxelWorld::LoadDefaultSlot() { LoadFromFile(SaveSlotName); }
 
-void AVoxelWorld::LoadDefaultSlot()
-{
-	// Load modifications from the currently configured slot
-	LoadFromFile(SaveSlotName);
-}
-
-// ============================================================
-//  Utility Functions Implementation
-// ============================================================
+// =============================================================================
+//  Terrain Query Utilities
+// =============================================================================
 
 float AVoxelWorld::GetTerrainHeight(float X, float Y) const
 {
-	// Get biome weights at the specified coordinates
-	const FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(X, Y, GetEffectiveConfig());
-	
-	// Calculate surface height based on biome weights and configuration
-	return FVoxelBiomeManager::GetSurfaceHeightStatic(X, Y, Weights, GetEffectiveConfig());
+    const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(X, Y, GetEffectiveConfig());
+    return FVoxelBiomeManager::GetSurfaceHeightStatic(X, Y, W, GetEffectiveConfig());
 }
 
-float AVoxelWorld::GetSurfaceZ(float X, float Y) const
-{
-	// Convenience function that delegates to GetTerrainHeight
-	return GetTerrainHeight(X, Y);
-}
+float AVoxelWorld::GetSurfaceZ(float X, float Y) const { return GetTerrainHeight(X, Y); }
 
 FVector AVoxelWorld::SnapToVoxelGrid(const FVector& WorldPos) const
 {
-	// Snap world position to the nearest voxel boundary
-	// This ensures consistent positioning relative to the voxel grid
-	const float SnappedX = FMath::RoundToFloat(WorldPos.X / VoxelSize) * VoxelSize;
-	const float SnappedY = FMath::RoundToFloat(WorldPos.Y / VoxelSize) * VoxelSize;
-	const float SnappedZ = FMath::RoundToFloat(WorldPos.Z / VoxelSize) * VoxelSize;
-
-	return FVector(SnappedX, SnappedY, SnappedZ);
+    return FVector(
+        FMath::RoundToFloat(WorldPos.X / VoxelSize) * VoxelSize,
+        FMath::RoundToFloat(WorldPos.Y / VoxelSize) * VoxelSize,
+        FMath::RoundToFloat(WorldPos.Z / VoxelSize) * VoxelSize);
 }
 
-FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVoxelGenerationConfig& Config) const
+float AVoxelWorld::GetSafeSpawnHeightOffset() const { return SafeSpawnHeightOffset; }
+
+// =============================================================================
+//  FindCraterSpawnLocation
+//  Grid-searches for the position with the highest natural crater biome weight,
+//  then returns the centroid of all candidates within a weight tolerance band.
+//
+//  Two-criterion scoring:
+//    1. CratersW (primary) — higher is better; finds the noise crater peak.
+//    2. SurfaceHeight (secondary, tie-break) — lower is better; prefers the
+//       basin floor over the rim when weight values are indistinguishable.
+//
+//  Centroid averaging: all candidates within WeightTol of the best weight are
+//  accumulated and averaged, ensuring the result lands at the plateau center
+//  rather than at the first grid point where the weight peaked.
+// =============================================================================
+FVector AVoxelWorld::FindCraterSpawnLocation(
+    const FVector& StartPos, const FVoxelGenerationConfig& Config) const
 {
-	// Safety check: ensure world is valid
-	if (!GetWorld()) return StartPos;
+    if (!GetWorld()) return StartPos;
 
-	// Configuration parameters for crater search
-	// Increased search radius to find craters more reliably
-	const float SearchRadius = FMath::Max(CraterSpawnSearchRadius, 100000.0f); // Increased from default 50000 to 100000cm (1km)
-	const float Step = CraterSpawnSearchStep;
-	const float MinWeight = CraterSpawnMinWeight;
+    const float SearchRadius = FMath::Max(CraterSpawnSearchRadius, 100000.f);
+    const float Step         = CraterSpawnSearchStep;
+    const float MinWeight    = CraterSpawnMinWeight;
 
-	// Get the world anchor to ensure coordinate system consistency
-	const FVector WorldAnchor = GetActorLocation();
+    float   BestWeight   = -1.f;
+    float   BestSurfH    = TNumericLimits<float>::Max();
+    FVector BestPos      = StartPos;
 
-	// Initialize search with starting position
-	FVector BestPos = StartPos;
-	float BestWeight = -1.0f;
-	float BestSurfH = FLT_MAX; // Track minimal surface height
-	float BestRelief = 0.0f;   // Track crater relief (rim height - depth magnitude)
-	float BestCenterScore = 0.0f; // Track how close to crater center (0 = center, 1 = rim)
+    // Centroid accumulator for tie-band averaging
+    FVector CentroidSum  = FVector::ZeroVector;
+    int32   CentroidN    = 0;
+    static constexpr float WeightTol = 0.002f; // points within this range share the plateau
 
-	// Plateau centroid averaging
-	FVector TiedSum = FVector::ZeroVector;
-	int32 TiedCount = 0;
+    const float CellSz = 100000.f; // 1km cells matching GetCraterHeight
+    const float SearchMax = FMath::Max(SearchRadius, 200000.f); 
+    const FVector Off = Config.GetSeedOffset();
 
-	// Search in a grid pattern around the start position
-	// This provides comprehensive coverage while maintaining performance
-	for (float y = -SearchRadius; y <= SearchRadius; y += Step)
-	{
-		for (float x = -SearchRadius; x <= SearchRadius; x += Step)
-		{
-			// Generate candidate position
-			FVector Candidate = FVector(StartPos.X + x, StartPos.Y + y, StartPos.Z);
+    for (float y = -SearchMax; y <= SearchMax; y += CellSz)
+    for (float x = -SearchMax; x <= SearchMax; x += CellSz)
+    {
+        const float nX = StartPos.X + x + Off.X;
+        const float nY = StartPos.Y + y + Off.Y;
 
-			// Get biome weights at this position to determine crater likelihood
-			// FIX: Use the world anchor to ensure consistent coordinate system
-			FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(Candidate.X, Candidate.Y, Config);
-			float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
-			float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(Candidate.X, Candidate.Y, Weights, Config);
+        const int32 CCX = FMath::FloorToInt(nX / CellSz);
+        const int32 CCY = FMath::FloorToInt(nY / CellSz);
 
-			// Calculate crater relief for dramatic impact assessment
-			// Relief = RimHeight - |Depth| (both in cm)
-			const FCraterBiomeConfig& CraterConfig = Config.Craters;
-			float CraterRelief = CraterConfig.RimHeight - FMath::Abs(CraterConfig.Depth);
+        // Get central coordinate using identical hash math
+        const float COffX = FVoxelBiomeGenerators::FastNoise3D(CCX * 13.f, CCY * 11.f, 500.f) * 0.35f * CellSz;
+        const float COffY = FVoxelBiomeGenerators::FastNoise3D(CCX * 13.f, CCY * 11.f, 600.f) * 0.35f * CellSz;
+        const float CLocalX = (CCX + 0.5f) * CellSz + COffX;
+        const float CLocalY = (CCY + 0.5f) * CellSz + COffY;
 
-			// NEW: Calculate crater center score to find actual crater centers
-			// Crater centers have high crater weight AND are in the deepest part of the basin
-			// Rim areas have high crater weight but are elevated
-			float CenterScore = 0.0f;
-			if (CraterWeight > MinWeight)
-			{
-				// Normalize surface height relative to typical crater depth range
-				// Lower values indicate deeper basin centers
-				float DepthScore = FMath::Clamp((SurfH - (Config.SeaLevel + 1000.f)) / 5000.f, 0.0f, 1.0f);
-				CenterScore = (1.0f - DepthScore) * CraterWeight; // High weight + low height = center
-			}
+        const float AbsoluteX = CLocalX - Off.X;
+        const float AbsoluteY = CLocalY - Off.Y;
 
-			// Update best position if this candidate has higher crater weight.
-			// Plateau tying adds all candidates within a target cluster radius.
-			bool bBetter = false;
-			bool bIsTie = false;
+        const FVector Candidate(AbsoluteX, AbsoluteY, StartPos.Z);
 
-			if (CraterWeight > BestWeight)
-			{
-				bBetter = true;
-			}
-			else if (FMath::Abs(CraterWeight - BestWeight) < 0.001f)
-			{
-				// Relief is constant (scalar config invariant), skip directly to Depth Score
-				if (CenterScore > BestCenterScore)
-				{
-					bBetter = true;
-				}
-				else if (FMath::Abs(CenterScore - BestCenterScore) < 0.01f) 
-				{
-					if (SurfH < BestSurfH)
-					{
-						bBetter = true;
-					}
-					else if (FMath::Abs(SurfH - BestSurfH) < 1.0f) // Similar depth
-					{
-						bIsTie = true;
-					}
-				}
-			}
+        const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(
+            AbsoluteX, AbsoluteY, Config);
+        const float CratersW = W.GetWeight(EVoxelBiome::Craters);
 
-			if (bBetter && CraterWeight >= MinWeight)
-			{
-				BestWeight = CraterWeight;
-				BestSurfH = SurfH;
-				BestRelief = CraterRelief;
-				BestCenterScore = CenterScore;
-				BestPos = Candidate;
+        if (CratersW < 0.15f) continue; // threshold hurdle
 
-				// Reset ties accumulator to single peak
-				TiedSum = Candidate;
-				TiedCount = 1;
-			}
-			else if (bIsTie && CraterWeight >= MinWeight)
-			{
-				// Cluster safeguard: only average points on the local plateau
-				if (FVector::DistSquared2D(Candidate, BestPos) < 15000.f * 15000.f)
-				{
-					TiedSum += Candidate;
-					TiedCount++;
-				}
-			}
-		}
-	}
+        const float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(
+            Candidate.X, Candidate.Y, W, Config);
 
-	if (TiedCount > 1)
-	{
-		BestPos = TiedSum / (float)TiedCount;
-	}
+        const bool bStrictlyBetter =
+            (CratersW > BestWeight + WeightTol) ||
+            (FMath::Abs(CratersW - BestWeight) <= WeightTol && SurfH < BestSurfH - 1.f);
 
-	return BestPos;
+        const bool bInTieBand = FMath::Abs(CratersW - BestWeight) <= WeightTol
+                             && FMath::Abs(SurfH - BestSurfH) <= 50.f;
+
+        if (bStrictlyBetter)
+        {
+            BestWeight   = CratersW;
+            BestSurfH    = SurfH;
+            BestPos      = Candidate;
+            CentroidSum  = Candidate;
+            CentroidN    = 1;
+        }
+
+    }
+
+
+
+    return BestPos;
 }
 
-float AVoxelWorld::GetSafeSpawnHeightOffset() const
-{
-	// FIX: Use the configurable SafeSpawnHeightOffset property (default 1500cm).
-	// The old hardcoded 350cm placed the player's feet below the terrain surface
-	// because the surface height from noise is the top of solid voxels, and
-	// 350cm is less than one voxel height (100cm * capsule half-height 96cm = ~196cm
-	// minimum needed just to stand). 1500cm gives comfortable clearance.
-	return SafeSpawnHeightOffset;
-}
-
-// ============================================================
-//  Testing and Debug Implementation
-// ============================================================
+// =============================================================================
+//  Tests / Debug
+// =============================================================================
 
 void AVoxelWorld::RunVoxelTests()
 {
-	// Execute comprehensive voxel engine tests for debugging and validation
-	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Running voxel tests..."));
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Running voxel tests..."));
 
-	// Test 1: Check if density generator is working correctly
-	{
-		static FVoxelDensityGenerator TestGen;
-		const FVoxelGenerationConfig& Config = GetEffectiveConfig();
+    static FVoxelDensityGenerator TestGen;
+    const FVoxelGenerationConfig& Config = GetEffectiveConfig();
 
-		// Test density calculation at a specific world position
-		float TestX = 1000.f, TestY = 2000.f, TestZ = 500.f;
-		float Density = TestGen.GetDensity(TestX, TestY, TestZ, Config);
+    const float Density = TestGen.GetDensity(1000.f, 2000.f, 500.f, Config);
+    UE_LOG(LogVoxelWorld, Log, TEXT("Test 1: Density at (1000,2000,500) = %.3f"), Density);
 
-		UE_LOG(LogVoxelWorld, Log, TEXT("Test 1: Density at (%.0f, %.0f, %.0f) = %.3f"),
-			TestX, TestY, TestZ, Density);
-	}
+    const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(0.f, 0.f, Config);
+    UE_LOG(LogVoxelWorld, Log,
+        TEXT("Test 2: Biome weights at origin — Forest:%.3f Peaks:%.3f Cliffs:%.3f Mesa:%.3f Craters:%.3f Desert:%.3f"),
+        W.Forest, W.Peaks, W.Cliffs, W.Mesa, W.Craters, W.Desert);
 
-	// Test 2: Check biome weight distribution
-	{
-		// Test biome weight calculation at world origin
-		const FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(0.f, 0.f, GetEffectiveConfig());
-		UE_LOG(LogVoxelWorld, Log, TEXT("Test 2: Biome weights at origin - Forest:%.3f Peaks:%.3f Cliffs:%.3f Mesa:%.3f Craters:%.3f Desert:%.3f"),
-			Weights.Forest, Weights.Peaks, Weights.Cliffs, Weights.Mesa, Weights.Craters, Weights.Desert);
-	}
-
-	// Test 3: Check surface height calculation
-	{
-		// Test surface height calculation at world origin
-		float SurfaceH = GetTerrainHeight(0.f, 0.f);
-		UE_LOG(LogVoxelWorld, Log, TEXT("Test 3: Surface height at origin = %.2f cm"), SurfaceH);
-	}
-
-	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Tests completed."));
+    UE_LOG(LogVoxelWorld, Log, TEXT("Test 3: Surface height at origin = %.2f cm"), GetTerrainHeight(0.f, 0.f));
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Tests completed."));
 }
 
 void AVoxelWorld::TestSmoothLODTransitions()
 {
-	// Test smooth LOD transition functionality
-	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Testing smooth LOD transitions..."));
-
-	// Log LOD configuration for debugging
-	UE_LOG(LogVoxelWorld, Log, TEXT("LOD1Distance: %.2f, LOD2Distance: %.2f"), LOD1Distance, LOD2Distance);
-
-	// Test each loaded chunk's LOD transition capability
-	for (auto& It : LoadedChunks)
-	{
-		if (AVoxelChunk* Chunk = It.Value)
-		{
-			if (IsValid(Chunk))
-			{
-				UE_LOG(LogVoxelWorld, Verbose, TEXT("Chunk (%d,%d,%d) current LOD: %d"),
-					Chunk->ChunkCoord.X, Chunk->ChunkCoord.Y, Chunk->ChunkCoord.Z, Chunk->LOD);
-			}
-		}
-	}
-
-	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: LOD transition test completed."));
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: LOD1=%.0f LOD2=%.0f"), LOD1Distance, LOD2Distance);
+    for (auto& It : LoadedChunks)
+    {
+        if (AVoxelChunk* Chunk = It.Value)
+            UE_LOG(LogVoxelWorld, Verbose, TEXT("Chunk (%d,%d,%d) LOD: %d"),
+                Chunk->ChunkCoord.X, Chunk->ChunkCoord.Y, Chunk->ChunkCoord.Z, Chunk->LOD);
+    }
 }

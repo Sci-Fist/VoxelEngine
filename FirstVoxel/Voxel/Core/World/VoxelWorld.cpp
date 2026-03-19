@@ -441,29 +441,23 @@ void AVoxelWorld::Tick(float DeltaTime) {
   // DirtyRebuildQueue is populated by MarkChunkDirty() (called from
   // SetVoxelSphere etc.). Scanning all LoadedChunks every frame was O(N) even
   // when nothing was dirty.
-  TArray<FIntVector> ChunksToRebuild = DirtyRebuildQueue.Array();
-  DirtyRebuildQueue.Empty();
-
-  for (int32 i = 0; i < ChunksToRebuild.Num(); ++i) {
-    const FIntVector Coord = ChunksToRebuild[i];
-    if (ActiveGenerations >= MaxConcurrentGenerations) {
-      // Re-queue remaining items to the Set for next tick
-      for (int32 j = i; j < ChunksToRebuild.Num(); ++j) {
-        DirtyRebuildQueue.Add(ChunksToRebuild[j]);
-      }
-      break;
-    }
-
+  for (int32 i = DirtyRebuildQueue.Num() - 1; i >= 0; --i) {
+    const FIntVector Coord = DirtyRebuildQueue[i];
     AVoxelChunk **ChunkPtr = LoadedChunks.Find(Coord);
     if (!ChunkPtr || !(*ChunkPtr)) {
+      DirtyRebuildQueue.RemoveAtSwap(i);
       continue;
     }
     AVoxelChunk *Chunk = *ChunkPtr;
-    if (Chunk->IsGenerating()) {
-      DirtyRebuildQueue.Add(Coord); // still generating, keep in queue
-      continue;
-    }
+    if (!Chunk || Chunk->IsGenerating())
+      continue; // still busy — retry next tick
 
+    DirtyRebuildQueue.RemoveAtSwap(i);
+    if (ActiveGenerations >= MaxConcurrentGenerations) {
+      // Re-queue for next tick
+      DirtyRebuildQueue.Add(Coord);
+      break;
+    }
     Chunk->bMeshDirty = false;
     ActiveGenerations++;
     TWeakObjectPtr<AVoxelWorld> WeakThis(this);
@@ -482,7 +476,7 @@ void AVoxelWorld::Tick(float DeltaTime) {
       if (Chunk->bMeshDirty && !Chunk->IsGenerating()) {
         // Migrate to proper queue going forward
         Chunk->bMeshDirty = false;
-        DirtyRebuildQueue.Add(It.Key);
+        DirtyRebuildQueue.AddUnique(It.Key);
       }
     }
   }
@@ -508,7 +502,7 @@ void AVoxelWorld::MarkChunkDirty(const FIntVector &Coord) {
     if (*Ptr)
       (*Ptr)->bMeshDirty = true;
   }
-  DirtyRebuildQueue.Add(Coord);
+  DirtyRebuildQueue.AddUnique(Coord);
 }
 
 void AVoxelWorld::ClearWorld() {
@@ -525,7 +519,12 @@ void AVoxelWorld::ClearWorld() {
   QueueHead = 0;
   ActiveGenerations = 0;
 
-  UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: World cleared"));
+  // FIX: Reset crater state so forced crater doesn't regenerate on next GenerateWorld
+  // This ensures pressing "Clear World" fully resets the crater terrain
+  GenerationConfig.Craters.ForcedCraterCenter = FVector2D(0.f, 0.f);
+  GenerationConfig.Craters.bForceCraterAtOrigin = false;
+
+  UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: World cleared (including crater state)"));
 }
 
 // ============================================================

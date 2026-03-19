@@ -37,7 +37,7 @@ class USceneComponent;
 //                                ProcessInitialPlayerSpawn
 //   VoxelWorldModification.cpp   SetVoxelSphere, Save/Load, FindCraterSpawn,
 //                                RunVoxelTests
-//   VoxelWorld_Streaming.cpp     UpdateChunkStreaming, LOD hysteresis
+//   VoxelWorld_Streaming.cpp     UpdateChunkStreaming, LOD BFS consistency
 //   Water/VoxelWorldWater.cpp    UVoxelWorldWaterComponent tick
 //
 // -- TICK RESPONSIBILITIES ----------------------------------------------------
@@ -45,6 +45,9 @@ class USceneComponent;
 //   UpdateChunkStreaming()    Every StreamingInterval (0.25 s) in game world.
 //                            Computes desired chunk set, destroys out-of-range
 //                            chunks, queues new ones sorted nearest-first.
+//                            LOD consistency uses a BFS dirty-queue seeded
+//                            from chunks whose LOD changed — O(changed × 6)
+//                            instead of the old O(N × 6 × MaxPasses).
 //
 //   DrainGenerationQueue()   Every tick. Spawns up to Limit chunks per tick
 //                            (2 in editor, 8 in game) while ActiveGenerations
@@ -64,7 +67,7 @@ class USceneComponent;
 //   SpawnChunk BEFORE GenerateAsync(); decremented in the OnGenerationComplete
 //   lambda. CancelGeneration() also fires OnGenerationComplete exactly once
 //   (MoveTemp pattern) to keep the counter balanced.
-//   MaxConcurrentGenerations (default 12) caps the thread-pool pressure.
+//   MaxConcurrentGenerations (default 6) caps the thread-pool pressure.
 //
 // -- GENERATION CONFIG MERGE --------------------------------------------------
 //
@@ -74,12 +77,13 @@ class USceneComponent;
 //   Per-biome render/water configs from the Details panel properties are
 //   injected into MergedConfig only when no preset is active.
 //
-// -- EDITOR SPAWN SIMULATION --------------------------------------------------
+// -- LOD CONSISTENCY BFS ------------------------------------------------------
 //
-//   When Generate World is pressed in the editor (not PIE), GenerateWorldDeferred
-//   runs the same crater-search and spawn-chunk prioritisation as runtime,
-//   wrapped in #if WITH_EDITOR. The viewport therefore shows the actual spawn
-//   area the player sees on first load.
+//   UpdateChunkStreaming() seeds LodDirtyQueue with chunks whose desired LOD
+//   changed in Pass 1. Pass 2 runs a BFS: each dequeued chunk pushes its LOD
+//   to any neighbour with a higher (coarser) LOD. This ensures all loaded
+//   chunks within the render volume share uniform LOD without seams, at
+//   O(changed chunks × 6) cost instead of O(N × 6 × MaxPasses).
 // =============================================================================
 UCLASS()
 class FIRSTVOXEL_API AVoxelWorld : public AActor {
@@ -89,8 +93,7 @@ public:
   AVoxelWorld();
   virtual ~AVoxelWorld();
 
-  /** Resolution of each chunk (voxels per side). Default is 16. Larger chunks
-   * are more efficient for rendering but take longer to generate. */
+  /** Resolution of each chunk (voxels per side). Default is 16. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|World")
   int32 ChunkSize = 16;
 
@@ -98,29 +101,19 @@ public:
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|World")
   float VoxelSize = 100.f;
 
-  /** Horizontal distance (in chunks) to generate around the player. Total
-   * chunks: (2*Dist+1)^2. Reduced from 12 to 8 for 54% fewer chunks and faster generation.
-   * 8 provides good visibility of craters and terrain features while maintaining performance. */
+  /** Horizontal distance (in chunks) to generate around the player. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
   int32 RenderDistanceXY = 8;
 
-  /** Horizontal distance (in chunks) specifically for Skylands. High values
-   * allow them to render far into the background with minimal performance hit.
-   */
+  /** Horizontal distance (in chunks) specifically for Skylands. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
-  int32 SkylandsRenderDistanceXY = 8; // Increased from 5 for vista size
+  int32 SkylandsRenderDistanceXY = 8;
 
-  /** Vertical distance (in chunks) to generate above/below the player. High
-   * values allow for massive mountains and deep caves. Reduced from 3 to 2 for
-   * better performance while maintaining sufficient vertical terrain. */
+  /** Vertical distance (in chunks) to generate above/below the player. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
   int32 RenderDistanceZ = 2;
 
-  /** Max background tasks allowed at once. Higher values speed up generation
-   * but can cause framerate hitching or high CPU usage.
-   * FIX: Reduced from 12 to 6 to reduce thread pool pressure.
-   * 12 chunks generating simultaneously = 3.6M density samples in-flight,
-   * competing with game thread, physics, and rendering. */
+  /** Max background tasks allowed at once. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Performance")
   int32 MaxConcurrentGenerations = 6;
 
@@ -132,8 +125,7 @@ public:
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|LOD")
   float LOD2Distance = 12000.f;
 
-  /** The material used for flat/top surfaces (e.g. grass). Should use a
-   * Triplanar mapping shader for best results. */
+  /** The material used for flat/top surfaces (e.g. grass). */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Materials")
   UMaterialInterface *MasterFlatMaterial = nullptr;
 
@@ -145,8 +137,7 @@ public:
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Materials")
   float SlopeThreshold = 0.7f;
 
-  /** The primary world generation configuration. Used if BiomePreset is not
-   * set. */
+  /** The primary world generation configuration. Used if BiomePreset is not set. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Generation")
   FVoxelGenerationConfig GenerationConfig;
 
@@ -158,34 +149,20 @@ public:
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Generation")
   TObjectPtr<UVoxelBiomeDataAsset> BiomePreset;
 
-  /** If true, the seed will be randomized automatically on BeginPlay to ensure
-   * a different layout every run. */
+  /** If true, the seed will be randomized automatically on BeginPlay. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Generation")
   bool bRandomizeSeedOnStartup = true;
 
-  /**
-   * If true, the editor viewport will regenerate the world immediately after
-   * PIE ends, so you can inspect the exact terrain that was generated at
-   * runtime without pressing Generate World manually.  The PIE seed is
-   * preserved so the result is identical.
-   */
-  UPROPERTY(
-      EditAnywhere, BlueprintReadWrite, Category = "Voxel|Generation",
-      meta = (ToolTip = "Rebuild the editor viewport world after stopping Play-In-Editor so you can inspect what was generated."))
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Generation",
+      meta = (ToolTip = "Rebuild the editor viewport world after stopping PIE."))
   bool bRegenerateViewportAfterPIE = true;
 
-  /** Returns the effective generation config.
-   * Preset wins for all parameters EXCEPT Seed, which always comes from
-   * GenerationConfig so RandomizeSeed() takes effect regardless of preset.
-   * We cache the merged result as a mutable member to avoid rebuilding it
-   * every call (seed writes are infrequent; config reads are per-voxel). */
+  /** Returns the effective generation config (merged with preset if active). */
   const FVoxelGenerationConfig &GetEffectiveConfig() const
   {
     if (BiomePreset != nullptr)
     {
-      // Merge: start with preset, override seed from our runtime GenerationConfig
-      // so every RandomizeSeed() call actually changes the world.
-      MergedConfig         = BiomePreset->Config;
+      MergedConfig = BiomePreset->Config;
     }
     else
     {
@@ -197,7 +174,7 @@ public:
       MergedConfig.CratersRender = CratersRender;
       MergedConfig.DesertRender  = DesertRender;
       MergedConfig.SkylandsRender = SkylandsRender;
-      
+
       MergedConfig.ForestWater   = ForestWater;
       MergedConfig.PeaksWater    = PeaksWater;
       MergedConfig.CliffsWater   = CliffsWater;
@@ -208,7 +185,6 @@ public:
     }
     MergedConfig.Seed = GenerationConfig.Seed;
     MergedConfig.Craters.bForceCraterAtOrigin = bForceCraterSpawn;
-
     return MergedConfig;
   }
 
@@ -219,49 +195,49 @@ public:
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Generation")
   bool bAutoGenerateOnBeginPlay = false;
 
-  /** If true, searches for a crater biome region near the PlayerStart and
-   * places the player inside the crater basin on spawn.
-   * Uses FindCraterSpawnLocation() with the current seed to find the nearest
-   * high-weight crater zone. Does NOT mutate any config. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn")
   bool bForceCraterSpawn = true;
 
-  /** Max distance from the initial position to search for a crater spawn (cm).
-   */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn",
             meta = (ClampMin = "1000.0"))
   float CraterSpawnSearchRadius = 60000.f;
 
-  /** Step size for crater spawn search grid (cm). Larger values scan faster but
-   * are less precise. */
+  /** Step size for the crater spawn search grid. Smaller values find craters
+   *  more precisely but take longer to search. Works with CraterSpawnSearchRadius
+   *  to define the search grid density. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn",
             meta = (ClampMin = "100.0"))
   float CraterSpawnSearchStep = 4000.f;
 
+  /** Convert a world-space position to its chunk grid coordinate.
+   *  Uses floor division so negative positions map to the correct chunk.
+   *  @param WorldPos  Absolute world position in cm.
+   *  @return Chunk coordinate (e.g. chunk (2, -1, 0)). */
   FIntVector WorldToChunkCoord(const FVector &WorldPos) const;
+
+  /** Convert a chunk grid coordinate to the world-space origin of that chunk.
+   *  @param Coord  Chunk grid coordinate.
+   *  @return World position of the chunk's minimum corner in cm. */
   FVector ChunkCoordToWorld(const FIntVector &Coord) const;
 
-  /** Minimum crater biome weight required to accept a spawn location. */
+  /** Minimum crater biome weight (0-1) for a position to be considered a valid
+   *  crater spawn. Higher values (e.g. 0.5) force the player into the deepest
+   *  part of the crater. Lower values (e.g. 0.1) accept crater edges. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn",
             meta = (ClampMin = "0.0", ClampMax = "1.0"))
   float CraterSpawnMinWeight = 0.25f;
 
-  /** Minimum height above terrain when snapping the player to ground (cm).
-   *  Raised to 8000cm (80m) so the player always drops in from above terrain
-   *  rather than spawning inside it on steep peaks or high craters. */
+  /** Height offset above terrain surface for safe player spawning (in cm).
+   *  Must be at least capsule half-height (96cm) plus clearance.
+   *  Default 8000cm (80m) ensures the player doesn't clip through terrain
+   *  even in deep crater basins. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Spawn")
   float SafeSpawnHeightOffset = 8000.f;
 
-  /**
-   * Randomizes the seed and regenerates the world from scratch.
-   * Also simulates the player spawn sequence (finds crater, places spawn
-   * chunk) so the editor viewport shows exactly what PIE will look like.
-   */
   UFUNCTION(CallInEditor, Category = "Voxel",
-            meta = (ToolTip = "Pick a new random seed and regenerate the world. Simulates player spawn so the viewport shows the actual spawn area."))
+            meta = (ToolTip = "Pick a new random seed and regenerate the world."))
   void GenerateWorld();
 
-  /** Destroy all chunks without generating new ones. */
   UFUNCTION(CallInEditor, Category = "Voxel",
             meta = (ToolTip = "Destroy all chunks without generating new ones."))
   void ClearWorld();
@@ -284,22 +260,27 @@ public:
   UFUNCTION(BlueprintCallable, Category = "Voxel|Testing")
   void RunVoxelTests();
 
+  /** Pointer to the sparse player-edit data map.
+   *  Stores all SetVoxelSphere modifications. Use this to query or
+   *  persist player-driven terrain changes. */
   FVoxelDataMap *GetVoxelDataMap() { return &DataMap; }
 
-  /** Read-only access to the loaded chunk map. Used by VoxelMapWidget for chunk
-   * outlines. */
+  /** Read-only access to the loaded chunk map. Used by VoxelMapWidget for chunk outlines. */
   const TMap<FIntVector, AVoxelChunk *> *GetLoadedChunks() const {
     return &LoadedChunks;
   }
 
+  /** Number of chunks waiting to be generated (pending in GenerationQueue). */
   int32 GetQueueCount() const { return GenerationQueue.Num(); }
+
+  /** Read index into GenerationQueue. Chunks before this index have already
+   *  been spawned; the queue is compacted periodically when QueueHead > 256. */
   int32 GetQueueHead() const { return QueueHead; }
 
   virtual void BeginPlay() override;
   virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
   virtual void Tick(float DeltaTime) override;
 
-  /** Name of the file slot used for Editor Saving or Loading. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Persistence")
   FString SaveSlotName = TEXT("DefaultSlot");
 
@@ -312,148 +293,93 @@ public:
   UFUNCTION(BlueprintCallable, Category = "Voxel|Persistence")
   void ClearWorldModifications();
 
-  // --- Editor Actions ---
-
-  /** Regenerate with the CURRENT seed — useful for testing config changes without changing the world layout. */
   UFUNCTION(CallInEditor, Category = "Voxel|Actions",
-            meta = (ToolTip = "Regenerate the world with the current seed. Use Generate World (above) to get a new random seed instead."))
+            meta = (ToolTip = "Regenerate the world with the current seed."))
   void RebuildWorld();
-
-  /** Clears in-memory voxel edits node buckets quickly. */
 
   UFUNCTION(CallInEditor, Category = "Voxel|Actions")
   void ClearModifications();
 
-  /** Saves in-memory voxel edits node buckets quickly. */
   UFUNCTION(CallInEditor, Category = "Voxel|Persistence", meta=(DisplayName="Save Slot"))
   void SaveDefaultSlot();
 
-  /** Loads state from target SaveSlotName. */
   UFUNCTION(CallInEditor, Category = "Voxel|Persistence", meta=(DisplayName="Load Slot"))
   void LoadDefaultSlot();
 
-  /** Triggers system verification tests from the Editor Details Panel. */
   UFUNCTION(CallInEditor, Category = "Voxel|Actions")
   void RunTests();
 
-  /** Test that chunks can transition between LOD levels without invisible mesh pop */
   void TestSmoothLODTransitions();
-
-  // ----------------------
 
   UFUNCTION(BlueprintCallable, Category = "Voxel|Terrain")
   float GetTerrainHeight(float X, float Y) const;
 
+  /** Convenience alias for GetTerrainHeight(X, Y). Returns the biome-blended
+   *  surface height at world position (X, Y) in cm. */
   float GetSurfaceZ(float X, float Y) const;
 
   // ================================================================
   //  PER-BIOME: materials + foliage
-  //  Click the arrow next to each biome name to expand its settings.
-  //  Each section contains:
-  //    - Material overrides (flat surface + slope/cliff)
-  //    - Foliage array (add as many mesh entries as you like)
-  //  Null material = fall back to global MasterFlatMaterial /
-  //  MasterSlopeMaterial.
   // ================================================================
 
-  /** Lush Forest biome — rolling hills and plains. Expand to set materials +
-   * foliage. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Forest")
   FVoxelBiomeRenderConfig ForestRender;
 
-  /** Forest water configuration. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Forest")
   FVoxelBiomeWaterConfig ForestWater;
 
-  /** Jagged Peaks biome — alpine mountains. Expand to set materials + foliage.
-   */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Peaks")
   FVoxelBiomeRenderConfig PeaksRender;
 
-  /** Peaks water configuration. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Peaks")
   FVoxelBiomeWaterConfig PeaksWater;
 
-  /** Steep Cliffs biome — ridged canyon walls. Expand to set materials +
-   * foliage. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Cliffs")
   FVoxelBiomeRenderConfig CliffsRender;
 
-  /** Cliffs water configuration. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Cliffs")
   FVoxelBiomeWaterConfig CliffsWater;
 
-  /** Mesa Plateaus biome — flat-top sandstone columns. Expand to set materials
-   * + foliage. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Mesa")
   FVoxelBiomeRenderConfig MesaRender;
 
-  /** Mesa water configuration. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Mesa")
   FVoxelBiomeWaterConfig MesaWater;
 
-  /** Impact Craters biome — rare meteorite basins. Expand to set materials +
-   * foliage. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Craters")
   FVoxelBiomeRenderConfig CratersRender;
 
-  /** Craters water configuration. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Craters")
   FVoxelBiomeWaterConfig CratersWater;
 
-  /** Sand Dunes biome — low erosion, high temp. Expand to set materials +
-   * foliage. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Desert")
   FVoxelBiomeRenderConfig DesertRender;
 
-  /** Desert water configuration. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Desert")
   FVoxelBiomeWaterConfig DesertWater;
 
-  /** Implicit water rendering wrapper to isolate ocean translated budgets. */
   UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Voxel")
   class UVoxelWaterComponent *WaterComponent = nullptr;
 
-  /**
-   * Skylands — floating islands high above the terrain.
-   * Material overrides apply to ALL island surfaces regardless of the biome
-   * below. Foliage entries use MinWorldZ / MaxWorldZ to restrict spawns to
-   * island altitude. Leave material slots null to fall back to the global
-   * MasterFlat/SlopeMaterial.
-   */
-  UPROPERTY(EditAnywhere, BlueprintReadWrite,
-            Category = "Voxel|Biomes|Skylands")
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Skylands")
   FVoxelBiomeRenderConfig SkylandsRender;
 
-  /** Skylands water configuration. */
-  UPROPERTY(EditAnywhere, BlueprintReadWrite,
-            Category = "Voxel|Biomes|Skylands")
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Biomes|Skylands")
   FVoxelBiomeWaterConfig SkylandsWater;
 
-  /**
-   * Legacy tree mesh — used ONLY if no foliage entries are defined in the
-   * generation config's ForestRender.FoliageTypes.  Prefer the per-biome
-   * foliage system above.
-   */
   UPROPERTY(EditAnywhere, Category = "Voxel|Foliage|Legacy",
-            meta = (ToolTip = "Fallback tree mesh when no per-biome foliage is configured. Prefer the Biome sections instead."))
+            meta = (ToolTip = "Fallback tree mesh when no per-biome foliage is configured."))
   UStaticMesh *TreeMesh = nullptr;
 
-  /** Legacy grass mesh — see TreeMesh. */
-  UPROPERTY(
-      EditAnywhere, Category = "Voxel|Foliage|Legacy",
-      meta = (ToolTip = "Fallback grass mesh when no per-biome foliage is configured."))
+  UPROPERTY(EditAnywhere, Category = "Voxel|Foliage|Legacy",
+            meta = (ToolTip = "Fallback grass mesh when no per-biome foliage is configured."))
   UStaticMesh *GrassMesh = nullptr;
 
-  /** Legacy global foliage density — used only by the legacy tree/grass
-   * fallback path. */
   UPROPERTY(EditAnywhere, Category = "Voxel|Foliage|Legacy",
             meta = (ClampMin = "0.0", ClampMax = "1.0",
-                    ToolTip = "Global spawn chance for legacy foliage. Ignored when per-biome foliage is configured."))
+                    ToolTip = "Global spawn chance for legacy foliage."))
   float FoliageDensity = 0.05f;
 
-  /** Legacy max slope for foliage — used only by the legacy tree/grass fallback
-   * path. */
   UPROPERTY(EditAnywhere, Category = "Voxel|Foliage|Legacy",
             meta = (ClampMin = "0.0", ClampMax = "1.0",
                     ToolTip = "Maximum Normal.Z for legacy foliage placement."))
@@ -465,11 +391,10 @@ public:
 private:
   FVoxelDataMap DataMap;
 
-
   TMap<FIntVector, AVoxelChunk *> LoadedChunks;
   TSet<FIntVector> EmptyChunks;
 
-  /** Decoupled Dense density node grid manager buffer cache structures. */
+  /** Decoupled dense density node grid manager. */
   FVoxelChunkManager ChunkManager;
 
   FVoxelChunkPool ChunkPool;
@@ -479,40 +404,41 @@ private:
    * Chunks added here (via MarkChunkDirty) are rebuilt next tick when a
    * concurrency slot is free.
    */
-  TSet<FIntVector> DirtyRebuildQueue;
+  TArray<FIntVector> DirtyRebuildQueue;
 
-  /** Mark a chunk as needing a mesh rebuild. Thread-safe: call from game thread only. */
+  /** Mark a chunk as needing a mesh rebuild. Game-thread only.
+   *  Adds the chunk to DirtyRebuildQueue AND sets bMeshDirty on the chunk.
+   *  The chunk will be regenerated next tick when a concurrency slot opens.
+   *  @param Coord  Chunk grid coordinate to mark dirty. */
   void MarkChunkDirty(const FIntVector& Coord);
 
   TArray<FIntVector> GenerationQueue;
+
   /**
-   * GenerationQueue read head.
-   *
-   * Used by DrainGenerationQueue() and editor synchronous generation to avoid
-   * O(N) RemoveAt(0) each tick. We periodically compact the queue when this
-   * grows large.
+   * GenerationQueue read head. Avoids O(N) RemoveAt(0) each tick.
+   * Compacted periodically in DrainGenerationQueue().
    */
   int32 QueueHead = 0;
 
-  TAtomic<int32> ActiveGenerations{0};
+  int32 ActiveGenerations = 0;
 
   FVector LastStreamedPos = FVector::ZeroVector;
 
   float StreamingTimer = 0.f;
   static constexpr float StreamingInterval = 0.25f;
 
-  /** Cached skyland altitude (world Z, cm). Recomputed only when player moves > SkyAltSnapDist. */
+  /** Cached skyland altitude. Recomputed only when player moves > SkyAltSnapDist. */
   float CachedSkyAltWorld = 0.f;
   float CachedCurvedH = 0.f;
   float CachedCurvedR = 0.f;
-  FVector LastSkyAltPos   = FVector(1e9f); // force first compute
-  static constexpr float SkyAltSnapDist = 1000.f; // recompute every 10m of movement
-
+  FVector LastSkyAltPos   = FVector(1e9f);
+  static constexpr float SkyAltSnapDist = 1000.f;
 
   bool bInitialized = false;
   FThreadSafeBool bShutdown{false};
 
   TUniquePtr<FVoxelDensityGenerator> DensityGenerator;
+
   UPROPERTY(VisibleAnywhere, Category = "Voxel|Water")
   class UVoxelWorldWaterComponent* WaterSystemComponent = nullptr;
 
@@ -525,19 +451,14 @@ private:
   bool bSkylandFoundBackup = false;
   float CachedSurfaceHeight = 0.f;
   FVector SpawnTargetPos = FVector::ZeroVector;
-  // FIX: Replaces static-local SpawnWaitTime in Tick() to avoid MSVC C2181
-  // and to reset properly between PIE sessions.
   float SpawnWaitAccum = 0.f;
   float SpawnDelayAccum = 0.f;
   static constexpr float SpawnHoldDelay = 2.0f;
 
   FVector SnapToVoxelGrid(const FVector &WorldPos) const;
-
-  FVector FindCraterSpawnLocation(const FVector &StartPos,
-                                  const FVoxelGenerationConfig &Config) const;
+  FVector FindCraterSpawnLocation(const FVector &StartPos, const FVoxelGenerationConfig &Config) const;
   float GetSafeSpawnHeightOffset() const;
 
-  /** Internal helper — picks a new random seed. Called by GenerateWorld() and BeginPlay(). Not exposed to the editor panel. */
   void RandomizeSeed();
 
 public:
@@ -548,6 +469,7 @@ public:
 
   UFUNCTION(BlueprintPure, Category = "Voxel")
   float GetGenerationProgress() const;
+
 private:
   void SpawnChunk(const FIntVector &Coord, bool bSyncCollision = false);
   void DestroyChunk(const FIntVector &Coord);
@@ -556,26 +478,24 @@ private:
   void DrainGenerationQueue();
   void DiscoverExistingChunks();
 
-
 #if WITH_EDITOR
-  virtual void
-  PostEditChangeProperty(FPropertyChangedEvent &PropertyChangedEvent) override;
+  virtual void PostEditChangeProperty(FPropertyChangedEvent &PropertyChangedEvent) override;
 
-  /** Handle for the editor drain ticker to prevent stacking. */
   FTSTicker::FDelegateHandle DrainTickerHandle;
-
-  /** Handle for the editor defer ticker to prevent stacking. */
   FTSTicker::FDelegateHandle DeferTickerHandle;
 #endif
 
   void ConfigureChunk(AVoxelChunk *Chunk) const;
-  
-  // Async generation helpers to prevent editor freeze
+
   void PerformWorldDiscoveryAndBoundsCalculation();
   void FinalizeGenerationSetup();
 
-  // Visibility management functions for close-range chunk fixes
-  void ApplyMeshToChunk(AVoxelChunk* Chunk);
-  void EnforceLODConsistency();
+  // Close-range visibility health check — called every Tick.
+  // Ensures chunks near the player that are marked Ready have visible meshes.
   void CheckCloseRangeVisibility();
+  // NOTE: ApplyMeshToChunk() and EnforceLODConsistency() have been removed.
+  // They were dead code — defined in VoxelWorld_Streaming.cpp but never called
+  // from any code path. LOD consistency is now handled by the BFS dirty-queue
+  // in UpdateChunkStreaming(). Close-range visibility is handled by
+  // CheckCloseRangeVisibility() above.
 };

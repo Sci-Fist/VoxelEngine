@@ -37,12 +37,25 @@
 //
 // -- CHUNK REGISTRATION -------------------------------------------------------
 //
-//   RegisterChunk(Coord, WaterData*)    call after AVoxelChunk::ApplyMesh()
-//   UnregisterChunk(Coord)              call before ReturnChunk() / pool reuse
+//   RegisterChunk(Coord, WaterData*, Generation)
+//     Call after AVoxelChunk::ApplyMesh(). Pass the chunk's WaterGeneration
+//     counter so that Step() can detect stale (recycled) entries.
+//
+//   UnregisterChunk(Coord)
+//     Call before ReturnChunk() / pool reuse.
 //
 //   The simulator holds RAW POINTERS into FVoxelWaterData owned by AVoxelChunk.
-//   The chunk MUST outlive its registration. AVoxelWorld ensures this by
-//   calling UnregisterChunk before ReturnChunk.
+//   The chunk MUST outlive its registration. AVoxelWorld ensures this by calling
+//   UnregisterChunk before ReturnChunk.
+//
+// -- GENERATIONAL GUARD -------------------------------------------------------
+//
+//   FChunkEntry stores the WaterGeneration value captured at RegisterChunk().
+//   If a chunk is recycled (ClearMesh increments WaterGeneration) without
+//   being unregistered first, Step() detects the mismatch and skips that
+//   entry, preventing writes through a stale FVoxelWaterData pointer.
+//   This is a safety net — the primary guard is the UnregisterChunk call in
+//   AVoxelWorld::DestroyChunk().
 //
 // -- RETURN VALUE OF Step() ---------------------------------------------------
 //
@@ -55,14 +68,7 @@
 //   - Early termination when cells are empty or sources
 //   - Chunk-based processing for memory efficiency
 //   - Dirty chunk tracking to minimize mesh updates
-//   - Sparse water distribution optimization
-//
-// -- INTEGRATION NOTES --------------------------------------------------------
-//
-//   - Designed for integration with VoxelChunkManager chunk lifecycle
-//   - Works with UVoxelWorldWaterComponent for automatic tick scheduling
-//   - Supports water sources, flowing water, and solid terrain interaction
-//   - Thread-safe chunk registration system
+//   - Sparse water distribution optimization via HasAnyWater() early-out
 // =============================================================================
 #pragma once
 
@@ -81,8 +87,15 @@ public:
 
     // ---- Chunk registration ------------------------------------------------
 
-    /** Call after a chunk finishes generation (GameThread only). */
-    void RegisterChunk(const FIntVector& ChunkCoord, FVoxelWaterData* WaterData);
+    /**
+     * Register a chunk's water data for simulation.
+     * @param ChunkCoord   Grid coordinate of the chunk.
+     * @param WaterData    Pointer to the chunk's water data. Must outlive registration.
+     * @param Generation   The chunk's WaterGeneration counter at registration time.
+     *                     Step() skips entries where this value no longer matches.
+     * Call after a chunk finishes generation (GameThread only).
+     */
+    void RegisterChunk(const FIntVector& ChunkCoord, FVoxelWaterData* WaterData, int32 Generation);
 
     /** Call before a chunk is destroyed or returned to the pool. */
     void UnregisterChunk(const FIntVector& ChunkCoord);
@@ -112,6 +125,9 @@ public:
      * Advance one cellular-automata step.
      * Returns coordinates of chunks whose water data changed so the caller
      * (AVoxelWorld) can call RebuildWaterMesh() on those chunks.
+     *
+     * Entries whose stored Generation does not match the chunk's current
+     * WaterGeneration are silently skipped (stale pointer guard).
      */
     TArray<FIntVector> Step();
 
@@ -122,7 +138,15 @@ private:
     int32 ChunkSize;
     float VoxelSize;
 
-    struct FChunkEntry { FVoxelWaterData* Data = nullptr; };
+    struct FChunkEntry
+    {
+        FVoxelWaterData* Data       = nullptr;
+        // Generation value captured at RegisterChunk(). If the owning chunk is
+        // recycled (ClearMesh increments its WaterGeneration counter) without
+        // an explicit UnregisterChunk call, this mismatch is caught in Step()
+        // and the entry is skipped, preventing writes through a stale pointer.
+        int32            Generation = -1;
+    };
     TMap<FIntVector, FChunkEntry> ChunkMap;
 
     // Coordinate helpers

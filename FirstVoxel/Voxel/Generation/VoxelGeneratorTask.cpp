@@ -86,10 +86,7 @@ FVoxelGeneratorTask::~FVoxelGeneratorTask()
     if (Densities.Num() > 0)
     {
         FScopeLock Lock(&GDensityPoolLock);
-        if (GDensityPool.Num() < 16)
-        {
-            GDensityPool.Add(MoveTemp(Densities));
-        }
+        GDensityPool.Add(MoveTemp(Densities));
     }
 }
 
@@ -605,7 +602,9 @@ void FVoxelGeneratorTask::CalculateFoliage()
                 if (weights.GetWeight(Slot.Biome) < Entry.MinBiomeWeight) continue;
                 if (ColumnWorldPos.Z < Entry.MinWorldZ || ColumnWorldPos.Z > Entry.MaxWorldZ) continue;
 
-                const int32 Attempts = Entry.SpawnAttemptsPerTriangle; // keep standard as base
+        // Number of spawn attempts per column. Higher values = more foliage instances
+        // but more CPU cost. Entry.SpawnAttemptsPerTriangle is the per-biome config.
+        const int32 Attempts = Entry.SpawnAttemptsPerTriangle;
                 for (int32 Attempt = 0; Attempt < Attempts; ++Attempt)
                 {
                     const float Roll = RandHashFloat(LX, LY, s * 100 + Attempt, Config.Seed);
@@ -637,6 +636,8 @@ void FVoxelGeneratorTask::CalculateFoliage()
     }
 // End of grid-based foliage generation
 
+    // GPU instance ceiling: ProceduralMeshComponent has a hard limit on vertex count.
+    // 4000 instances ≈ 24,000 vertices (6 per quad) which stays well within GPU limits.
     const int32 MaxMeshesPerChunk = 4000;
     TrimFoliageToCap(MaxMeshesPerChunk);
 }
@@ -660,7 +661,9 @@ void FVoxelGeneratorTask::ProcessLegacyFoliage(const FVector& Center, float Slop
             FVector(FMath::FRandRange(0.8f, 1.2f))));
     }
 
-    if (ForestW > 0.5f && FMath::FRand() < FoliageDensity)
+                // Forest weight > 0.5 means the column is predominantly forest biome.
+                // Trees only spawn in strong forest areas to avoid sparse placement.
+                if (ForestW > 0.5f && FMath::FRand() < FoliageDensity)
     {
         LegacyTreeTransforms.Add(FTransform(
             FRotator(0.f, FMath::FRand() * 360.f, 0.f),

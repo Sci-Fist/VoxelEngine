@@ -1,19 +1,19 @@
 /**
  * @file VoxelChunk.h
  * @brief Core chunk class for procedural voxel terrain generation
- * 
+ *
  * AVoxelChunk represents a single cubic section of the procedural world.
  * It manages density field generation, mesh building, foliage placement,
  * and water simulation for its volume. Chunks are pooled and reused across
  * the session for optimal performance.
- * 
+ *
  * ARCHITECTURE OVERVIEW:
  * - Density Generation: Background thread task builds density field
  * - Mesh Generation: Surface Nets algorithm converts density to mesh
  * - Foliage System: Per-biome instanced static mesh components
  * - Water Simulation: Translucent water surface mesh with physics
  * - LOD System: Smooth transitions between detail levels
- * 
+ *
  * DEPENDENCIES:
  * - VoxelMeshGenerator: Converts density to mesh geometry
  * - VoxelDataMap: Stores voxel density data
@@ -25,7 +25,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "HAL/ThreadSafeBool.h"
 #include "GameFramework/Actor.h"
 #include "ProceduralMeshComponent.h"
 #include "Generation/VoxelMeshGenerator.h"
@@ -94,6 +93,13 @@ class AVoxelChunk;
 //  called. The background task captures its ID at launch; the game-thread
 //  callback discards the result if the ID has changed (chunk was cancelled and
 //  restarted). This prevents stale mesh uploads from recycled chunks.
+//
+// -- WATER GENERATION COUNTER -------------------------------------------------
+//
+//  WaterGeneration is incremented in ClearMesh() and CancelGeneration() so
+//  FVoxelWaterSimulator can detect stale registrations if UnregisterChunk was
+//  not called before the chunk was recycled. Always read and written on the
+//  game thread.
 //
 // -- FOLIAGE COMPONENTS -------------------------------------------------------
 //
@@ -168,8 +174,8 @@ public:
 
 	/**
 	 * Callback fired on the GameThread after ApplyMesh() with the list of water source world-voxel
-	 * coordinates detected during generation.  AVoxelWorld binds this to register sources with
-	 * FVoxelWaterSimulator.  Cleared after first call (sources are registered once per generation).
+	 * coordinates detected during generation. AVoxelWorld binds this to register sources with
+	 * FVoxelWaterSimulator. Cleared after first call (sources are registered once per generation).
 	 */
 	TFunction<void(const TArray<FIntVector>&)> OnChunkWaterReady;
 
@@ -186,11 +192,17 @@ public:
 	 */
 	void RebuildWaterMesh();
 
-	/** Water voxel simulation state.  Populated in ApplyMesh(), updated by FVoxelWaterSimulator. */
+	/** Water voxel simulation state. Populated in ApplyMesh(), updated by FVoxelWaterSimulator. */
 	FVoxelWaterData WaterData;
 
-	/** CRC32 hash of the last successfully built water mesh vertex/triangle configuration. */
-	uint32 LastWaterMeshHash = 0;
+	/**
+	 * Generational counter for water simulator safety.
+	 * Incremented in ClearMesh() and CancelGeneration() so FVoxelWaterSimulator
+	 * can detect stale registrations if UnregisterChunk was not called before
+	 * the chunk was recycled. Read by UVoxelWorldWaterComponent::InitChunkWater().
+	 * Game-thread only — no synchronization needed.
+	 */
+	int32 WaterGeneration = 0;
 
 	bool IsReady()          const { return bMeshApplied; }
 	bool IsGenerating()     const { return bGenerating;  }
@@ -206,7 +218,7 @@ public:
 	{
 		if (!bMeshApplied || !IsValid(ProceduralMesh)) return false;
 
-		// If the mesh is empty (full air/solid), there is no collison to cook.
+		// If the mesh is empty (full air/solid), there is no collision to cook.
 		if (MeshOutput.FlatMesh.Vertices.Num() == 0 && MeshOutput.SlopeMesh.Vertices.Num() == 0)
 			return true;
 
@@ -227,17 +239,17 @@ public:
 	struct FVoxelDensityGenerator* DensityGenerator = nullptr;
 
 	/** Set to true when player edits have invalidated this chunk's mesh; rebuilt on the next Tick. */
-	FThreadSafeBool bMeshDirty{false};
+	bool bMeshDirty = false;
 
 	/** Water material — assigned by AVoxelWorld from GenerationConfig.Water.OceanMaterial. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
 	UMaterialInterface* WaterMaterial = nullptr;
 
-	/** Pending LOD transition flag - set when chunk is not ready for immediate LOD change */
-	FThreadSafeBool bPendingLODTransition{false};
+	/** Pending LOD transition flag — set when chunk is not ready for immediate LOD change. */
+	bool bPendingLODTransition = false;
 
-	/** Target LOD for pending transition */
-	TAtomic<int32> PendingLOD{0};
+	/** Target LOD for pending transition. */
+	int32 PendingLOD = 0;
 
 	/** Smoothly transition to a new LOD level. */
 	UFUNCTION(BlueprintCallable, Category = "Voxel|LOD")
@@ -249,11 +261,11 @@ public:
 		Empty,           // No mesh data
 		Generating,      // Background task running
 		Ready,           // Mesh ready and visible
-		Transitioning,   // In LOD transition
+		Transitioning,   // In LOD transition (generating new LOD, old mesh still visible)
 		Error            // Generation failed
 	};
 
-	/** Current mesh state for managing LOD transitions and visibility. */
+	/** Current mesh state. */
 	EChunkMeshState MeshState { EChunkMeshState::Empty };
 
 protected:
@@ -268,7 +280,6 @@ protected:
 private:
 	UPROPERTY(VisibleAnywhere)
 	UProceduralMeshComponent* ProceduralMesh;
-
 
 	/** Separate translucent mesh component for voxel water surfaces. */
 	UPROPERTY(VisibleAnywhere)
@@ -306,9 +317,9 @@ private:
 	/** Target LOD for smooth transitions. */
 	int32 TargetLOD { 0 };
 
-	/** Transition progress (0.0 to 1.0) for smooth LOD blending. */
+	/** Transition progress (0.0 to 1.0) for LOD blending. */
 	float TransitionProgress { 0.0f };
-	
+
 	/** Visual-only mesh component for backfaces (no collision) */
 	UPROPERTY(VisibleAnywhere)
 	class UProceduralMeshComponent* BackfaceMesh;
@@ -319,19 +330,29 @@ private:
 	/** Duration of LOD transitions in seconds. */
 	static constexpr float TransitionDuration = 0.2f;
 
+	// ---- Per-chunk material warning flags -----------------------------------
+	// Stored as instance members (not static locals) so they reset when the
+	// chunk is returned to the pool and ClearMesh() is called, allowing
+	// re-warnings in new PIE sessions after the issue is fixed.
+	bool bFlatMaterialWarned  = false;
+	bool bSlopeMaterialWarned = false;
+
 	void ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask);
+
+	/**
+	 * Upload one geometry section to a ProceduralMeshComponent.
+	 * If Data.Vertices is empty, the section at SectionIndex is explicitly
+	 * cleared to prevent ghost geometry (invisible collision) from a previous
+	 * generation persisting after a dirty rebuild produces fewer sections.
+	 */
 	void UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName = FString(), class UProceduralMeshComponent* TargetMesh = nullptr);
 
 	/** Build water surface mesh from WaterData. Internal — call RebuildWaterMesh() instead. */
 	void BuildWaterMeshInternal();
 
-	/** Update mesh state and handle transitions. */
+	/** Drive LOD transition progress each frame. */
 	void UpdateMeshState();
-
-	/** Blend between two mesh outputs for smooth transitions. */
-	void BlendMeshes(const FVoxelMeshOutput& From, const FVoxelMeshOutput& To, float Alpha);
 
 	/** Set mesh visibility while maintaining proper state. */
 	void SetMeshVisibility(bool bVisible);
-
 };
