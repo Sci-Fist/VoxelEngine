@@ -401,16 +401,10 @@ void FVoxelGeneratorTask::BuildDensityField()
                     const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
                     const float WorldZ = WorldOrigin.Z + (Z - 1.f) * EffVoxelSize;
                     float D = -2.0f;
-                    if (DataMap)
+                    if (DenseHasEdit[Idx])
                     {
-                        const int32 GX = FMath::FloorToInt(WorldX / VoxelSize);
-                        const int32 GY = FMath::FloorToInt(WorldY / VoxelSize);
-                        const int32 GZ = FMath::FloorToInt(WorldZ / VoxelSize);
-                        float Override;
-                        if (DataMap->GetDensity(FIntVector(GX, GY, GZ), Override))
-                        {
-                            D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
-                        }
+                        const float Override = DenseEditVals[Idx];
+                        D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
                     }
                     Densities[Idx] = D;
                 }
@@ -426,16 +420,10 @@ void FVoxelGeneratorTask::BuildDensityField()
                 const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
                 const float WorldZ = WorldOrigin.Z + (Z - 1.f) * EffVoxelSize;
                 float D = 2.0f; 
-                if (DataMap)
+                if (DenseHasEdit[Idx])
                 {
-                    const int32 GX = FMath::FloorToInt(WorldX / VoxelSize);
-                    const int32 GY = FMath::FloorToInt(WorldY / VoxelSize);
-                    const int32 GZ = FMath::FloorToInt(WorldZ / VoxelSize);
-                    float Override;
-                    if (DataMap->GetDensity(FIntVector(GX, GY, GZ), Override))
-                    {
-                        D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
-                    }
+                    const float Override = DenseEditVals[Idx];
+                    D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
                 }
                 Densities[Idx] = D;
             }

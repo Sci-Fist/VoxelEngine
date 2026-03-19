@@ -183,8 +183,8 @@ void AVoxelWorld::UpdateChunkStreaming() {
   for (int32 z = -RenderDistanceZ; z <= RenderDistanceZ; ++z)
     for (int32 y = -RenderDistanceXY; y <= RenderDistanceXY; ++y)
       for (int32 x = -RenderDistanceXY; x <= RenderDistanceXY; ++x) {
-        // FIX: Spherical culling to avoid dense cube workload
-        if (x * x + y * y + z * z <= RenderDistanceXY * RenderDistanceXY) {
+        // FIX: Cylindrical culling to preserve close-range vertical columns
+        if (x * x + y * y <= RenderDistanceXY * RenderDistanceXY) {
           Desired.Add(PlayerCoord + FIntVector(x, y, z));
         }
       }

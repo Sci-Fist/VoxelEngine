@@ -707,7 +707,8 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	{
 		for (float z = SearchTop; z >= SearchBot; z -= 200.f)
 		{
-			if (SpawnProbe.GetDensity(Pos.X, Pos.Y, z, Config) > 0.f)
+			if (DensityGenerator &&
+			    DensityGenerator->GetDensity(Pos.X, Pos.Y, z, Config) > 0.f)
 			{
 				TargetZ = z + SafeOffset;
 				bFoundSkyland = true;

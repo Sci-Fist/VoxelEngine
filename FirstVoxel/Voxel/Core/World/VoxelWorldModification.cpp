@@ -230,6 +230,10 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 	float BestRelief = 0.0f;   // Track crater relief (rim height - depth magnitude)
 	float BestCenterScore = 0.0f; // Track how close to crater center (0 = center, 1 = rim)
 
+	// Plateau centroid averaging
+	FVector TiedSum = FVector::ZeroVector;
+	int32 TiedCount = 0;
+
 	// Search in a grid pattern around the start position
 	// This provides comprehensive coverage while maintaining performance
 	for (float y = -SearchRadius; y <= SearchRadius; y += Step)
@@ -262,35 +266,31 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 				CenterScore = (1.0f - DepthScore) * CraterWeight; // High weight + low height = center
 			}
 
-			// Update best position if this candidate has higher crater weight
-			// and meets the minimum weight threshold.
-			// NEW: Prioritize crater center depth, relief, and center score over just surface height
+			// Update best position if this candidate has higher crater weight.
+			// Plateau tying adds all candidates within a target cluster radius.
 			bool bBetter = false;
+			bool bIsTie = false;
+
 			if (CraterWeight > BestWeight)
 			{
 				bBetter = true;
 			}
 			else if (FMath::Abs(CraterWeight - BestWeight) < 0.001f)
 			{
-				// For tied crater weights, prefer deeper craters with higher relief
-				if (CraterRelief > BestRelief)
+				// Relief is constant (scalar config invariant), skip directly to Depth Score
+				if (CenterScore > BestCenterScore)
 				{
 					bBetter = true;
 				}
-				else if (FMath::Abs(CraterRelief - BestRelief) < 100.0f) // Similar relief
+				else if (FMath::Abs(CenterScore - BestCenterScore) < 0.01f) 
 				{
-					// If relief is similar, prefer better center score (deeper basin center)
-					if (CenterScore > BestCenterScore)
+					if (SurfH < BestSurfH)
 					{
 						bBetter = true;
 					}
-					else if (FMath::Abs(CenterScore - BestCenterScore) < 0.1f) // Similar center score
+					else if (FMath::Abs(SurfH - BestSurfH) < 1.0f) // Similar depth
 					{
-						// If center score is similar, prefer lower surface height (deeper basin)
-						if (SurfH < BestSurfH)
-						{
-							bBetter = true;
-						}
+						bIsTie = true;
 					}
 				}
 			}
@@ -302,8 +302,26 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 				BestRelief = CraterRelief;
 				BestCenterScore = CenterScore;
 				BestPos = Candidate;
+
+				// Reset ties accumulator to single peak
+				TiedSum = Candidate;
+				TiedCount = 1;
+			}
+			else if (bIsTie && CraterWeight >= MinWeight)
+			{
+				// Cluster safeguard: only average points on the local plateau
+				if (FVector::DistSquared2D(Candidate, BestPos) < 15000.f * 15000.f)
+				{
+					TiedSum += Candidate;
+					TiedCount++;
+				}
 			}
 		}
+	}
+
+	if (TiedCount > 1)
+	{
+		BestPos = TiedSum / (float)TiedCount;
 	}
 
 	return BestPos;
