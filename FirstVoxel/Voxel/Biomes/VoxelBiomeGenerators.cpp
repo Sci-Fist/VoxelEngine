@@ -1215,7 +1215,7 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     const float RockFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(tAbs, 0.6f));
 
     // FIX: Blend at least 40% IslandFalloff onto shards to give them flat tops
-    const float Falloff = FMath::Lerp(RockFalloff, IslandFalloff, FMath::Max(0.40f, Cache.ShardT));
+    float Falloff = FMath::Lerp(RockFalloff, IslandFalloff, FMath::Max(0.40f, Cache.ShardT));
     
     // --- ROUNDNESS ADJUSTMENT FOR SMALLER SKYSHARDS ---
     // Smaller shards (low ShardT) should be rounder, larger islands (high ShardT) flatter

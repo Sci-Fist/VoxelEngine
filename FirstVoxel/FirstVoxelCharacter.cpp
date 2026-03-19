@@ -155,6 +155,15 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 
 	if (UEnhancedInputComponent* EnhancedIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
+		// Add Mapping Context here ensures it is pushed when possessed/input joins
+		if (APlayerController* PC = Cast<APlayerController>(GetController()))
+		{
+			if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+			{
+				Subsystem->AddMappingContext(MappingContext, 0);
+			}
+		}
+
 		// Jump (keyboard/gamepad A)
 		if (JumpAction)
 		{
