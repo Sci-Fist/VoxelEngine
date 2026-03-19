@@ -136,7 +136,7 @@
 //                      THIS CONTROLS WALL VISIBILITY — smaller values create more dramatic walls.
 //
 
-//  RimNoiseAmplitude:  Vertical variation added to rim height (cm).
+//  RimNoiseAmplitude:  Vertical variation added to rim edge (cm).
 //                      50-150 = subtle irregularity, 200-500 = jagged rim edge.
 //                      High values (>300) can create pillar spikes at zone boundaries.
 
@@ -152,6 +152,53 @@
 //
 //  CraterSizeMultiplier: Scales crater diameter. 1.0 = default size, 2.0 = 2x larger.
 //                        Larger values make craters cover more area but require lower Frequency.
+//
+//  ── EJECTA FEATURES (Auswurfmaterial) ─────────────────────────────────────
+//  EjectaBlanketWidth:   Width of ejecta material beyond rim (0-1 normalized).
+//                        0.20-0.30 = moderate ejecta field, 0.40+ = extensive ejecta.
+//                        Creates the "splash" pattern of material thrown out during impact.
+//
+//  EjectaThickness:      Thickness of ejecta material relative to crater depth (0-1).
+//                        0.10-0.20 = thin ejecta layer, 0.30+ = thick ejecta deposits.
+//                        Thicker ejecta creates more pronounced terrain around crater.
+//
+//  EjectaBlockFrequency: Frequency of large ejecta blocks/boulders (0.001-0.01).
+//                        Lower values = fewer, more scattered blocks.
+//                        Higher values = dense boulder fields in ejecta zone.
+//
+//  EjectaBlockAmplitude: Height of individual ejecta blocks (cm).
+//                        500-2000 = small boulders, 3000-8000 = large impact blocks.
+//                        Creates dramatic rock formations in ejecta field.
+//
+//  EjectaBlockSize:      Size variation of ejecta blocks (0-1).
+//                        Controls the scale and distribution of block sizes.
+//
+//  OverturnedStrataFrequency: Frequency of overturned geological layers (0.001-0.01).
+//                             Lower values = fewer strata features.
+//                             Higher values = more frequent bent rock layers.
+//
+//  OverturnedStrataAmplitude: Height of overturned strata features (cm).
+//                            300-1000 = subtle layer bending, 1500-5000 = dramatic strata.
+//                            Creates the characteristic "folded" rock appearance.
+//
+//  EjectaFadeExponent:   How quickly ejecta material fades with distance (1.0-4.0).
+//                        1.0 = linear fade, 2.0-3.0 = exponential fade, 4.0+ = sharp cutoff.
+//                        Controls the transition from thick ejecta near rim to normal terrain.
+//
+//  ── EJECTA SYSTEM OVERVIEW ────────────────────────────────────────────────
+//  The ejecta system simulates real impact crater ejecta blankets with three main components:
+//
+//  1. Ejecta Blanket (Ejecta-Decke): Layer of material thrown out during impact,
+//     thickest near rim, thinning outward with exponential fade.
+//
+//  2. Ejecta Blocks (Blockfeld): Large angular rock blocks scattered in ejecta zone,
+//     creating boulder fields and dramatic terrain features.
+//
+//  3. Overturned Strata (Überkippte Schichten): Bent and folded rock layers at
+//     crater edge, showing geological disruption from impact.
+//
+//  All ejecta features are concentrated within EjectaBlanketWidth beyond the rim
+//  and fade naturally into the surrounding terrain.
 // =============================================================================
 
 
@@ -320,6 +367,101 @@ struct FMesaBiomeConfig
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa")
     float EdgeSharpness = 10.f;
+
+    // ── MESA & BUTTE FORMATION ─────────────────────────────────────────────
+    // Controls the generation of flat-topped structures with steep sides
+    // Mesas: wide, flat tops with steep vertical sides
+    // Buttes: smaller, isolated stone "islands"
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Formation")
+    float MesaFrequency = 0.00008f;  // Lower = larger, more spaced mesas
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Formation")
+    float MesaSizeMin = 15000.f;     // Minimum mesa diameter (150m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Formation")
+    float MesaSizeMax = 45000.f;     // Maximum mesa diameter (450m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Formation")
+    float ButteFrequency = 0.00015f; // Higher = more buttes
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Formation")
+    float ButteSizeMin = 5000.f;     // Minimum butte diameter (50m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Formation")
+    float ButteSizeMax = 12000.f;    // Maximum butte diameter (120m)
+
+    // ── PILLAR & HOODOO FORMATION ──────────────────────────────────────────
+    // Tall, narrow columns that can be conical or irregularly curved
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Pillars")
+    float PillarFrequency = 0.00025f; // Frequency of pillar formations
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Pillars")
+    float PillarHeightMin = 8000.f;   // Minimum pillar height (80m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Pillars")
+    float PillarHeightMax = 25000.f;  // Maximum pillar height (250m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Pillars")
+    float PillarWidthMin = 1000.f;    // Minimum pillar width (10m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Pillars")
+    float PillarWidthMax = 5000.f;    // Maximum pillar width (50m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Pillars")
+    float PillarConicalFactor = 0.3f; // How much pillars taper (0.0 = cylindrical, 1.0 = very conical)
+
+    // ── LAYERED STRATIFICATION ─────────────────────────────────────────────
+    // Horizontal bands of rock layers with consistent thickness
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Stratification")
+    float LayerFrequency = 0.005f;    // Frequency of layer boundaries
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Stratification")
+    float LayerThickness = 2000.f;    // Thickness of each rock layer (20m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Stratification")
+    float LayerVariation = 0.3f;      // Random variation in layer thickness
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Stratification")
+    float LayerHardness = 0.7f;       // How resistant layers are to erosion (0.0 = soft, 1.0 = hard)
+
+    // ── CLIFFS & ESCARPMENTS ───────────────────────────────────────────────
+    // Sharp elevation changes with planar or terraced cliff faces
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Cliffs")
+    float CliffFrequency = 0.00012f;  // Frequency of cliff formations
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Cliffs")
+    float CliffHeightMin = 5000.f;    // Minimum cliff height (50m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Cliffs")
+    float CliffHeightMax = 20000.f;   // Maximum cliff height (200m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Cliffs")
+    float CliffTerracing = 0.4f;      // How much cliffs are terraced vs planar (0.0 = flat, 1.0 = fully terraced)
+
+    // ── EROSION CHANNELS ───────────────────────────────────────────────────
+    // Branching networks carved by water runoff
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Erosion")
+    float ChannelFrequency = 0.00020f; // Frequency of erosion channels
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Erosion")
+    float ChannelDepth = 1500.f;       // Depth of erosion channels (15m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Erosion")
+    float ChannelWidth = 800.f;        // Width of erosion channels (8m)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Erosion")
+    float ChannelBranching = 0.6f;     // How much channels branch (0.0 = straight, 1.0 = highly branched)
+
+    // ── TALUS SLOPES ───────────────────────────────────────────────────────
+    // Accumulated rock debris at the base of cliffs
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Talus")
+    float TalusFrequency = 0.00010f;   // Frequency of talus slope formations
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Talus")
+    float TalusAngle = 35.0f;          // Angle of repose for talus slopes (degrees)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mesa|Talus")
+    float TalusSpread = 0.8f;          // How far talus spreads from cliff base
 };
 
 

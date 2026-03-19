@@ -420,9 +420,11 @@ void AFirstVoxelHUD::DrawHUD()
     float BrushRad = 300.f;
     bool  bGamepad = false;
 
+    AFirstVoxelCharacter* Char = nullptr;
     if (APawn* Pawn = GetOwningPawn())
     {
-        if (AFirstVoxelCharacter* Char = Cast<AFirstVoxelCharacter>(Pawn))
+        Char = Cast<AFirstVoxelCharacter>(Pawn);
+        if (Char)
         {
             BrushRad = Char->InteractionRadius;
             bGamepad = Char->bLastInputWasGamepad;
@@ -452,7 +454,11 @@ void AFirstVoxelHUD::DrawHUD()
         DrawRow(this, X, Y, LineH, TEXT("[RT]"),          BC, TEXT(": Dig"),              ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[LT]"),          BC, TEXT(": Build"),            ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[RB] / [LB]"),   BC, TEXT(": Brush Radius +/-"), ColAction, SmallFont);
-        DrawText(FString::Printf(TEXT("Brush Size : [%.f]"), BrushRad), FLinearColor(ColBrush), X, Y, SmallFont); Y += LineH + 6.f;
+        DrawText(FString::Printf(TEXT("Brush Size : [%.f]"), BrushRad), FLinearColor(ColBrush), X, Y, SmallFont); Y += LineH + 4.f;
+        
+        static const FString ToolNames[] = { TEXT("DIG"), TEXT("BUILD"), TEXT("SMOOTH"), TEXT("FLATTEN") };
+        const int32 ToolIdx = Char ? static_cast<int32>(Char->CurrentTool) : 0;
+        DrawText(FString::Printf(TEXT("Current Tool : [%s]"), *ToolNames[FMath::Clamp(ToolIdx, 0, 3)]), FLinearColor(255, 210, 100), X, Y, SmallFont); Y += LineH + 6.f;
         DrawRow(this, X, Y, LineH, TEXT("[B]"),           BC, TEXT(": Toggle Flight"),    ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[A]"),           BC, TEXT(": Jump / Fly Up"),    ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[X]"),           BC, TEXT(": Fly Down"),         ColAction, SmallFont);
@@ -466,7 +472,11 @@ void AFirstVoxelHUD::DrawHUD()
         DrawRow(this, X, Y, LineH, TEXT("[LMB]"),   BC, TEXT(": Dig (hold)"),       ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[RMB]"),   BC, TEXT(": Build (hold)"),     ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[Scroll]"),BC, TEXT(": Brush Radius +/-"), ColAction, SmallFont);
-        DrawText(FString::Printf(TEXT("Brush Size : [%.f]"), BrushRad), FLinearColor(ColBrush), X, Y, SmallFont); Y += LineH + 6.f;
+        DrawText(FString::Printf(TEXT("Brush Size : [%.f]"), BrushRad), FLinearColor(ColBrush), X, Y, SmallFont); Y += LineH + 4.f;
+
+        static const FString ToolNames[] = { TEXT("DIG"), TEXT("BUILD"), TEXT("SMOOTH"), TEXT("FLATTEN") };
+        const int32 ToolIdx = Char ? static_cast<int32>(Char->CurrentTool) : 0;
+        DrawText(FString::Printf(TEXT("Current Tool : [%s]"), *ToolNames[FMath::Clamp(ToolIdx, 0, 3)]), FLinearColor(255, 210, 100), X, Y, SmallFont); Y += LineH + 6.f;
         DrawRow(this, X, Y, LineH, TEXT("[F]"),     BC, TEXT(": Toggle Flight"),    ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[Space]"), BC, TEXT(": Jump / Fly Up"),    ColAction, SmallFont);
         DrawRow(this, X, Y, LineH, TEXT("[Ctrl]"),  BC, TEXT(": Fly Down"),         ColAction, SmallFont);
@@ -477,7 +487,7 @@ void AFirstVoxelHUD::DrawHUD()
     }
 
     // ── Tool Wheel Overlay ────────────────────────────────────────────────
-    AFirstVoxelCharacter* Char = Cast<AFirstVoxelCharacter>(GetOwningPawn());
+    Char = Cast<AFirstVoxelCharacter>(GetOwningPawn());
     if (Char && Char->bToolWheelOpen)
     {
         DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);

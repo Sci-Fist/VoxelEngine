@@ -99,9 +99,9 @@ public:
   float VoxelSize = 100.f;
 
   /** Horizontal distance (in chunks) to generate around the player. Total
-   * chunks: (2*Dist+1)^2. */
+   * chunks: (2*Dist+1)^2. Increased to 12 for better visibility of large craters and distant terrain features. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
-  int32 RenderDistanceXY = 5;
+  int32 RenderDistanceXY = 12;
 
   /** Horizontal distance (in chunks) specifically for Skylands. High values
    * allow them to render far into the background with minimal performance hit.

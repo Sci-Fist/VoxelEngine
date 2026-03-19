@@ -195,11 +195,6 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 			EnhancedIC->BindAction(ToggleCameraAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleCameraMode);
 	}
 
-	// ── Keyboard/Mouse fallback bindings ────────────────────────────────────
-	PlayerInputComponent->BindKey(EKeys::F,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
-	PlayerInputComponent->BindKey(EKeys::M,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
-	PlayerInputComponent->BindKey(EKeys::P,               IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
-	PlayerInputComponent->BindKey(EKeys::V,               IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp,   IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AFirstVoxelCharacter::DecreaseRadius);
 
