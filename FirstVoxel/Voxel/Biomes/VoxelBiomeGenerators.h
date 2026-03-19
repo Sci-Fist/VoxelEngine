@@ -127,7 +127,7 @@ struct FIRSTVOXEL_API FVoxelBiomeGenerators
     static float GetMesaHeight(float X, float Y, const FVoxelGenerationConfig& Config);
 
     /** Impact crater depressions with raised rims. */
-    static float GetCraterHeight(float X, float Y, const FVoxelGenerationConfig& Config);
+    static float GetCraterHeight(float X, float Y, const FVoxelGenerationConfig& Config, float BaseHeight);
 
     // ----------------------------------------------------------------
     // SKYLANDS LAYER

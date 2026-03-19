@@ -175,24 +175,43 @@ FVoxelBiomeManager::FWeightsAndHeight FVoxelBiomeManager::GetWeightsAndSurfaceHe
 float FVoxelBiomeManager::GetSurfaceHeightStatic(float X, float Y, const FVoxelBiomeWeightMap& Weights, const FVoxelGenerationConfig& Config)
 {
     float Height = 0.f;
+    float BaseWeightSum = 0.f;
 
     if (Weights.GetWeight(EVoxelBiome::Forest) > 0.01f)
+    {
         Height += FVoxelBiomeGenerators::GetForestHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Forest);
+        BaseWeightSum += Weights.GetWeight(EVoxelBiome::Forest);
+    }
 
     if (Weights.GetWeight(EVoxelBiome::Desert) > 0.01f)
+    {
         Height += FVoxelBiomeGenerators::GetDesertHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Desert);
+        BaseWeightSum += Weights.GetWeight(EVoxelBiome::Desert);
+    }
 
     if (Weights.GetWeight(EVoxelBiome::Peaks) > 0.01f)
+    {
         Height += FVoxelBiomeGenerators::GetPeaksHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Peaks);
+        BaseWeightSum += Weights.GetWeight(EVoxelBiome::Peaks);
+    }
 
     if (Weights.GetWeight(EVoxelBiome::Cliffs) > 0.01f)
+    {
         Height += FVoxelBiomeGenerators::GetCliffsHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Cliffs);
+        BaseWeightSum += Weights.GetWeight(EVoxelBiome::Cliffs);
+    }
 
     if (Weights.GetWeight(EVoxelBiome::Mesa) > 0.01f)
+    {
         Height += FVoxelBiomeGenerators::GetMesaHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Mesa);
+        BaseWeightSum += Weights.GetWeight(EVoxelBiome::Mesa);
+    }
 
-    if (Weights.GetWeight(EVoxelBiome::Craters) > 0.01f)
-        Height += FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config) * Weights.GetWeight(EVoxelBiome::Craters);
+    // Normalize base height
+    Height /= (BaseWeightSum + 0.0001f);
+
+    // Apply craters as an overlay modifier layer
+    Height = FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config, Height);
 
     return Height;
 }

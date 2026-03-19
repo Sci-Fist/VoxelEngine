@@ -419,7 +419,7 @@ namespace // file-scope helpers — not part of the public API
     // -------------------------------------------------------------------------
     static bool TryApplyCentralCrater(
         float X, float Y, float nX, float nY,
-        float SurroundNoise, float BasePlains,
+        float BasePlains,
         int32 cX, int32 cY, const FVector& Off,
         const FVoxelGenerationConfig& Config,
         float& OutHeight, float& OutDist)
@@ -435,10 +435,6 @@ namespace // file-scope helpers — not part of the public API
         const float AbsoluteCenterX = CLocalX - Off.X;
         const float AbsoluteCenterY = CLocalY - Off.Y;
 
-        const FVoxelBiomeWeightMap CenterW = FVoxelBiomeManager::GetBiomeWeightsStatic(AbsoluteCenterX, AbsoluteCenterY, Config);
-        if (CenterW.GetWeight(EVoxelBiome::Craters) <= 0.15f)
-            return false;
-
         FCraterSetup S;
         S.nX = nX; S.nY = nY;
         S.dx = X - AbsoluteCenterX;
@@ -448,11 +444,15 @@ namespace // file-scope helpers — not part of the public API
         
         if (S.Dist >= S.CraterRadius * 1.5f) return false;
 
+        const FVoxelBiomeWeightMap CenterW = FVoxelBiomeManager::GetBiomeWeightsStatic(AbsoluteCenterX, AbsoluteCenterY, Config);
+        if (CenterW.GetWeight(EVoxelBiome::Craters) <= 0.15f)
+            return false;
+
         S.NormDist = S.Dist / S.CraterRadius;
         S.BasePlains = BasePlains;
 
         const float FloorFade = FMath::SmoothStep(0.65f, 0.0f, S.NormDist);
-        S.LocalPlains = Config.SeaLevel + 4000.f + SurroundNoise * (1.f - FloorFade);
+        S.LocalPlains = FMath::Lerp(Config.SeaLevel + 4000.f, BasePlains, 1.f - FloorFade);
 
         const float MinRimHeight = FMath::Abs(CRC.CentralCraterDepth) * 1.5f;
         const float BaseRimH     = FMath::Max(CRC.CentralCraterRimHeight, MinRimHeight) * 1.5f;
@@ -607,14 +607,15 @@ namespace // file-scope helpers — not part of the public API
             if (TNorm > 0.1f && TNorm < 0.25f)
                 TH += 200.f * FMath::SmoothStep(0.1f, 0.25f, TNorm);
 
-            TotalHeight = FMath::Lerp(TotalHeight, TH, 0.20f);
+            const float BlendWeight = (1.f - TNorm) * 0.20f;
+            TotalHeight = FMath::Lerp(TotalHeight, TH, BlendWeight);
         }
     }
 
 } // anonymous namespace
 
 // ── Public entry point ────────────────────────────────────────────────────────
-float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y, const FVoxelGenerationConfig& Config)
+float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y, const FVoxelGenerationConfig& Config, float BaseHeight)
 {
     const FCraterBiomeConfig& CRC = Config.Craters;
     const FVector Off = Config.GetSeedOffset();
@@ -622,8 +623,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y, const FVoxelGener
     const float nY = Y + Off.Y;
 
     // 1. Point-specific base context
-    const float SurroundNoise = FBM(nX * 0.001f, nY * 0.001f, 0.f, 3, 2.2f, 0.5f) * 850.f;
-    const float BasePlains = Config.SeaLevel + 4000.f + SurroundNoise;
+    const float BasePlains = BaseHeight;
     float TotalHeight = BasePlains;
     float ClosestCentralDist = 5000000.f; // deter secondary craters
 
@@ -638,7 +638,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y, const FVoxelGener
         {
             float LocalH = 0.f;
             float LocalDist = 5000000.f;
-            if (TryApplyCentralCrater(X, Y, nX, nY, SurroundNoise, BasePlains, CCX + dx, CCY + dy, Off, Config, LocalH, LocalDist))
+            if (TryApplyCentralCrater(X, Y, nX, nY, BasePlains, CCX + dx, CCY + dy, Off, Config, LocalH, LocalDist))
             {
                 TotalHeight = FMath::Min(TotalHeight, LocalH);
                 ClosestCentralDist = FMath::Min(ClosestCentralDist, LocalDist);
