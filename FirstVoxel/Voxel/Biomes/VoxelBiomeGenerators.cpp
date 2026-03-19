@@ -357,14 +357,14 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     // Central crater shape calculation
     const float NormalizedDist = FMath::Clamp(DistFromCenter / CRC.CentralCraterRadius, 0.f, 1.f);
     
+    // Rim zone definitions
+    const float RimStart = 0.082f;   
+    const float RimEnd = 0.086f;     
+    
     // CRATER SHAPE: Create proper impact crater profile
     const float FloorFade = FMath::SmoothStep(RimStart, 0.0f, NormalizedDist);
     const float LocalPlains = Config.SeaLevel + 4000.f + SurroundNoise * (1.0f - FloorFade);
     float CentralHeight = LocalPlains + CRC.CentralCraterDepth; // Start with floor
-    
-    // Rim zone definitions
-    const float RimStart = 0.082f;   
-    const float RimEnd = 0.086f;     
     
     // Calculate base rim height with minimum constraint
     const float MinRimHeight = FMath::Abs(CRC.CentralCraterDepth) * 0.8f; 

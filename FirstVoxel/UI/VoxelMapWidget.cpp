@@ -73,9 +73,8 @@ void UVoxelMapWidget::NativeDestruct()
     Super::NativeDestruct();
 }
 
-// ============================================================
-//  Runtime API
-// ============================================================
+static float GLastMapOpenTime = 0.f;
+
 void UVoxelMapWidget::OpenMap(AVoxelWorld* InVoxelWorld, APawn* InPlayerPawn)
 {
 	if (bShuttingDown)
@@ -100,6 +99,7 @@ void UVoxelMapWidget::OpenMap(AVoxelWorld* InVoxelWorld, APawn* InPlayerPawn)
 
     if (UWorld* W = GetWorld())
     {
+        GLastMapOpenTime = W->GetTimeSeconds();
         W->GetTimerManager().SetTimer(
             RefreshTimerHandle,
             this, &UVoxelMapWidget::OnRefreshTimer,
@@ -132,6 +132,17 @@ FString UVoxelMapWidget::GetPlayerBiomeName() const
 FReply UVoxelMapWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
     const FKey Key = InKeyEvent.GetKey();
+    if (Key == EKeys::M)
+    {
+        if (UWorld* W = GetWorld())
+        {
+            if (W->GetTimeSeconds() - GLastMapOpenTime < 0.25f)
+            {
+                return FReply::Handled(); // Consume input, skip closing same-frame toggle
+            }
+        }
+    }
+
     if (Key == EKeys::M || Key == EKeys::Escape)
     {
         CloseMap();

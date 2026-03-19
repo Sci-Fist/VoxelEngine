@@ -317,6 +317,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         }
 
         // 2. Air column check (above surface, below skylands)
+        /*
         const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
         const float OverhangMaxDist = Config.Performance.bEnableOverhangs ? Config.Overhangs.MaxDistFromSurface : 0.f;
         const float SafeAirMinZ = SurfaceHeight + OverhangMaxDist + 200.f;
@@ -348,6 +349,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             }
             return;
         }
+        */
 
         // ---- Per-voxel work (O(n^3)) ----
         for (int32 Z = 0; Z < EffectiveSize; ++Z)
