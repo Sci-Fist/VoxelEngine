@@ -237,27 +237,123 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     
     float CentralHeight;
     
-    // Rim zone: steep rise from plains to rim peak
-    const float RimStart = 0.08f;
-    const float RimEnd = 0.15f;
+    // Rim zone: extremely thin, curved rim with extended peaks
+    const float RimStart = 0.08f;   // Start rim slightly later for thinner profile
+    const float RimEnd = 0.09f;     // End rim much earlier for extremely thin walls (1cm total width)
+    
+    // Calculate base rim height with minimum constraint
+    const float MinRimHeight = FMath::Abs(CRC.CentralCraterDepth) * 0.8f; // Rim should be at least 80% of crater depth
+    const float BaseRimHeight = FMath::Max(CRC.CentralCraterRimHeight, MinRimHeight);
+    
+    // Add random variation to rim height for natural appearance
+    const float RimVariation = FastNoise3D(nX * 0.0005f, nY * 0.0005f, 0.f) * 0.3f;
+    const float RandomRimHeight = BaseRimHeight * (1.0f + RimVariation * 0.2f); // ±20% random variation
+    
     if (NormalizedDist < RimStart) {
       // Inside rim: flat floor or gentle slope to center
       const float FloorDepth = BasePlains + CRC.CentralCraterDepth;
       CentralHeight = FloorDepth;
     } else if (NormalizedDist < RimEnd) {
-      // Rim wall: steep transition from floor to rim peak
-      const float RimT = FMath::SmoothStep(RimStart, RimEnd, NormalizedDist);
-      const float RimPeak = BasePlains + CRC.CentralCraterRimHeight;
+      // Thin rim wall: very steep transition with curved profile
+      const float RimT = FMath::Pow((NormalizedDist - RimStart) / (RimEnd - RimStart), 0.2f); // Even steeper curve
+      const float RimPeak = BasePlains + RandomRimHeight;
       const float FloorDepth = BasePlains + CRC.CentralCraterDepth;
       CentralHeight = FMath::Lerp(FloorDepth, RimPeak, RimT);
+      
+      // Add curved rim edge noise for random outward/inward pointing edges
+      const float EdgeNoise = FastNoise3D(nX * 0.003f, nY * 0.003f, 0.f);
+      const float EdgeCurve = FMath::Sin(EdgeNoise * 3.14159f); // Sine wave for curved edges
+      const float EdgeAmplitude = 400.f; // 4m max edge variation
+      CentralHeight += EdgeCurve * EdgeAmplitude;
+      
+      // Add organic wall noise for jagged, rocky appearance
+      const float WallNoise = FastNoise3D(nX * 0.002f, nY * 0.002f, 0.f) * CRC.RimNoiseAmplitude * 0.8f;
+      CentralHeight += WallNoise * FMath::Exp(-(NormalizedDist - RimStart) * 15.0f); // More concentrated at rim base
     } else {
-      // Outside rim: gradual transition back to plains
-      const float PlainsT = FMath::SmoothStep(RimEnd, 0.25f, NormalizedDist);
-      const float RimPeak = BasePlains + CRC.CentralCraterRimHeight;
-      CentralHeight = FMath::Lerp(RimPeak, BasePlains, PlainsT);
+      // Outside rim: sharp drop-off with curved rim top
+      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + 0.05f, NormalizedDist);
+      const float RimPeak = BasePlains + RandomRimHeight;
+      const float DropTarget = BasePlains + RandomRimHeight * 0.3f; // Sharp drop to 30% height
+      CentralHeight = FMath::Lerp(RimPeak, DropTarget, DropT);
+      
+      // Add curved rim top edge detail with extended peaks
+      if (NormalizedDist >= RimEnd && NormalizedDist <= RimEnd + CRC.RimPeakLength) {
+        const float TopNoise = FastNoise3D(nX * 0.008f, nY * 0.008f, 0.f);
+        const float CurveDirection = (TopNoise > 0.0f) ? 1.0f : -1.0f; // Random outward/inward
+        const float CurveShape = FMath::Sin((NormalizedDist - RimEnd) * 15.0f); // Lower frequency for longer curves
+        const float TopCurve = CurveDirection * CurveShape * 400.f; // 4m max curve height for extended peaks
+        CentralHeight += TopCurve;
+      }
+      
+      // Add jagged rim peak border detail
+      if (NormalizedDist >= RimEnd + 0.03f && NormalizedDist <= RimEnd + 0.08f) {
+        const float PeakNoise = FastNoise3D(nX * 0.006f, nY * 0.006f, 0.f);
+        const float JaggedThreshold = 0.2f;
+        if (PeakNoise > JaggedThreshold) {
+          const float JaggedHeight = (PeakNoise - JaggedThreshold) * 600.f; // Jagged peaks up to 6m
+          CentralHeight += JaggedHeight;
+        }
+      }
+      
+      // --- EJECTA BLANKET - Auswurfmaterial around crater rim ---
+      // Creates the ejecta blanket (Ejecta-Decke) - layer of material thrown out during impact
+      if (NormalizedDist > RimEnd && NormalizedDist <= RimEnd + CRC.EjectaBlanketWidth) {
+        // Ejecta thickness fades with distance from rim
+        const float EjectaDist = NormalizedDist - RimEnd;
+        const float EjectaFade = FMath::Pow(1.0f - (EjectaDist / CRC.EjectaBlanketWidth), CRC.EjectaFadeExponent);
+        const float EjectaHeight = CRC.EjectaThickness * FMath::Abs(CRC.CentralCraterDepth) * EjectaFade;
+        
+        // Add ejecta blanket height
+        CentralHeight += EjectaHeight * 0.5f; // Half the theoretical thickness for visual balance
+        
+        // --- EJECTA BLOCKS - Blockfeld ausgeworfene Blöcke ---
+        // Large, angular or curved rock blocks thrown out during impact
+        const float BlockNoise = FastNoise3D(nX * CRC.EjectaBlockFrequency, nY * CRC.EjectaBlockFrequency, 0.f);
+        const float BlockThreshold = 0.8f;
+        if (BlockNoise > BlockThreshold) {
+          const float BlockSize = (BlockNoise - BlockThreshold) * CRC.EjectaBlockSize;
+          const float BlockHeight = (BlockNoise - BlockThreshold) * CRC.EjectaBlockAmplitude;
+          
+          // Apply block only within ejecta zone
+          if (EjectaDist < CRC.EjectaBlanketWidth * 0.8f) {
+            CentralHeight += BlockHeight;
+          }
+        }
+        
+        // --- OVERTURNED STRATA - Überkippte Schichten ---
+        // Bent and overturned rock layers at the crater edge
+        const float StrataNoise = FastNoise3D(nX * CRC.OverturnedStrataFrequency, nY * CRC.OverturnedStrataFrequency, 0.f);
+        const float StrataThreshold = 0.7f;
+        if (StrataNoise > StrataThreshold) {
+          const float StrataHeight = (StrataNoise - StrataThreshold) * CRC.OverturnedStrataAmplitude;
+          
+          // Apply overturned strata near rim edge
+          if (EjectaDist < CRC.EjectaBlanketWidth * 0.6f) {
+            // Create curved/bent appearance for overturned layers
+            const float StrataCurve = FMath::Sin(EjectaDist * 10.0f) * 0.5f + 0.5f;
+            CentralHeight += StrataHeight * StrataCurve;
+          }
+        }
+      }
+      
+      // Add organic erosion noise to outer rim
+      const float ErosionNoise = FastNoise3D(nX * 0.0015f, nY * 0.0015f, 0.f) * CRC.RimNoiseAmplitude * 0.4f;
+      if (NormalizedDist < 0.20f) {
+        CentralHeight += ErosionNoise * FMath::Exp(-(NormalizedDist - RimEnd) * 6.0f);
+      }
     }
     
-    // Add rim noise for natural irregularity
+    // Add rock formations at rim base (where floor meets wall)
+    if (NormalizedDist >= RimStart * 0.8f && NormalizedDist <= RimStart * 1.2f) {
+      const float RockNoise = FastNoise3D(nX * 0.004f, nY * 0.004f, 0.f);
+      const float RockThreshold = 0.3f;
+      if (RockNoise > RockThreshold) {
+        const float RockHeight = (RockNoise - RockThreshold) * 800.f; // Rock spires up to 8m
+        CentralHeight += RockHeight;
+      }
+    }
+    
+    // Add rim noise for natural irregularity (existing)
     const float RimNoise = FastNoise3D(nX * 0.0012f, nY * 0.0012f, 0.f) * CRC.RimNoiseAmplitude;
     if (NormalizedDist < 0.25f) {
       CentralHeight += RimNoise * FMath::Exp(-NormalizedDist * 4.0f); // Noise fades toward rim edge
@@ -267,78 +363,107 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     TotalHeight = FMath::Lerp(TotalHeight, CentralHeight, CentralDominance);
   }
 
-  // 2. SECONDARY CRATERS - scattered around central area
-  if (DistFromCenter > CRC.CentralCraterRadius * 0.3f) {
-    // Secondary crater placement noise
-    const float SecondaryFreq = CRC.ImpactFrequency * 2.5f;
+  // 2. SECONDARY CRATERS - scattered around central area with radial distribution
+  if (DistFromCenter > CRC.CentralCraterRadius * 0.2f) {
+    // Use much higher frequency for more craters and add strong radial bias
+    const float SecondaryFreq = CRC.ImpactFrequency * 6.0f;
     float SecondaryImpact = FastNoise3D(nX * SecondaryFreq, nY * SecondaryFreq, 300.f);
     
-    // Add organic distortion
-    const float Distort = FastNoise3D(nX * 0.002f, nY * 0.002f, 600.f) * 0.15f;
+    // Add additional noise layer for more crater variations
+    const float SecondaryNoise2 = FastNoise3D(nX * SecondaryFreq * 0.3f, nY * SecondaryFreq * 0.3f, 900.f);
+    SecondaryImpact = FMath::Max(SecondaryImpact, SecondaryNoise2);
+    
+    // Add organic distortion with strong radial bias toward central crater
+    const float RadialBias = FMath::Exp(-DistFromCenter / (CRC.CentralCraterRadius * 1.5f));
+    const float Distort = FastNoise3D(nX * 0.004f, nY * 0.004f, 600.f) * 0.3f * RadialBias;
     SecondaryImpact += Distort;
     
-    // Map to [0, 1] for crater detection
-    const float SecondaryThreshold = -0.3f;
+    // Map to [0, 1] for crater detection with lower threshold for more craters
+    const float SecondaryThreshold = -0.5f;
     const float Denominator = 1.f - SecondaryThreshold;
     const float SecondaryNorm = (Denominator > 0.001f)
         ? FMath::Clamp((SecondaryImpact - SecondaryThreshold) / Denominator, 0.f, 1.f)
         : 0.f;
 
-    if (SecondaryNorm > 0.1f) {
-      // Calculate secondary crater properties
+    if (SecondaryNorm > 0.02f) { // Lower threshold to catch more impacts
+      // Calculate secondary crater properties with improved scaling
       const float SecondarySize = FMath::Lerp(1500.f, CRC.SecondaryCraterMaxRadius, SecondaryNorm);
-      const float SecondaryDepth = FMath::Lerp(-1500.f, -3500.f, SecondaryNorm);
-      const float SecondaryRimHeight = FMath::Lerp(2000.f, 4000.f, SecondaryNorm);
+      const float SecondaryDepth = FMath::Lerp(-800.f, -2000.f, SecondaryNorm);
+      const float SecondaryRimHeight = FMath::Lerp(1200.f, 2500.f, SecondaryNorm);
       
-      // Distance from secondary crater center (offset to avoid overlap)
-      const float SecondaryDist = DistFromCenter * 0.9f + SecondaryNorm * 3000.f;
+      // Distance from secondary crater center with radial clustering
+      const float SecondaryDist = DistFromCenter * 0.7f + SecondaryNorm * 1500.f;
       const float SecondaryNormalizedDist = FMath::Clamp(SecondaryDist / SecondarySize, 0.f, 1.f);
       
-      // Secondary crater shape
+      // Secondary crater shape with improved rim profile
       float SecondaryHeight;
-      const float SecondaryRimStart = 0.10f;
-      const float SecondaryRimEnd = 0.18f;
+      const float SecondaryRimStart = 0.06f;
+      const float SecondaryRimEnd = 0.12f;
       
       if (SecondaryNormalizedDist < SecondaryRimStart) {
         // Flat floor
         SecondaryHeight = BasePlains + SecondaryDepth;
       } else if (SecondaryNormalizedDist < SecondaryRimEnd) {
-        // Rim wall
+        // Rim wall with steeper transition
         const float RimT = FMath::SmoothStep(SecondaryRimStart, SecondaryRimEnd, SecondaryNormalizedDist);
         const float RimPeak = BasePlains + SecondaryRimHeight;
         const float FloorDepth = BasePlains + SecondaryDepth;
         SecondaryHeight = FMath::Lerp(FloorDepth, RimPeak, RimT);
       } else {
-        // Transition back to plains
-        const float PlainsT = FMath::SmoothStep(SecondaryRimEnd, 0.30f, SecondaryNormalizedDist);
+        // Transition back to plains with gradual fade
+        const float PlainsT = FMath::SmoothStep(SecondaryRimEnd, 0.20f, SecondaryNormalizedDist);
         const float RimPeak = BasePlains + SecondaryRimHeight;
         SecondaryHeight = FMath::Lerp(RimPeak, BasePlains, PlainsT);
       }
       
-      // Blend secondary crater with existing terrain
-      const float SecondaryBlend = SecondaryNorm * CRC.SecondaryCraterDensity;
+      // Add rim noise for natural irregularity
+      const float RimNoise = FastNoise3D(nX * 0.003f, nY * 0.003f, 0.f) * CRC.RimNoiseAmplitude * 0.6f;
+      if (SecondaryNormalizedDist < 0.20f) {
+        SecondaryHeight += RimNoise * FMath::Exp(-SecondaryNormalizedDist * 8.0f);
+      }
+      
+      // Blend secondary crater with existing terrain - stronger blending
+      const float SecondaryBlend = SecondaryNorm * CRC.SecondaryCraterDensity * 1.2f;
       TotalHeight = FMath::Lerp(TotalHeight, SecondaryHeight, SecondaryBlend);
     }
   }
 
-  // 3. TERTIARY CRATERS - very small impacts in surrounding area
-  if (DistFromCenter > CRC.CentralCraterRadius * 0.8f) {
-    const float TertiaryFreq = CRC.ImpactFrequency * 8.0f;
-    float TertiaryImpact = FastNoise3D(nX * TertiaryFreq, nY * TertiaryFreq, 400.f);
+  // 3. TERTIARY CRATERS - very small impacts in surrounding area with high density
+  if (DistFromCenter > CRC.CentralCraterRadius * 0.3f) {
+    // Enhanced tertiary crater system for small variations around central crater
+    const float TertiaryFreq = CRC.ImpactFrequency * 15.0f; // Higher frequency for more small craters
+    float TertiaryImpact = FastNoise3D(nX * TertiaryFreq, nY * TertiaryFreq, 500.f);
     
-    const float TertiaryThreshold = 0.6f;
-    if (TertiaryImpact > TertiaryThreshold) {
-      const float TertiaryDepth = -600.f - (TertiaryImpact * 300.f);
-      const float TertiarySize = 600.f + (TertiaryImpact * 1000.f);
+    // Add additional noise layer for more natural distribution
+    const float TertiaryNoise2 = FastNoise3D(nX * TertiaryFreq * 0.5f, nY * TertiaryFreq * 0.5f, 700.f);
+    TertiaryImpact = FMath::Max(TertiaryImpact, TertiaryNoise2);
+    
+    // Add radial bias to concentrate small craters around central crater
+    const float RadialBias = FMath::Exp(-DistFromCenter / (CRC.CentralCraterRadius * 0.8f));
+    const float BiasedImpact = TertiaryImpact + (RadialBias * 0.3f);
+    
+    const float TertiaryThreshold = 0.6f; // Lower threshold for more craters
+    if (BiasedImpact > TertiaryThreshold) {
+      // Use new configuration parameters for tertiary craters
+      const float TertiaryDepth = -200.f - (BiasedImpact * 150.f); // Shallower for small craters
+      const float TertiarySize = CRC.TertiaryCraterMinRadius + 
+                                (BiasedImpact * (CRC.TertiaryCraterMaxRadius - CRC.TertiaryCraterMinRadius));
       
-      const float TertiaryDist = DistFromCenter * 1.1f;
+      const float TertiaryDist = DistFromCenter * 1.0f;
       const float TertiaryNormalizedDist = FMath::Clamp(TertiaryDist / TertiarySize, 0.f, 1.f);
       
-      // Simple bowl shape for tertiary craters
-      const float BowlShape = FMath::Pow(1.f - TertiaryNormalizedDist, 2.f);
+      // Simple bowl shape for tertiary craters with flatter profile
+      const float BowlShape = FMath::Pow(1.f - TertiaryNormalizedDist, 1.3f);
       const float TertiaryHeight = BasePlains + (TertiaryDepth * BowlShape);
       
-      TotalHeight = FMath::Lerp(TotalHeight, TertiaryHeight, 0.1f);
+      // Add small rim for tertiary craters
+      if (TertiaryNormalizedDist > 0.1f && TertiaryNormalizedDist < 0.25f) {
+        const float RimT = FMath::SmoothStep(0.1f, 0.25f, TertiaryNormalizedDist);
+        const float RimBoost = 200.f * RimT; // Smaller rim for tiny craters
+        TotalHeight = FMath::Lerp(TotalHeight, TertiaryHeight + RimBoost, 0.20f); // Higher blend for visibility
+      } else {
+        TotalHeight = FMath::Lerp(TotalHeight, TertiaryHeight, 0.20f);
+      }
     }
   }
 
@@ -624,6 +749,25 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             IslandSize  = FMath::Min(IslandSize, GridSize * 0.48f); // never overlap cells
         }
 
+        // --- ADJUST HEIGHT POSITION FOR SMALLER SKYSHARDS ---
+        // Smaller shards (low CellShardT) should hover closer to ground
+        // Larger islands (high CellShardT) should maintain proper altitude
+        {
+            const float HeightAdjustment = FMath::Lerp(0.6f, 1.0f, CellShardT); // Lower multiplier for smaller shards
+            const float AdjustedAltitudeBase = AltitudeBase * HeightAdjustment;
+            
+            // For very small shards, reduce altitude significantly to hover closer to ground
+            if (CellShardT < 0.3f) {
+                const float ShardAltitudeReduction = FMath::Lerp(0.4f, 0.8f, CellShardT); // 60% to 20% reduction
+                SkyAlt = DecoupledHeight + (AdjustedAltitudeBase * ShardAltitudeReduction)
+                    + CellShardT * (CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus);
+            } else {
+                // Standard altitude calculation for larger islands
+                SkyAlt = DecoupledHeight + AdjustedAltitudeBase
+                    + CellShardT * (CurvedHeight * SC.HeightAltitudeBonus + CurvedRough * SC.RoughnessAltitudeBonus);
+            }
+        }
+
 
         // -------------------------------------------------------------------
 
@@ -903,6 +1047,19 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
 
     // FIX: Blend at least 40% IslandFalloff onto shards to give them flat tops
     const float Falloff = FMath::Lerp(RockFalloff, IslandFalloff, FMath::Max(0.40f, Cache.ShardT));
+    
+    // --- ROUNDNESS ADJUSTMENT FOR SMALLER SKYSHARDS ---
+    // Smaller shards (low ShardT) should be rounder, larger islands (high ShardT) flatter
+    if (Cache.ShardT < 0.3f) {
+        // For very small shards, make them more spherical/rounded
+        const float RoundnessFactor = FMath::Lerp(1.0f, 0.6f, Cache.ShardT); // More spherical for smaller shards
+        const float RoundedT = FMath::Pow(tAbs, RoundnessFactor);
+        const float RoundedFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - RoundedT);
+        // Blend rounded falloff more for smaller shards
+        const float RoundBlend = FMath::Lerp(0.8f, 0.2f, Cache.ShardT);
+        const float ShardFalloff = FMath::Lerp(RoundedFalloff, Falloff, RoundBlend);
+        return FMath::Clamp(ShardFalloff * 2.5f - 1.8f, -2.f, 2.f);
+    }
 
     const float WX_base = X + Off.X;
     const float WY_base = Y + Off.Y;

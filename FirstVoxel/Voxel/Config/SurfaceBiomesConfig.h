@@ -415,37 +415,75 @@ struct FCraterBiomeConfig
 
     // Central Crater Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterRadius = 25000.f;  // Increased from 15000 for larger central crater
+    float CentralCraterRadius = 105000.f;  // Tripled from 35000 for much larger central crater (1050m diameter)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterDepth = -5000.f;  // Reduced depth for more natural crater
+    float CentralCraterDepth = -2500.f;  // Reduced depth from -5000 to -2500 for less extreme crater depth
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterRimHeight = 4000.f;  // Reduced rim height for less extreme walls
+    float CentralCraterRimHeight = 2500.f;  // Reduced rim height from 4000 to 2500 for less extreme walls
 
     // Secondary Crater Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Secondary Craters")
-    float SecondaryCraterDensity = 0.6f;  // Increased from 0.35 for more surrounding craters
+    float SecondaryCraterDensity = 0.9f;  // Increased from 0.8 for even more surrounding craters
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Secondary Craters")
-    float SecondaryCraterMaxRadius = 8000.f;  // Increased from 5000 for larger secondary craters
+    float SecondaryCraterMaxRadius = 36000.f;  // Tripled from 12000 for much larger secondary craters
+
+    // Tertiary Crater Configuration - Small crater variations around central crater
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tertiary Craters")
+    float TertiaryCraterDensity = 0.7f;  // High density for small crater variations
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tertiary Craters")
+    float TertiaryCraterMaxRadius = 4000.f;  // Small craters (40m diameter) for detailed variations
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Tertiary Craters")
+    float TertiaryCraterMinRadius = 1000.f;  // Very small craters (10m diameter) for fine detail
 
     // Rim Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rim")
-    float RimWidth = 0.18f;  // Increased from 0.12 for more gradual rim transition
+    float RimWidth = 0.04f;  // Much thinner rim walls (4% of crater radius)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rim")
-    float RimNoiseAmplitude = 120.f;  // Reduced from 180 for smoother rim
+    float RimNoiseAmplitude = 150.f;  // Increased for more dramatic rim peaks
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rim")
-    float RimErosion = 0.25f;  // Reduced from 0.35 for less weathered appearance
+    float RimErosion = 0.05f;  // Minimal erosion for sharp, dramatic rims
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rim")
+    float RimPeakLength = 0.15f;  // Extended curved peaks beyond rim edge
+
+    // Ejecta Configuration - Impact ejecta material around crater rim
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
+    float EjectaBlanketWidth = 0.25f;  // Width of ejecta blanket beyond rim (25% of crater radius)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
+    float EjectaThickness = 0.15f;  // Thickness of ejecta material relative to crater depth
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
+    float EjectaBlockFrequency = 0.0015f;  // Frequency of ejecta blocks
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
+    float EjectaBlockAmplitude = 1200.f;  // Height amplitude of ejecta blocks
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
+    float EjectaBlockSize = 0.08f;  // Size of individual ejecta blocks
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
+    float OverturnedStrataFrequency = 0.0025f;  // Frequency of overturned strata features
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
+    float OverturnedStrataAmplitude = 800.f;  // Height of overturned strata
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
+    float EjectaFadeExponent = 2.0f;  // How quickly ejecta fades with distance
 
     // Distribution Control
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Distribution")
-    float CraterDistribution = 0.7f;  // Reduced from 0.85 for more natural distribution
+    float CraterDistribution = 0.9f;  // Increased from 0.8 for stronger radial pattern around central crater
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Distribution")
-    float ImpactFrequency = 0.00008f;  // Increased from 0.00003 for more frequent impacts
+    float ImpactFrequency = 0.00015f;  // Increased from 0.00012 for more frequent impacts and variations
 
     // Legacy compatibility parameters
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
