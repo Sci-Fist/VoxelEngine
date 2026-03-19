@@ -99,9 +99,10 @@ public:
   float VoxelSize = 100.f;
 
   /** Horizontal distance (in chunks) to generate around the player. Total
-   * chunks: (2*Dist+1)^2. Increased to 12 for better visibility of large craters and distant terrain features. */
+   * chunks: (2*Dist+1)^2. Reduced from 12 to 8 for 54% fewer chunks and faster generation.
+   * 8 provides good visibility of craters and terrain features while maintaining performance. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
-  int32 RenderDistanceXY = 12;
+  int32 RenderDistanceXY = 8;
 
   /** Horizontal distance (in chunks) specifically for Skylands. High values
    * allow them to render far into the background with minimal performance hit.
@@ -110,9 +111,10 @@ public:
   int32 SkylandsRenderDistanceXY = 8; // Increased from 5 for vista size
 
   /** Vertical distance (in chunks) to generate above/below the player. High
-   * values allow for massive mountains and deep caves. */
+   * values allow for massive mountains and deep caves. Reduced from 3 to 2 for
+   * better performance while maintaining sufficient vertical terrain. */
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Streaming")
-  int32 RenderDistanceZ = 3; // Increased to 3
+  int32 RenderDistanceZ = 2;
 
   /** Max background tasks allowed at once. Higher values speed up generation
    * but can cause framerate hitching or high CPU usage.

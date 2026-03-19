@@ -557,13 +557,13 @@ struct FCraterBiomeConfig
 
     // Central Crater Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterRadius = 18000.f;  // Reduced from 105000 for smaller, more focused crater (180m diameter)
+    float CentralCraterRadius = 12000.f;  // Reduced from 18000 for smaller, more manageable crater (120m diameter)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterDepth = -3500.f;  // Deeper basin for more dramatic impact
+    float CentralCraterDepth = -2500.f;  // Adjusted depth to maintain dramatic relief ratio
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterRimHeight = 4500.f;  // Higher rim for dramatic rising walls
+    float CentralCraterRimHeight = 3000.f;  // Adjusted rim height to maintain impressive walls
 
     // Secondary Crater Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Secondary Craters")
@@ -597,7 +597,7 @@ struct FCraterBiomeConfig
 
     // Ejecta Configuration - Impact ejecta material around crater rim
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
-    float EjectaBlanketWidth = 0.25f;  // Width of ejecta blanket beyond rim (25% of crater radius)
+    float EjectaBlanketWidth = 0.30f;  // Width of ejecta blanket beyond rim (30% of crater radius, scaled for smaller crater)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ejecta")
     float EjectaThickness = 0.15f;  // Thickness of ejecta material relative to crater depth
@@ -635,10 +635,10 @@ struct FCraterBiomeConfig
     float RimHeight = 5500.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
-    float Frequency = 0.00002f;
+    float Frequency = 0.00008f;  // Increased from 0.00002 for more frequent craters
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
-    float ImpactThreshold = -0.5f;
+    float ImpactThreshold = -0.2f;  // Raised from -0.5 for easier crater formation
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Legacy")
     float FloorNoiseAmplitude = 300.f;

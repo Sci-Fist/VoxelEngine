@@ -215,7 +215,8 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 	if (!GetWorld()) return StartPos;
 
 	// Configuration parameters for crater search
-	const float SearchRadius = CraterSpawnSearchRadius;
+	// Increased search radius to find craters more reliably
+	const float SearchRadius = FMath::Max(CraterSpawnSearchRadius, 100000.0f); // Increased from default 50000 to 100000cm (1km)
 	const float Step = CraterSpawnSearchStep;
 	const float MinWeight = CraterSpawnMinWeight;
 

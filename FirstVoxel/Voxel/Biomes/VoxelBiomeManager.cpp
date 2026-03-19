@@ -102,15 +102,30 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
         const float dx = X - Config.Craters.ForcedCraterCenter.X;
         const float dy = Y - Config.Craters.ForcedCraterCenter.Y;
         const float DistSq = dx * dx + dy * dy;
-        // FIX: Boost radius must cover the entire crater shape (rim at 1.2x radius).
-        // Old value 6400 (64m) only covered the inner floor, leaving the rim zone
-        // (117-166m) dependent on Perlin noise which may give zero crater weight.
-        // New value = CentralCraterRadius * 1.2 = 180m * 1.2 = 216m ensures
-        // crater biome dominates across floor + rim + ejecta blanket.
+        const float Dist = FMath::Sqrt(DistSq);
+        
+        // FIX: Smooth crater boundary to prevent chunk instability at zone edges
+        // Old: Hard cutoff at radius caused biome weight oscillation
+        // New: Smooth transition from full crater weight to normal blending
         const float Radius = Config.Craters.CentralCraterRadius * 1.2f;
-        if (DistSq < Radius * Radius)
+        const float TransitionWidth = 2000.0f; // 20m smooth transition zone
+        
+        if (Dist < Radius + TransitionWidth)
         {
-            float Factor = 1.0f - (FMath::Sqrt(DistSq) / Radius);
+            // Smooth transition from 1.0 at center to 0.0 at boundary
+            float Factor = 1.0f;
+            if (Dist > Radius)
+            {
+                // Smooth step transition at boundary
+                const float t = (Dist - Radius) / TransitionWidth;
+                Factor = FMath::Clamp(1.0f - t, 0.0f, 1.0f);
+            }
+            else
+            {
+                // Full weight inside crater zone
+                Factor = 1.0f;
+            }
+            
             CratersW += Factor * 0.85f; // ensure dominance after scale normalization
         }
     }
@@ -236,6 +251,14 @@ float FVoxelBiomeManager::GetErosionWithSeed(float X, float Y, const FVoxelGener
 // ============================================================
 float FVoxelBiomeManager::GetBaseSurfaceDensity(float Z, float SurfaceHeight, const FVoxelGenerationConfig& Config)
 {
+    // 1. AIR COLUMN OPTIMIZATION
+    // Early exit for air columns to avoid unnecessary density calculations.
+    // This optimization improves performance by skipping density calculations
+    // for voxels that are clearly above the surface.
+    if (SurfaceHeight < Z - 1000.f) {
+        return -1.0f; // Air column
+    }
+
     // Calculate density based on distance from surface
     // Positive values indicate solid terrain (below surface)
     // Negative values indicate air (above surface)

@@ -114,6 +114,10 @@ void AVoxelChunk::BeginPlay()
 	Super::BeginPlay();
 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: BeginPlay (%d,%d,%d)"),
 		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
+	
+	// Initialize state flags with thread-safe operations
+	bMeshApplied = false;
+	bGenerating = false;
 }
 
 void AVoxelChunk::Tick(float DeltaTime)
@@ -911,12 +915,35 @@ void AVoxelChunk::BlendMeshes(const FVoxelMeshOutput& From, const FVoxelMeshOutp
 				To.SlopeMesh.Normals, To.SlopeMesh.UVs, To.SlopeMesh.VertexColors,
 				To.SlopeMesh.Tangents, true);
 		}
+		
+			// FIX: Keep previous mesh visible during transition to prevent gaps
+		// This ensures there's always geometry at chunk boundaries
+		if (PreviousMesh.FlatMesh.Vertices.Num() > 0)
+		{
+			// Create temporary section for previous mesh during transition
+			ProceduralMesh->CreateMeshSection(
+				2, PreviousMesh.FlatMesh.Vertices, PreviousMesh.FlatMesh.Triangles,
+				PreviousMesh.FlatMesh.Normals, PreviousMesh.FlatMesh.UVs, PreviousMesh.FlatMesh.VertexColors,
+				PreviousMesh.FlatMesh.Tangents, true);
+		}
+		
+		if (PreviousMesh.SlopeMesh.Vertices.Num() > 0)
+		{
+			// Create temporary section for previous slope mesh during transition
+			ProceduralMesh->CreateMeshSection(
+				3, PreviousMesh.SlopeMesh.Vertices, PreviousMesh.SlopeMesh.Triangles,
+				PreviousMesh.SlopeMesh.Normals, PreviousMesh.SlopeMesh.UVs, PreviousMesh.SlopeMesh.VertexColors,
+				PreviousMesh.SlopeMesh.Tangents, true);
+		}
 	}
 	else
 	{
 		// Transition complete: ensure final mesh is visible
 		ProceduralMesh->SetVisibility(true);
 		ProceduralMesh->UpdateBounds();
+		
+		// Clear previous mesh data after transition
+		PreviousMesh.Reset();
 	}
 }
 

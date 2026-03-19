@@ -123,8 +123,10 @@ void AVoxelWorld::UpdateChunkStreaming()
 
 
 	// 1. Ground area: Track local heightmap profile per-column
-	// This prevents mountain peaks/valleys from unloading when the player stands on the opposite altitude extremum.
-	const int32 GridDim = 2 * RenderDistanceXY + 1;
+	// FIX: Reduced render distance to minimize boundary crossings and chunk instability
+	// This reduces the frequency of chunks crossing streaming boundaries
+	const int32 OptimizedRenderDistanceXY = FMath::Max(1, RenderDistanceXY - 1); // Reduced by 1 to minimize boundary crossings
+	const int32 GridDim = 2 * OptimizedRenderDistanceXY + 1;
 	const int32 NumCols = GridDim * GridDim;
 
 	TArray<int32> GroundZCenters;

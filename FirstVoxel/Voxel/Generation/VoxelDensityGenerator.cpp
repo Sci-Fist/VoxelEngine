@@ -86,6 +86,14 @@ float FVoxelDensityGenerator::GetDensityFull(
     const float X = WorldPos.X, Y = WorldPos.Y, Z = WorldPos.Z;
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
 
+    // 1. AIR COLUMN OPTIMIZATION
+    // Early exit for air columns to avoid unnecessary density calculations.
+    // This optimization improves performance by skipping density calculations
+    // for voxels that are clearly above the surface.
+    if (SurfaceHeight < Z - 1000.f) {
+        return -1.0f; // Air column
+    }
+
     // Compute the world-space noise offset once and reuse throughout this call.
     // GetSeedOffset() runs a small integer hash -- cheap, but previously called
     // 2-3 times per voxel across overhangs / cave bedrock / SampleCaveNoise.

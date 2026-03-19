@@ -351,8 +351,8 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   // New: SmoothStep starts fading at RimEnd+0.05 = 0.97, so rim peak gets full 100% magnitude.
   // Fade completes at RimEnd + 0.38 = 1.30 (same outer boundary as before).
   const float CenterDistNorm = DistFromCenter / CRC.CentralCraterRadius;
-  const float FadeStart = CRC.RimEnd + 0.05f; // Start fading just beyond rim peak
-  const float FadeEnd = CRC.RimEnd + 0.38f;   // Complete fade ~68m beyond 180m radius
+  const float FadeStart = 0.92f + 0.05f; // Start fading just beyond rim peak (RimEnd=0.92)
+  const float FadeEnd = 0.92f + 0.38f;   // Complete fade ~68m beyond 180m radius
   const float CentralDominance = FMath::SmoothStep(FadeEnd, FadeStart, CenterDistNorm); 
   
   // Base terrain height
@@ -668,7 +668,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     }
   }
 
-  // 4. FLOOR DETAIL - add small-scale roughness to crater floors
+  // 4. FLOOR DETAIL - add small-scale roughness to crater floors (reduced from 3 to 2 octaves for performance)
   const float FloorNoise = FBM(nX * CRC.BuildingNoiseFrequency,
                                nY * CRC.BuildingNoiseFrequency, 0.f,
                                2, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves)

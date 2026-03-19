@@ -498,8 +498,8 @@ void AFirstVoxelHUD::DrawHUD()
     }
 
     // ── Tool Wheel Overlay ────────────────────────────────────────────────
-    Char = Cast<AFirstVoxelCharacter>(GetOwningPawn());
-    if (Char && Char->bToolWheelOpen)
+    AFirstVoxelCharacter* ToolChar = Cast<AFirstVoxelCharacter>(GetOwningPawn());
+    if (ToolChar && ToolChar->bToolWheelOpen)
     {
         DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
 
@@ -561,5 +561,40 @@ void AFirstVoxelHUD::DrawHUD()
 
         DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), DrawX - 4.f, DrawY - 2.f, TextW + 8.f, TextH + 4.f);
         DrawText(FPSText, FLinearColor(0.3f, 1.f, 0.3f, 1.f), DrawX, DrawY, SmallFont);
+    }
+
+    // ── Coordinates and Altitude Display (Below FPS) ─────────────────────
+    if (Canvas && GEngine)
+    {
+        AFirstVoxelCharacter* Char = Cast<AFirstVoxelCharacter>(GetOwningPawn());
+        if (Char)
+        {
+            FVector Location = Char->GetActorLocation();
+            
+            // Coordinates display (X, Y, Z)
+            FString CoordText = FString::Printf(TEXT("X: %.1f  Y: %.1f  Z: %.1f"), 
+                Location.X, Location.Y, Location.Z);
+            
+            float CoordW, CoordH;
+            GetTextSize(CoordText, CoordW, CoordH, SmallFont);
+            
+            const float CoordX = Canvas->SizeX - CoordW - 20.f;
+            const float CoordY = 50.f; // Below FPS counter
+
+            DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), CoordX - 4.f, CoordY - 2.f, CoordW + 8.f, CoordH + 4.f);
+            DrawText(CoordText, FLinearColor(0.8f, 0.8f, 1.0f, 1.f), CoordX, CoordY, SmallFont);
+
+            // Altitude display (Y-up coordinate)
+            FString AltText = FString::Printf(TEXT("Altitude: %.1f cm"), Location.Z);
+            
+            float AltW, AltH;
+            GetTextSize(AltText, AltW, AltH, SmallFont);
+            
+            const float AltX = Canvas->SizeX - AltW - 20.f;
+            const float AltY = 75.f; // Below coordinates
+
+            DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), AltX - 4.f, AltY - 2.f, AltW + 8.f, AltH + 4.f);
+            DrawText(AltText, FLinearColor(1.0f, 0.8f, 0.3f, 1.f), AltX, AltY, SmallFont);
+        }
     }
 }
