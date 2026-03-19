@@ -574,4 +574,9 @@ private:
   // Async generation helpers to prevent editor freeze
   void PerformWorldDiscoveryAndBoundsCalculation();
   void FinalizeGenerationSetup();
+
+  // Visibility management functions for close-range chunk fixes
+  void ApplyMeshToChunk(AVoxelChunk* Chunk);
+  void EnforceLODConsistency();
+  void CheckCloseRangeVisibility();
 };

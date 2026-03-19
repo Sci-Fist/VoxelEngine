@@ -420,6 +420,11 @@ void AVoxelWorld::Tick(float DeltaTime)
 		}
 	}
 
+	// ── Close-range visibility health check ─────────────────────────────────
+	// Proactively check and restore visibility for chunks near the player
+	// This prevents chunks from getting stuck in invisible state
+	CheckCloseRangeVisibility();
+
 	// ── Dirty-chunk rebuild — O(DirtyQueue) not O(LoadedChunks) ──────────────
 	// DirtyRebuildQueue is populated by MarkChunkDirty() (called from SetVoxelSphere etc.).
 	// Scanning all LoadedChunks every frame was O(N) even when nothing was dirty.

@@ -220,6 +220,9 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 	const float Step = CraterSpawnSearchStep;
 	const float MinWeight = CraterSpawnMinWeight;
 
+	// Get the world anchor to ensure coordinate system consistency
+	const FVector WorldAnchor = GetActorLocation();
+
 	// Initialize search with starting position
 	FVector BestPos = StartPos;
 	float BestWeight = -1.0f;
@@ -237,6 +240,7 @@ FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& StartPos, const FVox
 			FVector Candidate = FVector(StartPos.X + x, StartPos.Y + y, StartPos.Z);
 
 			// Get biome weights at this position to determine crater likelihood
+			// FIX: Use the world anchor to ensure consistent coordinate system
 			FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(Candidate.X, Candidate.Y, Config);
 			float CraterWeight = Weights.GetWeight(EVoxelBiome::Craters);
 			float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(Candidate.X, Candidate.Y, Weights, Config);

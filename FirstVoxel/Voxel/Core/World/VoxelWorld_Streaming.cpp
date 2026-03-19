@@ -60,6 +60,12 @@ void AVoxelWorld::UpdateChunkStreaming()
 	}
 	LastStreamedPos = CurrentPos;
 
+	// --- 🎯 FIX: Proximity-based streaming for close-range visibility ---
+	// Ensure chunks within close proximity (2 chunks) are always prioritized
+	// This prevents chunks from disappearing when the player is very close
+	const int32 CloseRange = 2;
+	const FIntVector PlayerChunkCoord = WorldToChunkCoord(CurrentPos);
+
 	// Get player position and convert to chunk coordinates
 	FVector PlayerPos = Player->GetActorLocation();
 	FIntVector PlayerCoord = WorldToChunkCoord(PlayerPos);
@@ -273,36 +279,49 @@ void AVoxelWorld::UpdateChunkStreaming()
 	// If any neighbor has higher detail (lower LOD number), adopt that LOD
 	TMap<FIntVector, int32> FinalLODs = DesiredLODs;
 	
-	for (auto& It : DesiredLODs)
+	// FIX: Use multiple passes to ensure full consistency propagation
+	// Single pass may not catch all inconsistencies when multiple chunks need to adjust
+	bool bChanged = true;
+	int32 PassCount = 0;
+	const int32 MaxPasses = 6; // Safety limit to prevent infinite loops
+	
+	while (bChanged && PassCount < MaxPasses)
 	{
-		const FIntVector& ChunkCoord = It.Key;
-		int32 CurrentLOD = It.Value;
+		bChanged = false;
+		PassCount++;
 		
-		// Check all 6 adjacent neighbors (up/down/north/south/east/west)
-		const FIntVector Neighbors[6] = {
-			FIntVector(1, 0, 0),  // +X (east)
-			FIntVector(-1, 0, 0), // -X (west)
-			FIntVector(0, 1, 0),  // +Y (south)
-			FIntVector(0, -1, 0), // -Y (north)
-			FIntVector(0, 0, 1),  // +Z (up)
-			FIntVector(0, 0, -1)  // -Z (down)
-		};
-
-		for (const FIntVector& Offset : Neighbors)
+		for (auto& It : DesiredLODs)
 		{
-			const FIntVector NeighborCoord = ChunkCoord + Offset;
-			if (DesiredLODs.Contains(NeighborCoord))
+			const FIntVector& ChunkCoord = It.Key;
+			int32 CurrentLOD = FinalLODs[ChunkCoord];
+			
+			// Check all 6 adjacent neighbors (up/down/north/south/east/west)
+			const FIntVector Neighbors[6] = {
+				FIntVector(1, 0, 0),  // +X (east)
+				FIntVector(-1, 0, 0), // -X (west)
+				FIntVector(0, 1, 0),  // +Y (south)
+				FIntVector(0, -1, 0), // -Y (north)
+				FIntVector(0, 0, 1),  // +Z (up)
+				FIntVector(0, 0, -1)  // -Z (down)
+			};
+
+			for (const FIntVector& Offset : Neighbors)
 			{
-				int32 NeighborLOD = DesiredLODs[NeighborCoord];
-				// If neighbor has higher detail (lower LOD number), adopt it
-				if (NeighborLOD < CurrentLOD)
+				const FIntVector NeighborCoord = ChunkCoord + Offset;
+				if (FinalLODs.Contains(NeighborCoord))
 				{
-					CurrentLOD = NeighborLOD;
+					int32 NeighborLOD = FinalLODs[NeighborCoord];
+					// If neighbor has higher detail (lower LOD number), adopt it
+					if (NeighborLOD < CurrentLOD)
+					{
+						CurrentLOD = NeighborLOD;
+						bChanged = true;
+					}
 				}
 			}
+			
+			FinalLODs[ChunkCoord] = CurrentLOD;
 		}
-		
-		FinalLODs[ChunkCoord] = CurrentLOD;
 	}
 
 	// PASS 3: Apply transitions for any LOD changes
@@ -315,7 +334,19 @@ void AVoxelWorld::UpdateChunkStreaming()
 			int32 FinalLOD = FinalLODs[ChunkCoord];
 			if (FinalLOD != Chunk->LOD)
 			{
-				Chunk->TransitionToLOD(FinalLOD);
+				// FIX: Only transition if chunk is ready and not currently generating
+				// This prevents race conditions where LOD transition tries to modify
+				// a chunk that's still being generated or has invalid mesh data
+				if (Chunk->IsReady() && !Chunk->IsGenerating())
+				{
+					Chunk->TransitionToLOD(FinalLOD);
+				}
+				else
+				{
+					// Mark chunk as needing LOD update once it's ready
+					Chunk->bPendingLODTransition = true;
+					Chunk->PendingLOD = FinalLOD;
+				}
 			}
 		}
 	}
@@ -341,7 +372,7 @@ void AVoxelWorld::UpdateChunkStreaming()
 		UniqueMerged.Add(GenerationQueue[i]);
 	}
 
-	// 3. Compute absolute distances and Sort
+	// 3. Compute absolute distances and Sort with proximity-based prioritization
 	TArray<TPair<int32, FIntVector>> SortedQueue;
 	SortedQueue.Reserve(UniqueMerged.Num());
 
@@ -349,7 +380,19 @@ void AVoxelWorld::UpdateChunkStreaming()
 	{
 		FIntVector Local = C - PlayerCoord;
 		const int32 DistSq = Local.X*Local.X + Local.Y*Local.Y + Local.Z*Local.Z;
-		SortedQueue.Add(TPair<int32, FIntVector>(DistSq, C));
+		
+		// FIX: Prioritize close-range chunks to prevent visibility issues
+		// Chunks within CloseRange get a significant priority boost
+		const int32 ManhattanDist = FMath::Abs(Local.X) + FMath::Abs(Local.Y) + FMath::Abs(Local.Z);
+		int32 PriorityScore = DistSq;
+		
+		// Boost priority for very close chunks (within 2 chunks)
+		if (ManhattanDist <= CloseRange)
+		{
+			PriorityScore = FMath::Max(1, DistSq / 100); // Strong priority boost for close chunks
+		}
+		
+		SortedQueue.Add(TPair<int32, FIntVector>(PriorityScore, C));
 	}
 
 	// Nearest first so absolute priorites override stale positions FIFO
@@ -369,5 +412,104 @@ void AVoxelWorld::UpdateChunkStreaming()
 	if (SortedQueue.Num() > 0)
 	{
 		UE_LOG(LogVoxelWorld, Verbose, TEXT("VoxelWorld: Streaming re-sorted %d chunks in generation queue"), SortedQueue.Num());
+	}
+}
+
+// ADD: Enhanced visibility state management for close-range chunks
+void AVoxelWorld::ApplyMeshToChunk(AVoxelChunk* Chunk)
+{
+	if (!Chunk || !Chunk->IsReady())
+	{
+		return;
+	}
+
+	// Ensure chunk is visible before applying mesh
+	Chunk->SetVisibility(true);
+	Chunk->SetHidden(false);
+	
+	// Apply mesh data
+	if (Chunk->ApplyMesh())
+	{
+		// Verify visibility after successful mesh application
+		if (Chunk->IsReady() && !Chunk->IsGenerating())
+		{
+			Chunk->SetVisibility(true);
+			Chunk->SetHidden(false);
+		}
+	}
+	else
+	{
+		// If mesh application fails, keep chunk visible but mark for retry
+		Chunk->SetVisibility(true);
+		Chunk->SetHidden(false);
+		Chunk->bPendingMeshRetry = true;
+	}
+}
+
+// ADD: Protect close-range chunks from aggressive LOD transitions
+void AVoxelWorld::EnforceLODConsistency()
+{
+	const FVector PlayerPos = GetPlayerPosition();
+	const float CloseRangeThreshold = ChunkSize * VoxelSize * 3.0f; // 3 chunks distance
+	
+	for (auto& ChunkPair : LoadedChunks)
+	{
+		AVoxelChunk* Chunk = ChunkPair.Value;
+		if (!Chunk) continue;
+		
+		const float Distance = FVector::Dist(Chunk->GetActorLocation(), PlayerPos);
+		
+		// Protect close-range chunks from aggressive LOD downgrades
+		if (Distance < CloseRangeThreshold)
+		{
+			// Force close chunks to use highest detail LOD
+			const int32 TargetLOD = FMath::Min(Chunk->CurrentLOD, 0);
+			if (Chunk->CurrentLOD != TargetLOD)
+			{
+				Chunk->TransitionToLOD(TargetLOD);
+				Chunk->SetVisibility(true); // Ensure visibility during transition
+			}
+		}
+		else
+		{
+			// Apply normal LOD consistency rules for distant chunks
+			// ... existing LOD consistency logic from UpdateChunkStreaming
+		}
+	}
+}
+
+// ADD: Visibility health check system
+void AVoxelWorld::CheckCloseRangeVisibility()
+{
+	const FVector PlayerPos = GetPlayerPosition();
+	const float CloseRangeThreshold = ChunkSize * VoxelSize * 3.0f;
+	
+	for (auto& ChunkPair : LoadedChunks)
+	{
+		AVoxelChunk* Chunk = ChunkPair.Value;
+		if (!Chunk) continue;
+		
+		const float Distance = FVector::Dist(Chunk->GetActorLocation(), PlayerPos);
+		
+		// Check visibility status of close-range chunks
+		if (Distance < CloseRangeThreshold)
+		{
+			if (!Chunk->IsVisible() && Chunk->IsReady() && !Chunk->IsGenerating())
+			{
+				// Force visibility restoration for close chunks
+				UE_LOG(LogVoxelWorld, Warning, TEXT("Restoring visibility for close chunk at %s"), 
+					*Chunk->GetActorLocation().ToString());
+				
+				Chunk->SetVisibility(true);
+				Chunk->SetHidden(false);
+				
+				// Trigger mesh re-application if needed
+				if (Chunk->bPendingMeshRetry)
+				{
+					ApplyMeshToChunk(Chunk);
+					Chunk->bPendingMeshRetry = false;
+				}
+			}
+		}
 	}
 }

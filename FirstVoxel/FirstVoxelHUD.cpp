@@ -498,8 +498,8 @@ void AFirstVoxelHUD::DrawHUD()
     }
 
     // ── Tool Wheel Overlay ────────────────────────────────────────────────
-    AFirstVoxelCharacter* ToolChar = Cast<AFirstVoxelCharacter>(GetOwningPawn());
-    if (ToolChar && ToolChar->bToolWheelOpen)
+    AFirstVoxelCharacter* PlayerChar = Cast<AFirstVoxelCharacter>(GetOwningPawn());
+    if (PlayerChar && PlayerChar->bToolWheelOpen)
     {
         DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), 0.f, 0.f, Canvas->SizeX, Canvas->SizeY);
 
@@ -515,7 +515,7 @@ void AFirstVoxelHUD::DrawHUD()
             FVector2D(0.f, Radius)
         };
 
-        const int32 SelectedIdx = static_cast<int32>(Char->CurrentTool);
+        const int32 SelectedIdx = static_cast<int32>(PlayerChar->CurrentTool);
 
         for (int32 i = 0; i < 4; ++i)
         {
@@ -537,7 +537,7 @@ void AFirstVoxelHUD::DrawHUD()
 
         DrawRect(FLinearColor::White, CenterX - 3.f, CenterY - 3.f, 6.f, 6.f);
 
-        if (!Char->bLastInputWasGamepad)
+        if (!PlayerChar->bLastInputWasGamepad)
         {
             float MouseX, MouseY;
             APlayerController* PC2 = GetOwningPlayerController();
@@ -566,10 +566,10 @@ void AFirstVoxelHUD::DrawHUD()
     // ── Coordinates and Altitude Display (Below FPS) ─────────────────────
     if (Canvas && GEngine)
     {
-        AFirstVoxelCharacter* Char = Cast<AFirstVoxelCharacter>(GetOwningPawn());
-        if (Char)
+        AFirstVoxelCharacter* Character = Cast<AFirstVoxelCharacter>(GetOwningPawn());
+        if (Character)
         {
-            FVector Location = Char->GetActorLocation();
+            FVector Location = Character->GetActorLocation();
             
             // Coordinates display (X, Y, Z)
             FString CoordText = FString::Printf(TEXT("X: %.1f  Y: %.1f  Z: %.1f"), 

@@ -123,6 +123,16 @@ void AVoxelChunk::BeginPlay()
 void AVoxelChunk::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	
+	// Handle pending LOD transitions when chunk becomes ready
+	if (bPendingLODTransition && IsReady() && !IsGenerating())
+	{
+		// Apply the pending LOD transition now that chunk is ready
+		TransitionToLOD(PendingLOD);
+		bPendingLODTransition = false;
+		PendingLOD = 0;
+	}
+	
 	// Drive smooth LOD transitions each frame.
 	if (MeshState == EChunkMeshState::Transitioning)
 	{

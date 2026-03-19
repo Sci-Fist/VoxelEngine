@@ -229,6 +229,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
 	UMaterialInterface* WaterMaterial = nullptr;
 
+	/** Pending LOD transition flag - set when chunk is not ready for immediate LOD change */
+	bool bPendingLODTransition = false;
+
+	/** Target LOD for pending transition */
+	int32 PendingLOD = 0;
+
 	/** Smoothly transition to a new LOD level. */
 	UFUNCTION(BlueprintCallable, Category = "Voxel|LOD")
 	void TransitionToLOD(int32 NewLOD);

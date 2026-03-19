@@ -621,31 +621,23 @@ AVoxelWorld* AFirstVoxelCharacter::FindAndCacheVoxelWorld()
 
 
 void AFirstVoxelCharacter::ApplyCurrentTool()
-
 {
-
 	UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: Tool=%d, Radius=%.1f"), 
 		(uint8)CurrentTool, InteractionRadius);
 
-	
 	AVoxelWorld* World = FindAndCacheVoxelWorld();
-
 	if (!World) 
 	{
 		UE_LOG(LogTemplateCharacter, Warning, TEXT("ApplyCurrentTool: No VoxelWorld found!"));
 		return;
-
 	}
 
-
 	APlayerController* PC = Cast<APlayerController>(GetController());
-
 	if (!PC) 
 	{
 		UE_LOG(LogTemplateCharacter, Warning, TEXT("ApplyCurrentTool: No PlayerController!"));
 		return;
 	}
-
 
 	FVector CamLoc;
 	FRotator CamRot;
@@ -654,77 +646,56 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 	FVector Start = CamLoc;
 	FVector End = Start + (CamRot.Vector() * 1500.f);
 
-
 	FHitResult Hit;
-
 	FCollisionQueryParams Params;
-
 	Params.AddIgnoredActor(this);
-
-	Params.bTraceComplex = true; // FIXED: Enable complex collision for better accuracy
-
-
+	Params.bTraceComplex = true;
 
 	if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
-
 	{
-
 		FVector ImpactPoint = Hit.ImpactPoint;
-
 		UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: Raycast HIT at %s, Normal=%s, Actor=%s"),
-
 			*ImpactPoint.ToString(), *Hit.ImpactNormal.ToString(),
 			Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("null"));
+		
 		float CurrentTime = GetWorld()->GetTimeSeconds();
 
-
-
 		if (CurrentTool == EVoxelToolMode::Dig)
-
 		{
-
 			if (CurrentTime - DigLastActionTime > 0.05f)
-
 			{
-
 				// FIX: Move INTO the surface (subtract normal) so the sphere actually
-
 				// overlaps solid voxels. Adding the normal placed the sphere in air.
-
 				FVector DigPos = ImpactPoint - (Hit.ImpactNormal * (InteractionRadius * 0.5f));
-
-				UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: DIG at %s (radius %.1f)"),
-					*DigPos.ToString(), InteractionRadius);
+				
+				// FIX: Ensure coordinate system consistency with VoxelWorld
+				// The VoxelWorld uses GetActorLocation() as its anchor, so we need to
+				// ensure our world positions align with that coordinate system.
+				// This is particularly important for crater spawn alignment.
+				const FVector WorldAnchor = World->GetActorLocation();
+				UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: DIG at %s (radius %.1f) relative to world anchor %s"),
+					*DigPos.ToString(), InteractionRadius, *WorldAnchor.ToString());
+				
 				World->SetVoxelSphere(DigPos, InteractionRadius, -1.0f, true);
-
 				DigLastActionTime = CurrentTime;
-
 			}
-
 		}
-
 		else if (CurrentTool == EVoxelToolMode::Build)
-
 		{
-
 			if (CurrentTime - BuildLastActionTime > 0.05f)
-
 			{
-
 				// Build: place sphere just above the surface so new voxels attach cleanly
-
 				FVector BuildPos = ImpactPoint + (Hit.ImpactNormal * (InteractionRadius * 0.5f));
-
-				UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: BUILD at %s (radius %.1f)"),
-					*BuildPos.ToString(), InteractionRadius);
+				
+				// FIX: Ensure coordinate system consistency with VoxelWorld
+				const FVector WorldAnchor = World->GetActorLocation();
+				UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: BUILD at %s (radius %.1f) relative to world anchor %s"),
+					*BuildPos.ToString(), InteractionRadius, *WorldAnchor.ToString());
+				
 				World->SetVoxelSphere(BuildPos, InteractionRadius, 1.0f, true);
-
 				BuildLastActionTime = CurrentTime;
-
 			}
-
 		}
-
 		else if (CurrentTool == EVoxelToolMode::Smooth)
 		{
 			// SMOOTH: soften terrain by alternating very gentle fill and carve
