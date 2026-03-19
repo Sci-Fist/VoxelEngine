@@ -265,7 +265,8 @@ bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell, TSet<FI
                 bChanged = true;
             }
         }
-        else if (!bIsSource) { *SrcCell = WATER_EMPTY; bChanged = true; }
+        // Removed to prevent water from discharging into unloaded chunk void below.
+        // else if (!bIsSource) { *SrcCell = WATER_EMPTY; bChanged = true; }
 
         // If source cell is empty after gravity flow, no need to check lateral spread
         if (!bIsSource && *SrcCell == WATER_EMPTY) return bChanged;

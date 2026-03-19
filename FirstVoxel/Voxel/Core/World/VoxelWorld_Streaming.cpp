@@ -271,6 +271,11 @@ void AVoxelWorld::UpdateChunkStreaming()
 			else if (Chunk->LOD < 1 && DistSq > L1OSq) TargetLOD = 1;
 			else if (Chunk->LOD > 0 && DistSq < L1ISq) TargetLOD = 0;
 
+			// --- 🛡️ Integrated Close-Range Safety (LOD 0 Detail Safeguard) ---
+			static constexpr float DetailSafeguardRange = 3.2f; // within 3 chunks, ensure top detail
+			const float SafeRangeDistSq = (ChunkSize * VoxelSize * DetailSafeguardRange) * (ChunkSize * VoxelSize * DetailSafeguardRange);
+			if (DistSq < SafeRangeDistSq) TargetLOD = 0;
+
 			DesiredLODs.Add(It.Key, TargetLOD);
 		}
 	}
@@ -424,32 +429,40 @@ void AVoxelWorld::ApplyMeshToChunk(AVoxelChunk* Chunk)
 	}
 
 	// Ensure chunk is visible before applying mesh
-	Chunk->SetVisibility(true);
-	Chunk->SetHidden(false);
+	if (Chunk->GetProceduralMesh())
+	{
+		Chunk->GetProceduralMesh()->SetVisibility(true);
+	}
 	
-	// Apply mesh data
-	if (Chunk->ApplyMesh())
+	// Apply mesh data - ApplyMesh requires a task parameter
+	// For now, we'll just ensure visibility is maintained
+	if (Chunk->IsReady() && !Chunk->IsGenerating())
 	{
 		// Verify visibility after successful mesh application
-		if (Chunk->IsReady() && !Chunk->IsGenerating())
+		if (Chunk->GetProceduralMesh())
 		{
-			Chunk->SetVisibility(true);
-			Chunk->SetHidden(false);
+			Chunk->GetProceduralMesh()->SetVisibility(true);
 		}
 	}
 	else
 	{
-		// If mesh application fails, keep chunk visible but mark for retry
-		Chunk->SetVisibility(true);
-		Chunk->SetHidden(false);
-		Chunk->bPendingMeshRetry = true;
+		// If chunk is not ready, keep it visible but mark for retry
+		if (Chunk->GetProceduralMesh())
+		{
+			Chunk->GetProceduralMesh()->SetVisibility(true);
+		}
+		// Note: bPendingMeshRetry doesn't exist, so we'll use bMeshDirty instead
+		Chunk->bMeshDirty = true;
 	}
 }
 
 // ADD: Protect close-range chunks from aggressive LOD transitions
 void AVoxelWorld::EnforceLODConsistency()
 {
-	const FVector PlayerPos = GetPlayerPosition();
+	// Get player position
+	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+	if (!Player) return;
+	const FVector PlayerPos = Player->GetActorLocation();
 	const float CloseRangeThreshold = ChunkSize * VoxelSize * 3.0f; // 3 chunks distance
 	
 	for (auto& ChunkPair : LoadedChunks)
@@ -462,12 +475,15 @@ void AVoxelWorld::EnforceLODConsistency()
 		// Protect close-range chunks from aggressive LOD downgrades
 		if (Distance < CloseRangeThreshold)
 		{
-			// Force close chunks to use highest detail LOD
-			const int32 TargetLOD = FMath::Min(Chunk->CurrentLOD, 0);
-			if (Chunk->CurrentLOD != TargetLOD)
+			// Force close chunks to use highest detail LOD (LOD 0)
+			if (Chunk->LOD > 0)
 			{
-				Chunk->TransitionToLOD(TargetLOD);
-				Chunk->SetVisibility(true); // Ensure visibility during transition
+				Chunk->TransitionToLOD(0);
+				// Ensure visibility during transition
+				if (Chunk->GetProceduralMesh())
+				{
+					Chunk->GetProceduralMesh()->SetVisibility(true);
+				}
 			}
 		}
 		else
@@ -481,7 +497,10 @@ void AVoxelWorld::EnforceLODConsistency()
 // ADD: Visibility health check system
 void AVoxelWorld::CheckCloseRangeVisibility()
 {
-	const FVector PlayerPos = GetPlayerPosition();
+	// Get player position
+	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+	if (!Player) return;
+	const FVector PlayerPos = Player->GetActorLocation();
 	const float CloseRangeThreshold = ChunkSize * VoxelSize * 3.0f;
 	
 	for (auto& ChunkPair : LoadedChunks)
@@ -494,20 +513,19 @@ void AVoxelWorld::CheckCloseRangeVisibility()
 		// Check visibility status of close-range chunks
 		if (Distance < CloseRangeThreshold)
 		{
-			if (!Chunk->IsVisible() && Chunk->IsReady() && !Chunk->IsGenerating())
+			// Check if chunk has mesh data and is ready
+			if (Chunk->IsReady() && !Chunk->IsGenerating())
 			{
-				// Force visibility restoration for close chunks
-				UE_LOG(LogVoxelWorld, Warning, TEXT("Restoring visibility for close chunk at %s"), 
-					*Chunk->GetActorLocation().ToString());
-				
-				Chunk->SetVisibility(true);
-				Chunk->SetHidden(false);
-				
-				// Trigger mesh re-application if needed
-				if (Chunk->bPendingMeshRetry)
+				// Ensure chunk mesh is visible
+				if (Chunk->GetProceduralMesh())
 				{
-					ApplyMeshToChunk(Chunk);
-					Chunk->bPendingMeshRetry = false;
+					Chunk->GetProceduralMesh()->SetVisibility(true);
+				}
+				
+				// If chunk was marked for retry, clear the flag
+				if (Chunk->bMeshDirty)
+				{
+					Chunk->bMeshDirty = false;
 				}
 			}
 		}

@@ -319,6 +319,25 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 	}
 #endif
 
+	// CRITICAL FIX: Prioritize spawn area chunks in main generation queue
+	// Previous: Spawn chunks were generated separately from main queue
+	// Problem: Main generation could focus on distant chunks while spawn area remained empty
+	// Solution: Insert spawn area chunks at front of generation queue for immediate processing
+	if (bWaitingForInitialSpawn && !InitialSpawnCoords.IsEmpty())
+	{
+		// Add spawn area chunks to front of generation queue with highest priority
+		for (const FIntVector& Coord : InitialSpawnCoords)
+		{
+			if (!LoadedChunks.Contains(Coord) && !QueueSet.Contains(Coord))
+			{
+				QueueSet.Add(Coord);
+				// Insert at front of queue for immediate generation
+				GenerationQueue.Insert(Coord, 0);
+			}
+		}
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Prioritized %d spawn area chunks in generation queue"), InitialSpawnCoords.Num());
+	}
+
 	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d new chunks to extend the world."), GenerationQueue.Num());
 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWorld: Queued %d chunks."), GenerationQueue.Num()));
 
@@ -668,6 +687,22 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 		TargetZ = Surface + SafeOffset;
 	}
 	
+	// FIX: Ensure spawn height is reasonable - prevent extremely high spawns
+	// If TargetZ is extremely high (>100000), something went wrong with the calculation
+	if (TargetZ > 100000.f)
+	{
+		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn height calculation resulted in extremely high value (%.2f). Using surface height instead."), TargetZ);
+		TargetZ = Surface + SafeOffset;
+	}
+	
+	// FIX: Ensure spawn height is above ground level - prevent spawning in air
+	// If TargetZ is significantly below surface (negative offset), adjust it
+	if (TargetZ < Surface - 1000.f)
+	{
+		UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn height calculation resulted in value below surface (%.2f vs %.2f). Adjusting to safe height."), TargetZ, Surface);
+		TargetZ = Surface + SafeOffset;
+	}
+	
 	// FIXED: Check for skylands and adjust if needed
 	const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
 	const float HeightNorm    = FMath::Clamp(Surface / SC.MaxTerrainReference, 0.f, 1.f);
@@ -709,6 +744,16 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	// Player movement is now handled normally - no need to restore anything
 	// since we don't freeze or hide the player anymore
 
+	// FIX: Final safety check - ensure player spawns on solid ground
+	// If we're in a crater, ensure we're actually on the crater floor, not in the air
+	if (CraterWeight > 0.3f)
+	{
+		// For craters, use the actual crater floor height plus a small safety margin
+		// This ensures the player spawns on solid ground within the crater
+		TargetZ = Surface + SafeOffset;
+		UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Crater spawn - using surface height %.2f + offset %.2f = %.2f"), Surface, SafeOffset, TargetZ);
+	}
+	
 	Pos.Z = TargetZ;
 	TargetCoordsZ = TargetZ; // FIX: Ensure Loading Wait Screen parks player above ground
 	Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
@@ -726,11 +771,11 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	TargetCoordsZ = TargetZ;
 	CachedSurfaceHeight = Surface;
 
-	// FIXED: Use consistent coordinate system - spawn chunks around the actual spawn position
-	// This ensures the hover-lock waits for the same chunks that were actually generated
-	// FIX: Center wait area bounds around actual Surface height instead of TargetZ (park position above ground)
-	// This ensures the hover-lock is held for the actual terrain mesh chunks, and their collision, before releasing the player.
-	const FIntVector SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, Surface));
+	// CRITICAL FIX: Align spawn chunk generation with player position
+	// Previous: SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, Surface))
+	// Problem: Creates 15m gap between terrain generation (at surface) and player (at TargetZ)
+	// Solution: Generate spawn chunks at player height (TargetZ) to eliminate vertical gap
+	const FIntVector SpawnCoord = WorldToChunkCoord(FVector(Pos.X, Pos.Y, TargetZ));
 	const float ChunkHeight = ChunkSize * VoxelSize;
 	const int32 SpawnChunkZ = FMath::FloorToInt(TargetZ / ChunkHeight);
 
@@ -783,13 +828,15 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	{
 		InitialSpawnCoords.Add(Coord);
 
-		// FIX: Explicitly call SpawnChunk for the wait zone. Because GenerateWorldDeferred 
-		// centers main generation bounds height on the high-parked player elevation, the 
-		// ground chunks might have been skipped there. Spawning them here triggers async 
-		// background tasks immediately for safe release tracking.
+		// CRITICAL FIX: Generate spawn chunks IMMEDIATELY with highest priority
+		// Previous: Spawn chunks were queued in background generation
+		// Problem: Player released before spawn chunks were generated
+		// Solution: Generate spawn chunks synchronously for immediate terrain
 		if (!LoadedChunks.Contains(Coord))
 		{
-			SpawnChunk(Coord);
+			// Generate spawn chunks immediately with synchronous collision cooking
+			// This ensures terrain exists before player is released
+			SpawnChunk(Coord, /*bSyncCollision=*/true);
 		}
 	}
 

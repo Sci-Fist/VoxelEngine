@@ -65,31 +65,26 @@
 #include "Voxel/Config/VoxelGenerationConfig.h"
 #include "VoxelBiome.h"
 
+struct FSkylandIslandData
+{
+    float SkyAlt = 0.f;
+    float HalfThick = 0.f;
+    float Threshold = 0.f;
+    float ShardT = 0.f;
+    float Freq = 0.f;
+    float HeightNorm = 0.f;
+    float ShardFalloff = 0.f;
+    float IslandSize = 0.f;
+};
+
 struct FSkylandColumnCache
 {
     bool bHasSkyland = false;
-    float SkyAlt = 0.f;
-    float HalfThick = 0.f;
-    float ShapeXY = 0.f;
-    float Threshold = 0.f;
-    float Prob = 0.f;
-    float HeightNorm = 0.f;
-    float ShardFalloff = 0.f;
+    TArray<FSkylandIslandData, TInlineAllocator<4>> Islands;
 
-    /**
-     * ShardT: 0 = pure sky-shard (rock), 1 = full floating island.
-     * Used in GetSkylandDensityFromCache to blend between:
-     *   Rock falloff  (ShardT=0): spherical, no flat top, strong 3D noise
-     *   Island falloff(ShardT=1): flat-top plateau, low Z noise, organic taper
-     */
-    float ShardT = 0.f;
-
-    // Cache dimensions
-    float WX = 0.f;
-    float WY = 0.f;
+    // Cache dimensions (global to column)
     float WX_base = 0.f;
     float WY_base = 0.f;
-    float Freq = 0.f;
 };
 
 struct FIRSTVOXEL_API FVoxelBiomeGenerators

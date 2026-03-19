@@ -819,24 +819,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     const int32 CellY = FMath::FloorToInt(Y / GridSize);
 
 
-    float MaxW             = -1.f;
-    float BestSkyAlt       = 0.f;
-    float BestHalfThick    = 0.f;
-
-    float BestThreshold    = 0.f;
-
-    float BestHeightNorm   = 0.f;
-
-    float BestShardFalloff = 0.f;
-
-    float BestFreq         = 0.f;
-
-    float BestIslandSize   = 0.f;
-
-
-    float BestCellShardT   = 0.f;
-
-    float BestDistRatio    = FLT_MAX;  // Lower is better - normalized distance to cell center
+    // Multi-island caching: collect all overlapping candidate cells
+    Cache.bHasSkyland = false;
 
 
 
@@ -1061,29 +1045,25 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
 
 
-        // Track the cell with smallest normalized distance (nearest cell)
-        if (DistRatio < BestDistRatio && W > 0.001f)  // Only consider cells with meaningful influence
-
+        if (W > 0.001f)
         {
-
-            MaxW             = W;
-
-            BestSkyAlt       = SkyAlt;
-            BestHalfThick    = HalfThick;
-            BestThreshold    = Threshold;
-            BestHeightNorm   = HeightNorm;
-            BestShardFalloff = ShardFalloff;
-            BestIslandSize   = IslandSize;
-            BestCellShardT   = CellShardT;
+            FSkylandIslandData Island;
+            Island.SkyAlt       = SkyAlt;
+            Island.HalfThick    = HalfThick;
+            Island.Threshold    = Threshold;
+            Island.ShardT       = CellShardT;
+            Island.HeightNorm   = HeightNorm;
+            Island.ShardFalloff = ShardFalloff;
+            Island.IslandSize   = IslandSize;
 
             const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
             const float IslandFreq = SC.ShapeFrequency / SizeRatio;
             const float ShardFreq  = SC.ShapeFrequency * 6.0f;
-            BestFreq = FMath::Lerp(ShardFreq, IslandFreq, CellShardT);
+            const float BaseFreq = FMath::Lerp(ShardFreq, IslandFreq, CellShardT);
+            Island.Freq = FMath::Max(BaseFreq, 0.00025f);
 
-            // FIX: Update the tracking ratio so it correctly selects the NEAREST cell 
-            // instead of falling back to the last cell in the grid loop iterator.
-            BestDistRatio = DistRatio; 
+            Cache.Islands.Add(Island);
+            Cache.bHasSkyland = true;
         }
     }
 
@@ -1211,142 +1191,99 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
 
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
     const FVector Off = Config.GetSeedOffset();
-
-    const float HalfThick = Cache.HalfThick;
-
-    const float Margin = HalfThick * 0.4f;
-    if (Z < Cache.SkyAlt - HalfThick - Margin || Z > Cache.SkyAlt + HalfThick + Margin) return -2.f;
-
-    const float FullRange = HalfThick + Margin;
-    const float tCenter = FMath::Clamp((Z - Cache.SkyAlt) / (FullRange + 1.f), -1.f, 1.f);
-
-    // FALLOFF SHAPE: blend between rock (spherical) and island (flat-top plateau).
-    //
-    // Island falloff (ShardT=1): flat top zone (35%) + smooth underside taper.
-    //   Creates the "floating platform" look — flat on top, tapered underneath.
-    //
-    // Rock falloff  (ShardT=0): symmetric spherical — equal taper in all Z directions.
-    //   No flat zone → looks like a boulder/rock, not a platform.
-    //   Uses pow(|t|, 0.6) for a slightly boxy rock profile (flatter than a perfect
-    //   sphere at center, sharper at the edges).
-
-    // --- Island falloff (flat-top) ---
-    float IslandFalloff;
-    {
-        if (tCenter >= 0.f) {
-            const float FlatZone = 0.35f;
-            if (tCenter < FlatZone) {
-                IslandFalloff = 1.0f;
-            } else {
-                const float nt = (tCenter - FlatZone) / (1.f - FlatZone);
-                IslandFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - nt);
-            }
-        } else {
-            const float t = FMath::Clamp(-tCenter, 0.f, 1.f);
-            IslandFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(t, 0.85f));
-        }
-    }
-
-    // --- Rock falloff (spherical, no flat zone) ---
-    const float tAbs      = FMath::Abs(tCenter);
-    const float RockFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(tAbs, 0.6f));
-
-    // FIX: Blend at least 40% IslandFalloff onto shards to give them flat tops
-    float Falloff = FMath::Lerp(RockFalloff, IslandFalloff, FMath::Max(0.40f, Cache.ShardT));
-    
-    // --- ROUNDNESS ADJUSTMENT FOR SMALLER SKYSHARDS ---
-    // Smaller shards (low ShardT) should be rounder, larger islands (high ShardT) flatter
-    if (Cache.ShardT < 0.3f) {
-        // For very small shards, make them more spherical/rounded
-        const float RoundnessFactor = FMath::Lerp(1.0f, 0.6f, Cache.ShardT); 
-        const float RoundedT = FMath::Pow(tAbs, RoundnessFactor);
-        const float RoundedFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - RoundedT);
-        
-        // Blend rounded falloff more for smaller shards
-        const float RoundBlend = FMath::Lerp(0.8f, 0.2f, Cache.ShardT);
-        Falloff = FMath::Lerp(RoundedFalloff, Falloff, RoundBlend);
-        // NO early return: fall through to evaluated 3D Shape noise detail below
-    }
-
-    const float WX_base = X + Off.X;
-    const float WY_base = Y + Off.Y;
+    const float WX_base = Cache.WX_base;
+    const float WY_base = Cache.WY_base;
     const float WZ = Z + Off.Z;
 
-    if (Falloff < 0.001f)
+    float MaxD = -2.f;
+
+    for (const FSkylandIslandData& Island : Cache.Islands)
     {
-        const float MaxBreakUpEO    = FMath::Lerp(0.50f, 2.80f, Cache.HeightNorm);
-        const float BreakUpStrengthEO = FMath::Lerp(0.10f, MaxBreakUpEO, Cache.ShardT);
-        const float BreakUp = FMath::Max(0.f, FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f)) * BreakUpStrengthEO;
-        return FMath::Clamp(-1.8f - BreakUp, -2.f, 2.f);
-    }
+        const float HalfThick = Island.HalfThick;
+        const float Margin = HalfThick * 0.4f;
 
-    float WX = WX_base;
-    float WY = WY_base;
+        if (Z < Island.SkyAlt - HalfThick - Margin || Z > Island.SkyAlt + HalfThick + Margin)
+            continue;
 
-    if (SC.bEnableDomainWarping) {
-      const float WF = SC.DomainWarpFrequency;
-      WX += FastNoise3D(WX * WF + 10.f, WY * WF + 20.f, 0.f) * SC.DomainWarpStrength;
-      WY += FastNoise3D(WX * WF + 50.f, WY * WF + 10.f, 0.f) * SC.DomainWarpStrength;
-    }
+        const float FullRange = HalfThick + Margin;
+        const float tCenter = FMath::Clamp((Z - Island.SkyAlt) / (FullRange + 1.f), -1.f, 1.f);
 
-    // 3D SHAPE NOISE:
-    // Islands (ShardT=1): very low Z frequency (0.05x) keeps island interior solid —
-    //   prevents swiss-cheese vertical holes through large platforms.
-    // Rocks  (ShardT=0): higher Z frequency (0.50x) gives irregular 3D boulder surface.
-    //   Strength also raised (0.55) so the rock surface is visibly lumpy/craggy.
-    //   3D noise is ALWAYS evaluated for shards regardless of bEnable3DSkylandNoise flag.
-    float ShapeDetail = 0.f;
-    {
-        const float ZFreqScale     = FMath::Lerp(0.50f, 0.05f, Cache.ShardT);
-        const float DetailStrength = FMath::Lerp(0.55f, 0.25f, Cache.ShardT);
-        if (Config.Performance.bEnable3DSkylandNoise || Cache.ShardT < 0.5f)
+        float IslandFalloff;
         {
-            ShapeDetail = FastNoise3D(
-                WX * Cache.Freq * 0.6f,
-                WY * Cache.Freq * 0.6f,
-                WZ * Cache.Freq * ZFreqScale) * DetailStrength;
+            if (tCenter >= 0.f) {
+                const float FlatZone = 0.35f;
+                if (tCenter < FlatZone) IslandFalloff = 1.0f;
+                else {
+                    const float nt = (tCenter - FlatZone) / (1.f - FlatZone);
+                    IslandFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - nt);
+                }
+            } else {
+                const float t = FMath::Clamp(-tCenter, 0.f, 1.f);
+                IslandFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(t, 0.85f));
+            }
         }
+
+        const float tAbs = FMath::Abs(tCenter);
+        const float RockFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(tAbs, 0.6f));
+        float Falloff = FMath::Lerp(RockFalloff, IslandFalloff, FMath::Max(0.40f, Island.ShardT));
+
+        if (Island.ShardT < 0.3f) {
+            const float RoundnessFactor = FMath::Lerp(1.0f, 0.6f, Island.ShardT);
+            const float RoundedFalloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(tAbs, RoundnessFactor));
+            Falloff = FMath::Lerp(RoundedFalloff, Falloff, FMath::Lerp(0.8f, 0.2f, Island.ShardT));
+        }
+
+        if (Falloff < 0.001f) {
+            const float MaxBreakUpEO = FMath::Lerp(0.50f, 2.80f, Island.HeightNorm);
+            const float BreakUpStrengthEO = FMath::Lerp(0.10f, MaxBreakUpEO, Island.ShardT);
+            const float BreakUp = FMath::Max(0.f, FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f)) * BreakUpStrengthEO;
+            MaxD = FMath::Max(MaxD, -1.8f - BreakUp);
+            continue;
+        }
+
+        float WX = WX_base;
+        float WY = WY_base;
+        if (SC.bEnableDomainWarping) {
+            const float WF = SC.DomainWarpFrequency;
+            WX += FastNoise3D(WX * WF + 10.f, WY * WF + 20.f, 0.f) * SC.DomainWarpStrength;
+            WY += FastNoise3D(WX * WF + 50.f, WY * WF + 10.f, 0.f) * SC.DomainWarpStrength;
+        }
+
+        float ShapeDetail = 0.f;
+        const float ZFreqScale = FMath::Lerp(0.50f, 0.05f, Island.ShardT);
+        const float DetailStrength = FMath::Lerp(0.55f, 0.25f, Island.ShardT);
+        if (Config.Performance.bEnable3DSkylandNoise || Island.ShardT < 0.5f) {
+            ShapeDetail = FastNoise3D(WX * Island.Freq * 0.6f, WY * Island.Freq * 0.6f, WZ * Island.Freq * ZFreqScale) * DetailStrength;
+        }
+
+        const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves, 2), 1, Config.Performance.MaxNoiseOctaves);
+        const float ShapeZ = (Island.ShardT < 0.5f) ? WZ * Island.Freq : 0.f;
+        const float ShapeXY = FBM(WX * Island.Freq, WY * Island.Freq, ShapeZ, Oct2D, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
+        const float Shape = ShapeXY + ShapeDetail;
+
+        float RootDensity = 0.f;
+        if (SC.bEnableHangingRoots && tCenter < -0.25f) {
+            const float RootZNorm = FMath::Clamp((-tCenter - 0.25f) / 0.75f, 0.f, 1.f);
+            const float RootNoise = FMath::Max(0.f, FBM(WX * SC.RootFrequency, WY * SC.RootFrequency, WZ * SC.RootFrequency, 2, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves));
+            RootDensity = RootNoise * (1.f - RootZNorm) * 0.4f * Falloff;
+        }
+
+        const float HorizStrength = FMath::SmoothStep(Island.Threshold, Island.Threshold + 0.4f, Shape);
+        float D = HorizStrength * Falloff * 2.5f - (1.f - Falloff) * 1.8f + RootDensity;
+
+        const float MaxBreakUp = FMath::Lerp(0.50f, 2.80f, Island.HeightNorm);
+        const float BreakUpStrength = FMath::Lerp(0.10f, MaxBreakUp, Island.ShardT);
+        const float BreakUp = FMath::Max(0.f, FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f)) * BreakUpStrength;
+        
+        float PlateauMask = 1.0f;
+        if (Island.ShardT > 0.5f && tCenter > 0.0f) {
+            PlateauMask = FMath::SmoothStep(0.15f, 0.45f, 1.0f - tCenter);
+        }
+        D -= BreakUp * PlateauMask;
+        MaxD = FMath::Max(MaxD, D);
     }
 
-    // Point-wise ShapeXY prevents absolute grid-cell fractures on cell boundaries
-    const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves, 2), 1, Config.Performance.MaxNoiseOctaves);
-    
-    // FIX: Use 3D noise (absolute Z) for smaller shards to break the continuous 
-    // vertical columnar extrusion projections, forming organic 3D boulders.
-    const float ShapeZ  = (Cache.ShardT < 0.5f) ? WZ * Cache.Freq : 0.f;
-    const float ShapeXY = FBM(WX * Cache.Freq, WY * Cache.Freq, ShapeZ, Oct2D, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves);
-
-    const float Shape = ShapeXY + ShapeDetail;
-
-    float RootDensity = 0.f;
-    if (SC.bEnableHangingRoots && tCenter < -0.25f) {
-      const float RootZNorm = FMath::Clamp((-tCenter - 0.25f) / 0.75f, 0.f, 1.f);
-      const float RootNoise = FMath::Max(0.f, FBM(WX * SC.RootFrequency, WY * SC.RootFrequency, WZ * SC.RootFrequency, 2, 2.0f, 0.5f, Config.Performance.MaxNoiseOctaves));
-      RootDensity = RootNoise * (1.f - RootZNorm) * 0.4f * Falloff;
-    }
-
-    const float HorizStrength = FMath::SmoothStep(Cache.Threshold, Cache.Threshold + 0.4f, Shape);
-    float D = HorizStrength * Falloff * 2.5f - (1.f - Falloff) * 1.8f + RootDensity;
-
-    // BREAKUP STRENGTH FIX for shards:
-    // Old: BreakUpStrength based only on HeightNorm → shards get 0.50, which strips
-    //      material from all sides of a thin shape → leaves thin spike tips (pillar artifact).
-    // New: Shards (ShardT=0) get minimal breakup (0.10) — they are rocks with irregular
-    //      surface from 3D noise, not eroded islands. The ShardT lerp means only high-terrain
-    //      islands get the full HeightNorm-scaled breakup for their organic eroded look.
-    const float MaxBreakUp     = FMath::Lerp(0.50f, 2.80f, Cache.HeightNorm);
-    const float BreakUpStrength = FMath::Lerp(0.10f, MaxBreakUp, Cache.ShardT);
-    const float BreakUp = FMath::Max(0.f, FastNoise3D(WX_base * 0.002f, WY_base * 0.002f, WZ * 0.001f)) * BreakUpStrength;
-    
-    // FIX: Mask breakup on island tops to protect flat plates from forming vertical swiss-cheese holes.
-    float PlateauMask = 1.0f;
-    if (Cache.ShardT > 0.5f && tCenter > 0.0f) {
-        // Safe taper range: fully protects core top center (tCenter -> 1.0) 
-        PlateauMask = FMath::SmoothStep(0.15f, 0.45f, 1.0f - tCenter);
-    }
-    D -= BreakUp * PlateauMask;
-
-    return FMath::Clamp(D, -2.f, 2.f);
+    return FMath::Clamp(MaxD, -2.f, 2.f);
 }
 
 // ============================================================

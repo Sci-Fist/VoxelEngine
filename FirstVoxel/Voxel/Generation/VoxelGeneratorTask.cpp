@@ -197,6 +197,60 @@ void FVoxelGeneratorTask::BuildDensityField()
             CacheX, CacheY, SurfaceHeight, Weights, Config);
     });
 
+    // ---- ⚙️ DATA MAP PRE-CACHE PASS -----------------------------------------
+    // Pre-cache all player edits for cells intersecting our padded bounds
+    // to avoid acquiring MapLock inside the ParallelFor loop.
+    // -------------------------------------------------------------------------
+    TArray<bool>  DenseHasEdit;  DenseHasEdit.Init(false, TotalSamples);
+    TArray<float> DenseEditVals; DenseEditVals.Init(0.f, TotalSamples);
+
+    if (DataMap)
+    {
+        const float SizeInCm = ChunkSize * VoxelSize;
+        const FIntVector CurrentCC = ChunkCoord;
+
+        for (int32 cz = -1; cz <= 1; ++cz)
+        for (int32 cy = -1; cy <= 1; ++cy)
+        for (int32 cx = -1; cx <= 1; ++cx)
+        {
+            FIntVector TargetCC = CurrentCC + FIntVector(cx, cy, cz);
+            TMap<int32, float> ModVoxels;
+            if (DataMap->GetChunkData(TargetCC, ModVoxels))
+            {
+                for (const auto& Pair : ModVoxels)
+                {
+                    const int32 LocalIdx = Pair.Key;
+                    const float Density  = Pair.Value;
+
+                    const int32 lz = LocalIdx / (ChunkSize * ChunkSize);
+                    const int32 ly = (LocalIdx / ChunkSize) % ChunkSize;
+                    const int32 lx = LocalIdx % ChunkSize;
+
+                    const float AbsX = (TargetCC.X * ChunkSize + lx) * VoxelSize;
+                    const float AbsY = (TargetCC.Y * ChunkSize + ly) * VoxelSize;
+                    const float AbsZ = (TargetCC.Z * ChunkSize + lz) * VoxelSize;
+
+                    const float GridX_f = (AbsX - WorldOrigin.X) / EffVoxelSize + 1.f;
+                    const float GridY_f = (AbsY - WorldOrigin.Y) / EffVoxelSize + 1.f;
+                    const float GridZ_f = (AbsZ - WorldOrigin.Z) / EffVoxelSize + 1.f;
+
+                    const int32 GridX = FMath::RoundToInt(GridX_f);
+                    const int32 GridY = FMath::RoundToInt(GridY_f);
+                    const int32 GridZ = FMath::RoundToInt(GridZ_f);
+
+                    if (GridX >= 0 && GridX < EffectiveSize &&
+                        GridY >= 0 && GridY < EffectiveSize &&
+                        GridZ >= 0 && GridZ < EffectiveSize)
+                    {
+                        const int32 Idx = GridX + GridY * EffectiveSize + GridZ * EffectiveSize * EffectiveSize;
+                        DenseHasEdit[Idx]  = true;
+                        DenseEditVals[Idx] = Density;
+                    }
+                }
+            }
+        }
+    }
+
     // ---- Main density loop ----
     // Parallelized across both X and Y dimensions to fully utilize multi-core CPUs.
     ParallelFor(EffectiveSize * EffectiveSize, [&](int32 Index)
@@ -439,17 +493,10 @@ void FVoxelGeneratorTask::BuildDensityField()
             if (Config.Performance.bEnableSkylands)
                 D = SkylandPass.EvaluateVoxel(FVector(WorldX, WorldY, WorldZ), Context, Config, D);
 
-            if (DataMap)
+            if (DenseHasEdit[Idx])
             {
-                const int32 GX = FMath::FloorToInt(WorldX / VoxelSize);
-                const int32 GY = FMath::FloorToInt(WorldY / VoxelSize);
-                const int32 GZ = FMath::FloorToInt(WorldZ / VoxelSize);
-                
-                float Override;
-                if (DataMap->GetDensity(FIntVector(GX, GY, GZ), Override))
-                {
-                    D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
-                }
+                const float Override = DenseEditVals[Idx];
+                D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
             }
             Densities[Idx] = D;
         }
