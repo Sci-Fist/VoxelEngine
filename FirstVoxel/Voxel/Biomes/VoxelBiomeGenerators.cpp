@@ -461,14 +461,14 @@ float FVoxelBiomeGenerators::GetCraterHeight(
       if (ButtressPos > 0.3f && ButtressNoise > 0.1f) {
         const float ButtressFade = FMath::SmoothStep(0.3f, 0.7f, ButtressPos);
         const float ButtressShape = FMath::Sin(RimT * 3.14159f); // Thicker in the middle
-        CentralHeight += 1800.f * ButtressFade * ButtressShape; // Prominent projecting mass
+        CentralHeight += 800.f * ButtressFade * ButtressShape; // Prominent projecting mass
       }
 
       // --- 🌊 OVERHANGS / RIBS (Protrusions due to erosion) ---
       const float RibNoise = FastNoise3D(nX * 0.012f, nY * 0.012f, 300.f);
       if (RibNoise > 0.4f) {
         const float RibFade = FMath::SmoothStep(0.4f, 0.7f, RibNoise);
-        CentralHeight += 600.f * RibFade * FMath::Sin(RimT * 3.14159f * 4.0f); // Ribs curving with slope
+        CentralHeight += 200.f * RibFade * FMath::Sin(RimT * 3.14159f * 4.0f); // Ribs curving with slope
       }
     } else if (NormalizedDist > RimEnd && NormalizedDist < RimEnd + 0.05f) {
       EdgeFade = 1.0f - (NormalizedDist - RimEnd) / 0.05f;
@@ -484,7 +484,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
       const float RockFade = FMath::SmoothStep(0.f, 0.4f, CenterDis) * FMath::SmoothStep(1.f, 0.6f, CenterDis);
       const float RockNoise = FastNoise3D(nX * 0.006f, nY * 0.006f, 0.f);
       if (RockNoise > 0.10f) {
-        CentralHeight += (RockNoise - 0.10f) * 2500.f * RockFade; 
+        CentralHeight += (RockNoise - 0.10f) * 800.f * RockFade; 
       }
     }
 

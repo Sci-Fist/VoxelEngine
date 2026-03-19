@@ -181,21 +181,19 @@ void FVoxelDataMap::CopyFrom(const FVoxelDataMap& Other)
 {
 	if (this == &Other) return;
 
-	// Order locks by memory address to prevent A-B/B-A deadlocks
-	if (this < &Other)
+	// Snapshot Other's data under its lock
+	TMap<FIntVector, FChunkData> Snapshot;
+	int32 OtherSize = 0;
 	{
-		MapLock.Lock();
-		Other.MapLock.Lock();
-	}
-	else
-	{
-		Other.MapLock.Lock();
-		MapLock.Lock();
+		FScopeLock OtherLock(&Other.MapLock);
+		Snapshot = Other.Chunks;
+		OtherSize = Other.ChunkSize;
 	}
 
-	ChunkSize = Other.ChunkSize;
-	Chunks = Other.Chunks;
-
-	MapLock.Unlock();
-	Other.MapLock.Unlock();
+	// Apply snapshot to this map under its lock
+	{
+		FScopeLock LocalLock(&MapLock);
+		Chunks = MoveTemp(Snapshot);
+		ChunkSize = OtherSize;
+	}
 }

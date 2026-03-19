@@ -494,11 +494,16 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 			}
 		}
 
-		// Clear unused instances for trailing pooled slots to prevent memory leaks
+		// FIX: Destroy unused excess components to prevent memory leaks over time
 		for (int32 i = PerFoliage.Num(); i < BiomeFoliageHISMs.Num(); ++i)
 		{
-			if (BiomeFoliageHISMs[i]) BiomeFoliageHISMs[i]->ClearInstances();
+			if (BiomeFoliageHISMs[i])
+			{
+				BiomeFoliageHISMs[i]->ClearInstances();
+				BiomeFoliageHISMs[i]->DestroyComponent();
+			}
 		}
+		BiomeFoliageHISMs.SetNum(PerFoliage.Num());
 	}
 	else
 	{
@@ -773,8 +778,19 @@ void AVoxelChunk::BuildWaterMeshInternal()
 	if (Vertices.Num() == 0)
 	{
 		WaterMesh->SetVisibility(false);
+		LastWaterMeshHash = 0;
 		return;
 	}
+
+	// Calculate geometry hash to skip redundant GPU buffer uploads
+	uint32 NewHash = FCrc::MemCrc32(Vertices.GetData(), Vertices.Num() * sizeof(FVector));
+	NewHash = FCrc::MemCrc32(Triangles.GetData(), Triangles.Num() * sizeof(int32), NewHash);
+
+	if (NewHash == LastWaterMeshHash)
+	{
+		return;
+	}
+	LastWaterMeshHash = NewHash;
 
 	// Create mesh section with generated geometry
 	TArray<FVector>          EmptyNorms;

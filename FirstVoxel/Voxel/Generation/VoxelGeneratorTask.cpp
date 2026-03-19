@@ -86,7 +86,10 @@ FVoxelGeneratorTask::~FVoxelGeneratorTask()
     if (Densities.Num() > 0)
     {
         FScopeLock Lock(&GDensityPoolLock);
-        GDensityPool.Add(MoveTemp(Densities));
+        if (GDensityPool.Num() < 16)
+        {
+            GDensityPool.Add(MoveTemp(Densities));
+        }
     }
 }
 
@@ -634,7 +637,7 @@ void FVoxelGeneratorTask::CalculateFoliage()
     }
 // End of grid-based foliage generation
 
-    const int32 MaxMeshesPerChunk = 15000;
+    const int32 MaxMeshesPerChunk = 4000;
     TrimFoliageToCap(MaxMeshesPerChunk);
 }
 

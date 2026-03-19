@@ -291,20 +291,29 @@ bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell, TSet<FI
     {
         // Skip if neighbor is solid terrain
         if (IsSolidAt(NV)) continue;
-        // Skip if neighbor has equal or higher water level
-        if (GetLevel(NV) >= CurrentLevel) continue;
         
         uint8* NCell = CellPtr(NV);
         if (!NCell) continue;
+
+        const uint8 NeighborLevel = GetLevel(NV);
+        if (NeighborLevel >= CurrentLevel) continue;
         
-        // Add one unit of water to neighbor (unless it's a source)
-        if (*NCell != WATER_SOURCE) *NCell += 1;
+        // Equalize: transfer proportion of difference
+        int32 Diff = CurrentLevel - NeighborLevel;
+        if (Diff <= 1) continue; 
+        
+        uint8 Transfer = Diff / 2;
+        if (Transfer == 0) Transfer = 1; // Minimum flow
+        
+        if (*NCell != WATER_SOURCE) *NCell += Transfer;
         DirtyChunks.Add(ToChunkCoord(NV));
         
-        // Remove one unit from source cell (unless it's a source)
-        if (!bIsSource) { if (*SrcCell > 0) *SrcCell -= 1; bChanged = true; }
+        if (!bIsSource) { 
+            *SrcCell -= Transfer; 
+            bChanged = true; 
+            CurrentLevel -= Transfer; 
+        }
         
-        // Stop spreading if source cell becomes empty
         if (!bIsSource && *SrcCell == WATER_EMPTY) break;
     }
 

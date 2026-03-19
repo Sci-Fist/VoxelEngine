@@ -25,6 +25,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HAL/ThreadSafeBool.h"
 #include "GameFramework/Actor.h"
 #include "ProceduralMeshComponent.h"
 #include "Generation/VoxelMeshGenerator.h"
@@ -188,6 +189,9 @@ public:
 	/** Water voxel simulation state.  Populated in ApplyMesh(), updated by FVoxelWaterSimulator. */
 	FVoxelWaterData WaterData;
 
+	/** CRC32 hash of the last successfully built water mesh vertex/triangle configuration. */
+	uint32 LastWaterMeshHash = 0;
+
 	bool IsReady()          const { return bMeshApplied; }
 	bool IsGenerating()     const { return bGenerating;  }
 
@@ -223,17 +227,17 @@ public:
 	struct FVoxelDensityGenerator* DensityGenerator = nullptr;
 
 	/** Set to true when player edits have invalidated this chunk's mesh; rebuilt on the next Tick. */
-	bool bMeshDirty = false;
+	FThreadSafeBool bMeshDirty{false};
 
 	/** Water material — assigned by AVoxelWorld from GenerationConfig.Water.OceanMaterial. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
 	UMaterialInterface* WaterMaterial = nullptr;
 
 	/** Pending LOD transition flag - set when chunk is not ready for immediate LOD change */
-	bool bPendingLODTransition = false;
+	FThreadSafeBool bPendingLODTransition{false};
 
 	/** Target LOD for pending transition */
-	int32 PendingLOD = 0;
+	TAtomic<int32> PendingLOD{0};
 
 	/** Smoothly transition to a new LOD level. */
 	UFUNCTION(BlueprintCallable, Category = "Voxel|LOD")

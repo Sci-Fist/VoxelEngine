@@ -477,10 +477,9 @@ private:
   /**
    * Dirty-chunk rebuild queue.
    * Chunks added here (via MarkChunkDirty) are rebuilt next tick when a
-   * concurrency slot is free.  Replaces the O(N) full LoadedChunks scan that
-   * previously ran every single frame regardless of whether anything was dirty.
+   * concurrency slot is free.
    */
-  TArray<FIntVector> DirtyRebuildQueue;
+  TSet<FIntVector> DirtyRebuildQueue;
 
   /** Mark a chunk as needing a mesh rebuild. Thread-safe: call from game thread only. */
   void MarkChunkDirty(const FIntVector& Coord);
@@ -495,7 +494,7 @@ private:
    */
   int32 QueueHead = 0;
 
-  int32 ActiveGenerations = 0;
+  TAtomic<int32> ActiveGenerations{0};
 
   FVector LastStreamedPos = FVector::ZeroVector;
 

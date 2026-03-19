@@ -441,23 +441,29 @@ void AVoxelWorld::Tick(float DeltaTime) {
   // DirtyRebuildQueue is populated by MarkChunkDirty() (called from
   // SetVoxelSphere etc.). Scanning all LoadedChunks every frame was O(N) even
   // when nothing was dirty.
-  for (int32 i = DirtyRebuildQueue.Num() - 1; i >= 0; --i) {
-    const FIntVector Coord = DirtyRebuildQueue[i];
+  TArray<FIntVector> ChunksToRebuild = DirtyRebuildQueue.Array();
+  DirtyRebuildQueue.Empty();
+
+  for (int32 i = 0; i < ChunksToRebuild.Num(); ++i) {
+    const FIntVector Coord = ChunksToRebuild[i];
+    if (ActiveGenerations >= MaxConcurrentGenerations) {
+      // Re-queue remaining items to the Set for next tick
+      for (int32 j = i; j < ChunksToRebuild.Num(); ++j) {
+        DirtyRebuildQueue.Add(ChunksToRebuild[j]);
+      }
+      break;
+    }
+
     AVoxelChunk **ChunkPtr = LoadedChunks.Find(Coord);
     if (!ChunkPtr || !(*ChunkPtr)) {
-      DirtyRebuildQueue.RemoveAtSwap(i);
       continue;
     }
     AVoxelChunk *Chunk = *ChunkPtr;
-    if (Chunk->IsGenerating())
-      continue; // still busy — retry next tick
-
-    DirtyRebuildQueue.RemoveAtSwap(i);
-    if (ActiveGenerations >= MaxConcurrentGenerations) {
-      // Re-queue for next tick
-      DirtyRebuildQueue.Add(Coord);
-      break;
+    if (Chunk->IsGenerating()) {
+      DirtyRebuildQueue.Add(Coord); // still generating, keep in queue
+      continue;
     }
+
     Chunk->bMeshDirty = false;
     ActiveGenerations++;
     TWeakObjectPtr<AVoxelWorld> WeakThis(this);
@@ -476,7 +482,7 @@ void AVoxelWorld::Tick(float DeltaTime) {
       if (Chunk->bMeshDirty && !Chunk->IsGenerating()) {
         // Migrate to proper queue going forward
         Chunk->bMeshDirty = false;
-        DirtyRebuildQueue.AddUnique(It.Key);
+        DirtyRebuildQueue.Add(It.Key);
       }
     }
   }
@@ -502,7 +508,7 @@ void AVoxelWorld::MarkChunkDirty(const FIntVector &Coord) {
     if (*Ptr)
       (*Ptr)->bMeshDirty = true;
   }
-  DirtyRebuildQueue.AddUnique(Coord);
+  DirtyRebuildQueue.Add(Coord);
 }
 
 void AVoxelWorld::ClearWorld() {

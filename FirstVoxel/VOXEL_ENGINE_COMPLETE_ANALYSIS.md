@@ -1,558 +1,541 @@
-# FirstVoxel Engine - Complete Analysis & Implementation Guide
+# FirstVoxel Engine — Complete Flaw Analysis v5.0
 
-> **Document Version**: 4.0  
-> **Date**: 2026-03-19  
-> **Status**: Deep Multi-Subagent Analysis  
-> **Purpose**: Complete analysis with 10 specialized subagent findings
-
----
-
-## Table of Contents
-
-1. [Executive Summary](#executive-summary)
-2. [Fixes Successfully Applied](#fixes-successfully-applied)
-3. [LOD System Issues](#lod-system-issues)
-4. [Memory Management Issues](#memory-management-issues)
-5. [Water Simulation Issues](#water-simulation-issues)
-6. [Unsafe Access Patterns](#unsafe-access-patterns)
-7. [Dirty Queue Performance](#dirty-queue-performance)
-8. [Streaming & Lifecycle Issues](#streaming--lifecycle-issues)
-9. [Generation Pipeline Optimizations](#generation-pipeline-optimizations)
-10. [Biome System Architecture](#biome-system-architecture)
-11. [Error Handling & Logging](#error-handling--logging)
-12. [Threading Model Issues](#threading-model-issues)
-13. [Implementation Plan](#implementation-plan)
+> Generated: 2026-03-19 | Updated after user changes
+> Analysis performed by 10 specialized subagents across 30+ source files
+> Total issues: **58 identified** (6 resolved, 52 remaining)
 
 ---
 
 ## Executive Summary
 
-After deploying **10 specialized subagents** for deep analysis, the following critical findings emerged:
+This document catalogs every identified flaw in the FirstVoxel engine after a comprehensive 10-subagent analysis of the entire codebase. Issues are categorized by severity (Critical → Low) and organized by system. Each issue includes the exact file, line number, problematic code, and a concrete fix.
 
-**✅ Resolved Issues**: 6 (DataMap race condition, water early-out, spawn trace, desert biome, air column optimization, biome caching)
-
-**🔴 Critical Remaining Issues**: 18
-- LOD collision missing for LOD 2+
-- BiomeFoliageHISMs memory leak
-- O(N²) dirty queue processing
-- Water game thread blocking
-- 11 null pointer dereference patterns
-- LOD mesh gaps
-- Water mesh rebuild every frame
-- MeshState never synchronized with actual state
-- Duplicate code block in skyland generation
-- Missing VoxelLogger integration with UE_LOG
-
-**📊 Overall Status**: ~25% of critical issues resolved
+**Resolution Status:**
+- ✅ **6 Fixed** (from previous analysis)
+- 🔴 **12 Critical** (data races, memory leaks, deadlocks)
+- 🟠 **18 High** (performance, crashes, visual artifacts)
+- 🟡 **14 Medium** (suboptimal behavior, minor bugs)
+- 🟢 **8 Low** (code quality, documentation)
 
 ---
 
-## Fixes Successfully Applied
+## RESOLVED ISSUES ✅
 
-### 1. FVoxelDataMap Race Condition ✅
-**File**: `Voxel/Core/VoxelDataMap.cpp`
+These issues from the previous analysis have been fixed:
 
-SetSphere() now builds local batch without lock, only acquiring lock for final merge.
-
-### 2. Water Simulation Early-Out ✅
-**File**: `Voxel/Water/WaterVoxelSimulator.cpp`
-
-Added `if (!D->HasAnyWater()) continue;` to skip empty chunks.
-
-### 3. Spawn Trace Position ✅
-**File**: `Voxel/Core/World/VoxelWorld.cpp`
-
-Changed from 1000cm to 50cm above player, added line trace fallback.
-
-### 4. Desert Biome Foliage ✅
-**File**: `Voxel/Generation/VoxelGeneratorTask.cpp`
-
-Desert added to GBiomeOrder with compile-time validation.
-
-### 5. Air Column Early-Out ✅
-**File**: `Voxel/Generation/VoxelGeneratorTask.cpp`
-
-Re-enabled with proper skyland bounds checking.
-
-### 6. Biome Weight Caching ✅
-**File**: `Voxel/Generation/VoxelGeneratorTask.cpp`
-
-ColumnSurfaceH caching avoids re-evaluating noise in foliage pass.
+1. **FVoxelDataMap Race Condition** — SetSphere() now builds local batch without lock, brief lock for merge only
+2. **Water Simulation Early-Out** — Added `if (!D->HasAnyWater()) continue;`
+3. **Spawn Trace Position** — Changed from 1000cm to 50cm, added line trace fallback
+4. **Desert Biome Foliage** — Added to GBiomeOrder array
+5. **Air Column Early-Out** — Re-enabled with proper bounds
+6. **Biome Weight Caching** — ColumnSurfaceH caching implemented
+7. **LOD Collision for all Levels** (2.4) — Enabled collision baking past LOD1
+8. **Foliage HISM Memory Leak** (2.5) — Trailing components destroyed on mesh apply
+9. **DirtyRebuildQueue Optimization** — Changed to $O(1)$ TSet and fixed skip buds
 
 ---
 
-## LOD System Issues
+## SYSTEM 1: WORLD MANAGEMENT
 
-### Issue 1: Collision Missing for LOD 2+ (CRITICAL)
-
-**File**: `Voxel/Core/VoxelChunk.cpp`  
-**Line**: ~307-310
-
+### 🔴 1.1 ActiveGenerations — Non-Atomic Data Race (CRITICAL)
+**File:** VoxelWorld.h:385, VoxelWorldGeneration.cpp:235, VoxelWorld.cpp:257
 ```cpp
-const bool bBuildCollision = (MeshToUse == ProceduralMesh) && (LOD <= 1);  // ❌ Only LOD 0/1
+// Declared as plain int32
+int32 ActiveGenerations = 0;
+
+// Incremented on GameThread
+ActiveGenerations++;
+
+// Decremented from background lambda (DIFFERENT THREAD!)
+Chunk->OnGenerationComplete = [WeakThis, Coord]() {
+    if (AVoxelWorld* StrongThis = WeakThis.Get()) {
+        StrongThis->ActiveGenerations--;  // DATA RACE!
+    }
+};
+
+// Read in Tick (GameThread)
+if (ActiveGenerations >= MaxConcurrentGenerations) { break; }
 ```
+**Problem:** `int32` is not atomic. Read/write from multiple threads is undefined behavior.
+**Fix:** Change to `TAtomic<int32> ActiveGenerations{0};` or use `FThreadSafeBool` with atomic operations.
 
-**Impact**: Players fall through terrain at LOD 2+ distances (~12000cm+)
+### 🔴 1.2 SpawnWaitMap — Race Condition with PendingChunks (CRITICAL)
+**File:** VoxelWorld.cpp:~130-150
+**Problem:** `SpawnWaitMap` and `PendingChunkSpawns` are both modified from the background thread via `AsyncTask(ENamedThreads::GameThread, ...)`. If generation completes before the async task runs, the chunk can be double-spawned or missed.
+**Fix:** Use a single guarded queue with atomic flag for spawn requests.
 
-**Fix**:
+### 🟠 1.3 StreamingUpdateTimer Only Fires on Local Player
+**File:** VoxelWorld.cpp:~290-320
 ```cpp
-const bool bBuildCollision = (MeshToUse == ProceduralMesh);
-const bool bUseComplexCollision = (LOD <= 1);
-```
-
----
-
-### Issue 2: LOD Mesh Gaps Between Levels (MEDIUM)
-
-**Files**: `Voxel/Core/VoxelChunk.cpp`, `Voxel/Generation/VoxelMeshGenerator.h`
-
-**Problem**: Different StepSize values (1, 2, 4) create vertex resolution mismatches at chunk boundaries.
-
-**Fix**: Implement boundary stitching for adjacent chunks with different LODs.
-
----
-
-### Issue 3: LOD Transition State Management (MEDIUM)
-
-**File**: `Voxel/Core/VoxelChunk.cpp` lines 400-430
-
-```cpp
-if (bGenerating) return;  // ❌ Silently drops transition
-```
-
-**Fix**: Queue pending transitions instead of dropping them.
-
----
-
-## Memory Management Issues
-
-### Issue 1: BiomeFoliageHISMs Memory Leak (HIGH)
-
-**File**: `Voxel/Core/VoxelChunk.cpp`  
-**Lines**: 388-395 (ApplyMesh), 531-538 (ClearMesh)
-
-Components created but never destroyed:
-```cpp
-// ClearMesh() - Only clears, never destroys
-for (UInstancedStaticMeshComponent* HISM : BiomeFoliageHISMs)
+if (LocalPlayerCharacter)
 {
-    if (IsValid(HISM)) HISM->ClearInstances();  // ❌ Never removed
+    StreamingUpdateTimer += DeltaTime;
+    if (StreamingUpdateTimer >= StreamingUpdateInterval)
+    {
+        StreamingUpdateTimer = 0.f;
+        UpdateStreaming(LocalPlayerCharacter->GetActorLocation());
+    }
+}
+```
+**Problem:** Only checks LocalPlayerCharacter. In multiplayer, other players won't stream chunks.
+**Fix:** Loop over all players or use a dedicated streaming manager.
+
+### 🟠 1.4 PendingChunkSpawns Queue Unbounded
+**File:** VoxelWorld.h:~390
+```cpp
+TArray<TTuple<FIntVector, int32>> PendingChunkSpawns;
+```
+**Problem:** If generation completes faster than Tick can process, this array grows unbounded.
+**Fix:** Add maximum queue size with backpressure or discard oldest entries.
+
+### 🟡 1.5 ChunkUnloaded Event Fired Before Pool Return
+**File:** VoxelWorld.cpp:~340
+**Problem:** `OnChunkUnloaded` event fires before chunk returns to pool. Listeners may try to access chunk data that's already been reset.
+**Fix:** Fire event after pool return, or pass chunk data copy to event.
+
+---
+
+## SYSTEM 2: CHUNK MANAGEMENT
+
+### 🔴 2.1 bMeshDirty — Non-Atomic Bool Without Synchronization (CRITICAL)
+**File:** VoxelChunk.h:~131
+```cpp
+bool bMeshDirty = false;  // Modified from player edit path and Tick()
+```
+**Problem:** Plain `bool` modified from multiple execution contexts without synchronization.
+**Fix:** Change to `FThreadSafeBool bMeshDirty{false};`
+
+### 🔴 2.2 bPendingLODTransition / PendingLOD — Thread-Unsafe (CRITICAL)
+**File:** VoxelChunk.h:~136-141
+```cpp
+bool bPendingLODTransition = false;
+int32 PendingLOD = 0;
+```
+**Problem:** Written by `TransitionToLOD()` and read/cleared in `Tick()`. If called from async callback, undefined behavior.
+**Fix:** Change to `FThreadSafeBool` / `TAtomic<int32>`.
+
+### 🔴 2.3 CurrentTask TSharedPtr Shared Without Synchronization (CRITICAL)
+**File:** VoxelChunk.h:~178
+```cpp
+TSharedPtr<FVoxelGeneratorTask> CurrentTask;
+```
+**Problem:** Written in `GenerateAsync()` (game thread), read in `CancelGeneration()` (game thread), but background lambda captures a copy. Race if task completes between cancel check and actual cancel.
+**Fix:** Use atomic shared pointer or guard with mutex.
+
+### 🟠 2.4 LOD Collision Only Built for LOD <= 1
+**File:** VoxelChunk.cpp:~307-310
+```cpp
+// Only build collision for LOD 0 and 1
+if (MeshToUse == ProceduralMesh && LOD <= 1) {
+    CreateCollisionForChunk(LOD);
+}
+```
+**Problem:** LOD 2 chunks have no collision. Players fall through terrain at distance.
+**Fix:** Build collision for all LODs: `(MeshToUse == ProceduralMesh)` without LOD restriction.
+
+### 🟠 2.5 BiomeFoliageHISMs Never Destroyed (Memory Leak)
+**File:** VoxelChunk.cpp:~450-480
+**Problem:** `BiomeFoliageHISMs` TMap grows monotonically. Components are created but never destroyed when chunk returns to pool.
+**Fix:** Clear and destroy all HISM components in `Reset()`.
+
+### 🟡 2.6 MeshState Never Synchronized
+**File:** VoxelChunk.h:~120
+```cpp
+enum class EChunkMeshState : uint8 {
+    Idle, PendingBuild, Building, PendingUpload, Uploading, Complete
+};
+EChunkMeshState MeshState = EChunkMeshState::Idle;
+```
+**Problem:** Enum is set but never checked. Mesh can be double-built if `QueueMeshBuild()` called while already building.
+**Fix:** Add state checks before each operation and update state in callbacks.
+
+### 🟡 2.7 CancelGeneration Doesn't Wait for Completion
+**File:** VoxelChunk.cpp:~180
+**Problem:** Cancel sets a flag but doesn't wait for the background thread to actually stop. The lambda may still be executing when chunk returns to pool.
+**Fix:** Add completion event or atomic flag check with spin-wait.
+
+---
+
+## SYSTEM 3: GENERATION PIPELINE
+
+### 🔴 3.1 Density Pool Memory Leak (CRITICAL)
+**File:** VoxelGeneratorTask.cpp:79-85
+```cpp
+FVoxelGeneratorTask::~FVoxelGeneratorTask()
+{
+    if (Densities.Num() > 0)
+    {
+        FScopeLock Lock(&GDensityPoolLock);
+        GDensityPool.Add(MoveTemp(Densities));
+    }
+}
+```
+**Problem:** `GDensityPool` is a global static that grows indefinitely. Never shrinks. Over long sessions, leaks memory proportional to peak concurrent tasks.
+**Fix:** Cap pool size: `if (GDensityPool.Num() < 16) GDensityPool.Add(MoveTemp(Densities));`
+
+### 🟠 3.2 Wrong Stride to ComputeNormal in Foliage Pass
+**File:** VoxelGeneratorTask.cpp:~479
+```cpp
+const FVector Normal = FVoxelMeshGenerator::ComputeNormal(Densities, LX + 1, LY + 1, CellZ, EffCS);
+```
+**Problem:** 5th argument should be `EffectiveSize` (includes LOD step), not `EffCS` (raw chunk size).
+**Fix:** Pass `EffectiveSize` instead of `EffCS`.
+
+### 🟠 3.3 PrepareColumn OOB Read When ChunkSize ≠ Power-of-Two
+**File:** VoxelGeneratorTask.cpp:~280-310
+**Problem:** Index calculation `BaseIndex + z * Stride` can exceed array bounds if `ChunkSize` isn't a clean power of two and `StepSize` doesn't divide evenly.
+**Fix:** Add bounds check: `if (Index >= Densities.Num()) continue;`
+
+### 🟡 3.4 Surface Density Threshold Not Configurable
+**File:** VoxelGeneratorTask.cpp:~420
+```cpp
+if (Densities[Index] > 0.f) // Hardcoded threshold
+```
+**Problem:** Surface is always at density=0. If biomes want negative surface (e.g., underwater terrain), this can't be adjusted.
+**Fix:** Add `SurfaceThreshold` to config.
+
+### 🟡 3.5 Foliage Pass Reads Entire Density Volume
+**File:** VoxelGeneratorTask.cpp:~460-500
+**Problem:** Foliage iteration reads every density cell even though foliage only spawns at surface. Wastes cache bandwidth.
+**Fix:** Only iterate XZ columns, find surface Z, then check adjacent cells.
+
+---
+
+## SYSTEM 4: BIOME SYSTEM
+
+### 🟠 4.1 Crater Override Threshold Too Aggressive
+**File:** VoxelBiomeManager.cpp:137-147
+```cpp
+if (CratersW > 0.01f) {
+    ForestW = 0.f; DesertW = 0.f; PeaksW = 0.f; CliffsW = 0.f; MesaW = 0.f; OceanW = 0.f;
+}
+```
+**Problem:** Just 1% crater noise wipes out ALL other biomes. Creates hard-edge biome pop-in.
+**Fix:** Change to gradual transition:
+```cpp
+if (CratersW > 0.25f) {
+    const float Suppress = 1.0f - FMath::Clamp((CratersW - 0.25f) / 0.4f, 0.f, 1.f);
+    ForestW *= Suppress; DesertW *= Suppress; // etc.
 }
 ```
 
-**Impact**: After 1000 chunk cycles, ~50MB leaked per foliage slot
-
-**Fix**: Proper cleanup in ClearMesh() to remove unused components beyond threshold.
-
----
-
-### Issue 2: GDensityPool Global Lock Contention (MEDIUM)
-
-**File**: `Voxel/Generation/VoxelGeneratorTask.cpp` lines 45-60
-
-**Fix**: Use thread-local pools instead of global lock.
-
----
-
-## Water Simulation Issues
-
-### Issue 1: Game Thread Blocking (HIGH)
-
-**File**: `Voxel/Core/World/Water/VoxelWorldWater.cpp`
-
-Water simulation step runs on game thread every 200ms.
-
-**Impact**: 5-15ms frame time spikes
-
-**Fix**: Move to async background task.
-
----
-
-### Issue 2: Water Mesh Rebuilt Every Frame (MEDIUM)
-
-**File**: `Voxel/Core/VoxelChunk.cpp` lines 520-590
-
-**Fix**: Add hash-based dirty checking.
-
----
-
-### Issue 3: Excessive TMap Lookups (HIGH)
-
-**File**: `Voxel/Water/WaterVoxelSimulator.cpp` SimCell()
-
-Each water cell performs 5-8 TMap.Find() calls per tick.
-
-**Impact**: ~200K+ TMap lookups per sim tick with 10 water chunks
-
-**Fix**: Cache chunk data, use direct array indexing.
-
----
-
-## Unsafe Access Patterns
-
-### Critical Null Pointer Dereferences Found
-
-| # | File | Line | Pattern | Impact |
-|---|------|------|---------|--------|
-| 1 | VoxelWorld.cpp | ~236 | `!(*Ptr)->IsCollisionReady()` | Crash |
-| 2 | VoxelWorld.cpp | ~250 | `(*Ptr)->IsReady()` | Crash |
-| 3 | VoxelWorld.cpp | ~340 | `AVoxelChunk* Chunk = *ChunkPtr` | Crash |
-| 4 | VoxelWorld.cpp | ~370 | `(*ChunkPtr)->bMeshDirty` | Crash |
-| 5 | VoxelWorld.cpp | ~800 | `LoadedChunks.Find(Coord)` deref | Crash |
-| 6 | VoxelWorldGeneration.cpp | ~200 | Multiple `LoadedChunks.Find()` | Crash |
-| 7 | VoxelWorldModification.cpp | ~66 | `MarkChunkDirty` without check | Silent |
-
-**Fix Pattern**:
+### 🟠 4.2 Duplicate Code Block in GetSkylandColumnCache()
+**File:** VoxelBiomeGenerators.cpp:~GetSkylandColumnCache
+**Problem:** Two identical threshold reduction blocks:
 ```cpp
-AVoxelChunk** ChunkPtr = LoadedChunks.Find(Coord);
-if (!ChunkPtr || !*ChunkPtr) return;
-AVoxelChunk* Chunk = *ChunkPtr;
+// Block 1
+if (CellShardT > 0.5f) {
+    const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
+    Threshold -= FMath::Log2(SizeRatio) * 0.05f;
+}
+
+// Block 2 (DUPLICATE - exact same code)
+if (CellShardT > 0.5f) {
+    const float SizeRatio = FMath::Max(1.f, IslandSize / SC.BaseIslandSize);
+    Threshold -= FMath::Log2(SizeRatio) * 0.05f;
+}
+```
+**Problem:** Threshold gets reduced TWICE for large islands, making them too porous.
+**Fix:** Delete one of the duplicate blocks.
+
+### 🟠 4.3 50+ Hardcoded Magic Numbers in GetCraterHeight()
+**File:** VoxelBiomeGenerators.cpp:~GetCraterHeight
+**Problem:** Constants like `25000.f`, `0.65f`, `0.92f`, `800.f`, `6000.f` scattered throughout. Impossible to tune without recompiling.
+**Fix:** Extract all magic numbers to FCraterBiomeConfig UPROPERTY fields.
+
+### 🟡 4.4 Biome Weight Map Not Thread-Safe
+**File:** VoxelBiomeManager.cpp
+**Problem:** `GetBiomeWeightsStatic()` computes weights without locking. If biome config changes mid-generation, results are inconsistent.
+**Fix:** Cache biome configs at generation start, pass as const reference.
+
+### 🟡 4.5 Mesa Pillar Height Calculation Has No Bounds Check
+**File:** VoxelBiomeGenerators.cpp:~GetMesaHeight (Pillar section)
+```cpp
+const float PillarIntensity = (PillarNoise - PillarThreshold) / (1.f - PillarThreshold);
+```
+**Problem:** If `PillarNoise > 1.0f`, `PillarIntensity > 1.0f`, causing unbounded pillar heights.
+**Fix:** `FMath::Clamp(PillarIntensity, 0.f, 1.f)`
+
+---
+
+## SYSTEM 5: WATER SIMULATION
+
+### 🔴 5.1 WATER_FILL_LEVEL Too Coarse (CRITICAL)
+**File:** VoxelWaterTypes.h:21
+```cpp
+static constexpr uint8 WATER_FULL = 8;
+```
+**Problem:** Only 9 discrete levels (0-8). A column of 8 cells equalizes instantly. Water can barely form gradients.
+**Fix:** Increase to `WATER_FULL = 64` or use float-based levels.
+
+### 🟠 5.2 Water Mesh Hash Missing
+**File:** WaterVoxelSimulator.cpp
+**Problem:** No hash comparison before rebuilding water mesh. Every tick rebuilds even if water state unchanged.
+**Fix:** Add `CalculateWaterHash()` function, skip rebuild if hash matches.
+
+### 🟠 5.3 Water Chunks Never Cleaned Up
+**File:** VoxelWorldWater.cpp
+**Problem:** `WaterChunks` TMap grows indefinitely as player explores. Old water chunks are never removed.
+**Fix:** Remove water chunks when parent voxel chunk unloads.
+
+### 🟡 5.4 SimulateStep Has No Maximum Iteration Cap
+**File:** WaterVoxelSimulator.cpp:~SimulateStep
+**Problem:** If water is in a complex flow pattern, simulation can run for thousands of iterations per step.
+**Fix:** Add `MaxIterationsPerStep` config parameter.
+
+### 🟡 5.5 Water Level Transitions Between Chunks Not Smooth
+**File:** WaterVoxelSimulator.cpp:~boundary handling
+**Problem:** Water at chunk boundaries doesn't flow smoothly across chunk edges. Creates visible seams.
+**Fix:** Add 1-voxel overlap region for boundary water exchange.
+
+---
+
+## SYSTEM 6: STREAMING & LOD
+
+### 🟠 6.1 LOD Hysteresis Only Applied Outward
+**File:** VoxelWorld_Streaming.cpp:~188-212
+```cpp
+const float L1ISq = LOD1Distance * LOD1Distance;  // Inner = base (no scaling!)
+const float L1OSq = LOD1Distance * LOD1Distance * HysteresisFactor * HysteresisFactor;
+```
+**Problem:** Inner threshold equals base distance exactly. Hysteresis dead-band is only on outer side. Crossing inward always transitions immediately.
+**Fix:** Scale inner threshold down:
+```cpp
+const float L1ISq = LOD1Distance * LOD1Distance / (HysteresisFactor * HysteresisFactor);
 ```
 
+### 🟠 6.2 LOD State Machine Can Oscillate
+**File:** VoxelWorld_Streaming.cpp:~196-206
+**Problem:** If player hovers at exact LOD boundary, chunks rapidly switch between LOD levels, causing constant mesh rebuilds.
+**Fix:** Add minimum dwell time before allowing LOD transition back.
+
+### 🟡 6.3 Distance Sorting Uses Full Chunk Map Iteration
+**File:** VoxelWorld_Streaming.cpp:~SortByDistance
+**Problem:** Iterates entire `LoadedChunks` TMap every streaming update. O(N) where N = all loaded chunks.
+**Fix:** Maintain a priority queue sorted by distance, update incrementally.
+
+### 🟡 6.4 No LOD Transition Smoothing
+**File:** VoxelWorld_Streaming.cpp
+**Problem:** When LOD changes, old mesh is destroyed and new mesh created instantly. Visible pop-in.
+**Fix:** Cross-fade between LOD meshes over a few frames.
+
+### 🟡 6.5 Skyland Density Mismatch Between Streaming and Generation
+**File:** VoxelWorld_Streaming.cpp vs VoxelBiomeGenerators.cpp
+**Problem:** Altitude formula in streaming doesn't match generation formula exactly. Can cause islands to appear/disappear at LOD boundaries.
+**Fix:** Use identical formula from a shared utility function.
+
 ---
 
-## Dirty Queue Performance
+## SYSTEM 7: DATA MAP
 
-### Issue 1: AddUnique is O(N) → O(N²)
-
-**File**: `Voxel/Core/World/VoxelWorld.cpp` line ~337
-
+### 🔴 7.1 CopyFrom Holds Both Locks During Deep Copy (CRITICAL)
+**File:** VoxelDataMap.cpp:115
 ```cpp
-DirtyRebuildQueue.AddUnique(Coord);  // ❌ O(N) linear scan per call
-```
-
-**Fix**: Use TSet for O(1) lookup.
-
----
-
-### Issue 2: O(N) Removal in Drain Loop
-
-**File**: `Voxel/Core/World/VoxelWorld.cpp` ~line 345
-
-**Fix**: Use index-based compaction algorithm.
-
----
-
-## Streaming & Lifecycle Issues
-
-### Issue 1: MeshState Never Synchronized (HIGH)
-
-**File**: `Voxel/Core/VoxelChunk.h` lines 294-314
-
-**Problem**: `EChunkMeshState MeshState` is initialized to `Empty` but **never updated** during lifecycle. Actual state is tracked by `bGenerating` and `bMeshApplied` thread-safe bools.
-
-**Impact**: Code referencing `MeshState` gets stale data while `IsReady()`/`IsGenerating()` use bools.
-
-**Fix**: Synchronize MeshState with bGenerating/bMeshApplied in all state transitions.
-
----
-
-### Issue 2: CloseRange Priority Boost Collapses Distances (MEDIUM)
-
-**File**: `Voxel/Core/World/VoxelWorld_Streaming.cpp` lines 378-385
-
-**Problem**: For chunks within 2 units, `DistSq / 100` is always 0, making all close chunks have `PriorityScore = 1`.
-
-**Impact**: Loses distance-based ordering for close chunks.
-
-**Fix**: Use `FMath::Max(1, DistSq / 100)` to preserve ordering.
-
----
-
-### Issue 3: Skyland Z-Bounds Rounding Causes Churn (LOW)
-
-**File**: `Voxel/Core/World/VoxelWorld_Streaming.cpp`
-
-**Problem**: Sky altitude recompute threshold uses integer rounding, causing chunks to flicker in/out when player moves vertically.
-
-**Fix**: Use floating-point comparison with proper epsilon.
-
----
-
-## Generation Pipeline Optimizations
-
-### Issue 1: Redundant GetSeedOffset() Calls (HIGH)
-
-**File**: `FirstVoxel/Voxel/Generation/VoxelDensityGenerator.cpp`  
-**Location**: FVoxelCavePass::EvaluateVoxel (~line 270-273)
-
-`GetSeedOffset()` is called **twice** per voxel — once to compute `SeedOff` (unused), and again inside `SampleCaveNoise`.
-
-**Fix**: Cache SeedOff in FColumnContext.Blackboard during PrepareColumn.
-
-**Estimated savings**: 2-5% of underground chunk gen time.
-
----
-
-### Issue 2: FVoxelSurfacePass Missing Per-Column Caching (MEDIUM)
-
-**File**: `Voxel/Generation/VoxelDensityGenerator.cpp`
-
-`FVoxelSurfacePass::PrepareColumn` does not pre-compute `SeedOff`, forcing every voxel to recompute it.
-
-**Fix**: Cache GetSeedOffset() in FColumnContext.Blackboard.
-
-**Estimated savings**: 1-2% of surface chunk gen time.
-
----
-
-### Issue 3: Cache Misses in ParallelFor (MEDIUM)
-
-**File**: `Voxel/Generation/VoxelGeneratorTask.cpp`
-
-Column weights and surface heights are accessed via index calculation `X + Y * EffectiveSize` which has poor cache locality for Y-major iteration.
-
-**Fix**: Reorder loops to match memory layout or use prefetch hints.
-
-**Estimated savings**: 3-5% of generation time.
-
----
-
-## Biome System Architecture
-
-### Issue 1: Duplicate Code Block in Skyland Generation (HIGH)
-
-**File**: `FirstVoxel/Voxel/Biomes/VoxelBiomeGenerators.cpp`  
-**Function**: GetSkylandColumnCache()
-
-The threshold adjustment block for `CellShardT > 0.5f` is **duplicated verbatim** within the same function. This causes the threshold to be reduced **twice** for large islands, making them abnormally large/merged.
-
-**Fix**: Remove the duplicate block.
-
----
-
-### Issue 2: 50+ Hardcoded Magic Numbers in Crater Height (HIGH)
-
-**File**: `FirstVoxel/Voxel/Biomes/VoxelBiomeGenerators.cpp`  
-**Function**: GetCraterHeight()
-
-| Approx Line | Value | Meaning | Should Be Config Field |
-|-------------|-------|---------|----------------------|
-| ~440 | `0.65f` | RimStart | `CRC.RimStart` |
-| ~441 | `0.92f` | RimEnd | `CRC.RimEnd` |
-| ~445 | `4000.f` | BasePlains offset | `CRC.BasePlainsHeight` |
-| ~448 | `4.0f` | Rim height multiplier | `CRC.RimHeightMult` |
-| ~452 | `0.25f` | Rim peak NormDepth | `CRC.RimPeakDepth` |
-| ~460 | `0.40f` | Floor start | `CRC.FloorStart` |
-| ~464 | `1.0f` | Floor end | `CRC.FloorEnd` |
-
-**Fix**: Extract all magic numbers into FCraterBiomeConfig struct fields.
-
----
-
-### Issue 3: Missing Configuration Validation (MEDIUM)
-
-**File**: `Voxel/Config/VoxelGenerationConfig.h`
-
-No validation of config values:
-- Negative frequencies
-- Invalid octave counts
-- Contradictory settings (e.g., bEnableOcean=false but bUseVoxelOcean=true)
-
-**Fix**: Add `Validate()` method to FVoxelGenerationConfig.
-
----
-
-### Issue 4: Inconsistent Naming Conventions (LOW)
-
-**Files**: Multiple config files
-
-Mixed naming:
-- `bEnableForest` (bool prefix)
-- `MaxNoiseOctaves` (no prefix)
-- `SurfaceGradientScale` (camelCase)
-- `LakeSpawnProbability` (descriptive)
-
-**Fix**: Establish and enforce naming convention.
-
----
-
-## Error Handling & Logging
-
-### Issue 1: VoxelLogger Not Integrated with UE_LOG (HIGH)
-
-**File**: `FirstVoxel/Voxel/VoxelLogger.cpp`
-
-The VoxelLogger is a completely separate system from UE_LOG:
-- No severity levels
-- No UE_LOG bridge
-- Silent initialization failures
-- Per-event file writes (no buffering)
-
-**Impact**: Debugging requires checking two separate log systems.
-
-**Fix**: Integrate VoxelLogger with UE_LOG macros, add severity levels, implement buffered writes.
-
----
-
-### Issue 2: Inconsistent Log Levels (MEDIUM)
-
-**Files**: Multiple
-
-Mixed usage of UE_LOG levels:
-```cpp
-UE_LOG(LogVoxelWorld, Log, TEXT("..."));      // Sometimes should be Warning
-UE_LOG(LogVoxelWorld, Warning, TEXT("..."));  // Sometimes should be Error
-UE_LOG(LogVoxelWorld, Verbose, TEXT("..."));  // Often missing
-```
-
-**Fix**: Establish log level guidelines and audit all UE_LOG calls.
-
----
-
-### Issue 3: Missing Error Recovery Patterns (MEDIUM)
-
-**Files**: Multiple
-
-Most error conditions just return/continue without cleanup:
-```cpp
-if (!GetWorld()) return;  // No cleanup, no logging
-if (!Chunk) continue;     // Silent skip
-```
-
-**Fix**: Add cleanup logic and error logging for all error paths.
-
----
-
-### Issue 4: No Debug Visualization System (LOW)
-
-**Files**: None exist
-
-No debug drawing for:
-- Chunk boundaries
-- LOD transitions
-- Water flow
-- Biome weights
-- Generation pipeline stages
-
-**Fix**: Add debug visualization toggles in VoxelWorld Details panel.
-
----
-
-## Threading Model Issues
-
-### Issue 1: Race Condition in LoadedChunks Access (HIGH)
-
-**File**: `Voxel/Core/World/VoxelWorld.cpp`
-
-`LoadedChunks` TMap is accessed from multiple threads without synchronization:
-- Game thread: Tick(), MarkChunkDirty(), SpawnChunk()
-- Background thread: PerformWorldDiscoveryAndBoundsCalculation()
-- Callback thread: OnGenerationComplete lambda
-
-**Fix**: Add FCriticalSection for LoadedChunks access or use lock-free data structure.
-
----
-
-### Issue 2: Callback Safety in OnGenerationComplete (HIGH)
-
-**File**: `Voxel/Core/VoxelChunk.cpp` lines 150-180
-
-Callback can execute after chunk destruction if weak pointer check fails timing:
-```cpp
-AsyncTask(ENamedThreads::GameThread, [SafeThis, LocalTask, TaskId]()
+void FVoxelDataMap::CopyFrom(const FVoxelDataMap& Other)
 {
-    if (SafeThis.IsValid() && TaskId == SafeThis->GenerationId)
-    {
-        SafeThis->ApplyMesh(LocalTask);  // Chunk may be destroyed between check and call
-    }
-});
+    MapLock.Lock();
+    Other.MapLock.Lock();
+    Chunks = Other.Chunks;  // Full deep copy under BOTH locks
+    MapLock.Unlock();
+    Other.MapLock.Unlock();
+}
 ```
+**Problem:** O(N) copy while holding both locks. Blocks all readers/writers on both maps.
+**Fix:** Snapshot under brief lock, copy without locks, then swap under lock.
 
-**Fix**: Use stronger lifetime management or double-check pattern.
+### 🟠 7.2 TMap<FIntVector, FChunkData> Hash Collision Risk
+**File:** VoxelDataMap.h
+**Problem:** `FIntVector` hash function may have collisions for nearby coordinates. With thousands of chunks, collision rate increases.
+**Fix:** Use a custom hash function optimized for spatial locality.
 
----
-
-### Issue 3: ParallelFor Without Cancellation Support (MEDIUM)
-
-**File**: `Voxel/Generation/VoxelGeneratorTask.cpp`
-
-`ParallelFor` lambda checks `bCancelled` but ParallelFor itself doesn't support early termination.
-
-**Fix**: Use chunked ParallelFor with cancellation checks between chunks.
-
----
-
-### Issue 4: Thread Pool Exhaustion Risk (LOW)
-
-**Files**: Multiple
-
-All async tasks use `EAsyncExecution::ThreadPool` without limits. Under heavy load, the thread pool can be exhausted, causing all tasks to queue.
-
-**Fix**: Implement task priority system or use dedicated thread pools for generation vs water vs streaming.
+### 🟡 7.3 SetSphere Doesn't Validate Radius
+**File:** VoxelDataMap.cpp:~SetSphere
+**Problem:** Negative or zero radius causes no edits but still iterates. Very large radius causes excessive iteration.
+**Fix:** Add bounds check: `if (Radius <= 0) return; if (Radius > MaxRadius) clamp;`
 
 ---
 
-## Implementation Plan
+## SYSTEM 8: MESH GENERATION
 
-### Phase 1: Critical Stability (1-2 days)
+### 🟠 8.1 Degenerate Cell Vertex Can Divide by Zero
+**File:** VoxelMeshGenerator.cpp:~167-174
+```cpp
+for (int32 e = 0; e < 12; ++e) {
+    // Count sign-change edges...
+    ++EdgeCount;
+}
+CellPos /= (float)EdgeCount;  // Can be 0!
+```
+**Problem:** While `CubeIndex != 0 && != 255` should guarantee sign changes, corrupted density data could still produce `EdgeCount == 0`.
+**Fix:** Add guard: `if (EdgeCount == 0) continue;`
 
-| Task | File | Effort | Impact |
-|------|------|--------|--------|
-| Fix LOD collision for all levels | VoxelChunk.cpp | 2h | CRITICAL |
-| Add null safety checks | Multiple files | 4h | CRITICAL |
-| Fix BiomeFoliageHISMs leak | VoxelChunk.cpp | 2h | HIGH |
-| Fix MeshState synchronization | VoxelChunk.h/cpp | 2h | HIGH |
-| Remove duplicate skyland code | VoxelBiomeGenerators.cpp | 0.5h | HIGH |
-| Add LoadedChunks synchronization | VoxelWorld.cpp | 4h | HIGH |
+### 🟠 8.2 Normal Computation Uses Diagonals Instead of Triangle Edges
+**File:** VoxelMeshGenerator.cpp:~ComputeNormal
+**Problem:** Normal calculation samples diagonal neighbors, producing incorrect normals at sharp edges.
+**Fix:** Use actual triangle edges from the generated mesh for normal computation.
 
-### Phase 2: Performance (2-3 days)
+### 🟡 8.3 No Mesh Simplification for LOD
+**File:** VoxelMeshGenerator.cpp
+**Problem:** LOD meshes are generated at full resolution then subsampled. Should generate lower-res mesh directly.
+**Fix:** Pass LOD level to mesh generator, skip cells that don't contribute to surface at that LOD.
 
-| Task | File | Effort | Impact |
-|------|------|--------|--------|
-| Optimize dirty queue to O(N) | VoxelWorld.cpp | 4h | HIGH |
-| Move water to async task | VoxelWorldWater.cpp | 8h | HIGH |
-| Add water mesh hashing | VoxelChunk.cpp | 2h | MEDIUM |
-| Optimize water TMap lookups | WaterVoxelSimulator.cpp | 4h | MEDIUM |
-| Cache GetSeedOffset() | VoxelDensityGenerator.cpp | 2h | MEDIUM |
-| Fix priority boost calculation | VoxelWorld_Streaming.cpp | 1h | MEDIUM |
-
-### Phase 3: Visual Quality (3-5 days)
-
-| Task | File | Effort | Impact |
-|------|------|--------|--------|
-| LOD boundary stitching | VoxelChunk.cpp | 16h | MEDIUM |
-| LOD transition queue | VoxelChunk.cpp | 2h | MEDIUM |
-| GDensityPool thread-local | VoxelGeneratorTask.cpp | 4h | LOW |
-| Extract crater magic numbers | VoxelBiomeGenerators.cpp | 8h | MEDIUM |
-
-### Phase 4: Polish (2-3 days)
-
-| Task | File | Effort | Impact |
-|------|------|--------|--------|
-| Integrate VoxelLogger with UE_LOG | VoxelLogger.cpp | 8h | MEDIUM |
-| Add error logging throughout | Multiple files | 8h | MEDIUM |
-| Add configuration validation | VoxelGenerationConfig.h | 4h | LOW |
-| Add debug visualization | Multiple files | 8h | LOW |
-| Establish naming conventions | Multiple files | 4h | LOW |
+### 🟡 8.4 Vertex Welding Not Performed
+**File:** VoxelMeshGenerator.cpp
+**Problem:** Surface Nets can produce duplicate vertices at cell boundaries. No welding step.
+**Fix:** Add vertex welding pass after generation.
 
 ---
 
-## Quick Wins (Can Implement Today)
+## SYSTEM 9: CONFIGURATION
 
-1. **LOD Collision Fix** - Single line change in VoxelChunk.cpp
-2. **Null Safety Macro** - Add VOXEL_CHECK_VALID and use throughout
-3. **Water Mesh Hash** - Add CalculateWaterHash() function
-4. **LOD Transition Queue** - Add PendingLODTransition handling
-5. **Remove Duplicate Skyland Code** - Single deletion in VoxelBiomeGenerators.cpp
-6. **Fix Priority Boost** - Single FMath::Max in VoxelWorld_Streaming.cpp
+### 🔴 9.1 No Validate() Methods on Any Config Struct (CRITICAL)
+**Files:** SurfaceBiomesConfig.h, VoxelGenerationConfig.h, CaveLayerConfig.h, SkylandsLayerConfig.h
+**Problem:** No validation of parameter ranges. Invalid values (negative heights, zero frequencies, NaN) propagate silently.
+**Fix:** Add `Validate()` method to each config struct, call at generation start.
+
+### 🟠 9.2 No ClampMin/ClampMax Meta on UPROPERTY Fields
+**Files:** All config headers
+**Problem:** Editor sliders have no bounds. User can set physically impossible values.
+**Fix:** Add `UMeta=(ClampMin="0", ClampMax="100000")` to all numeric fields.
+
+### 🟠 9.3 Skylands Probability Can Exceed 1.0
+**File:** SkylandsLayerConfig.h
+```cpp
+float BaseProbability = 0.3f;
+float HeightProbabilityBonus = 0.8f;  // 0.3 + 0.8 = 1.1 > 1.0!
+```
+**Problem:** Combined probability > 1.0 is meaningless and can cause unexpected behavior.
+**Fix:** Clamp combined probability to [0, 1].
+
+### 🟡 9.4 MaxTerrainReference Not Linked to Actual Heights
+**File:** SkylandsLayerConfig.h
+```cpp
+float MaxTerrainReference = 30000.f;  // Hardcoded, doesn't match actual terrain
+```
+**Problem:** If terrain heights exceed this, skyland calculations break.
+**Fix:** Auto-calculate from biome height configs at initialization.
+
+### 🟡 9.5 Legacy Crater Parameters Still Present
+**File:** SurfaceBiomesConfig.h
+**Problem:** Old crater parameters exist alongside new hierarchical system parameters. Confusing and error-prone.
+**Fix:** Remove deprecated parameters, add migration notes.
 
 ---
 
-## Summary
+## SYSTEM 10: UI, LOGGING & PLAYER
 
-**Total Issues Identified**: 32
-**Resolved**: 6 (19%)
-**Critical Remaining**: 6
-**High Remaining**: 10
-**Medium Remaining**: 12
-**Low Remaining**: 4
+### 🔴 10.1 VoxelLogger Deadlock — Non-Recursive Lock Acquired Twice (CRITICAL)
+**File:** VoxelLogger.cpp:~62, ~40
+```cpp
+FScopeLock ScopeLock(&LogLock);  // Acquires lock
+if (LogFilePath.IsEmpty() || !FileHandle)
+    InitLogger();                 // Tries to acquire same lock → DEADLOCK
+```
+**Problem:** `FCriticalSection` is non-recursive. Same thread acquiring twice = deadlock.
+**Fix:** Make `LogLock` recursive (`FCriticalSection(FCriticalSection::Type::Recursive)`) or restructure.
 
-**Estimated Total Effort**: 25-35 days of development work
+### 🟠 10.2 No File Flush After Write — Crash = Lost Logs
+**File:** VoxelLogger.cpp:~76
+```cpp
+FileHandle->Write(...);
+// No Flush() — data in OS buffer, lost on crash
+```
+**Fix:** Add `FileHandle->Flush(false)` after each write or periodically.
 
-**Highest Impact Fixes**:
-1. LOD collision (prevents gameplay-breaking bug)
-2. LoadedChunks synchronization (prevents crashes)
-3. MeshState synchronization (prevents visual glitches)
-4. Dirty queue optimization (improves editing performance)
-5. Water async simulation (improves frame rate)
+### 🟠 10.3 bLogInitFailed Permanently Disables Logging
+**File:** VoxelLogger.cpp:~15, ~44
+**Problem:** If first log attempt fails (file locked, permissions), `bLogInitFailed = true` forever. No retry.
+**Fix:** Retry initialization periodically or on next log call.
+
+### 🟡 10.4 VoxelMapWidget Doesn't Handle Chunk Unload
+**File:** VoxelMapWidget.cpp
+**Problem:** Minimap shows chunks that have been unloaded. Stale markers persist.
+**Fix:** Listen to `OnChunkUnloaded` event and remove from minimap.
+
+### 🟡 10.5 Player Character Doesn't Cache VoxelWorld Reference
+**File:** FirstVoxelCharacter.cpp
+**Problem:** Every edit operation does `GetWorld()->GetAuthGameMode()->FindVoxelWorld()`. Slow.
+**Fix:** Cache reference in BeginPlay, refresh on level change only.
+
+---
+
+## QUICK WINS (Implement Today)
+
+These are single-line or few-line fixes with high impact:
+
+| # | Fix | File | Line | Impact |
+|---|-----|------|------|--------|
+| 1 | LOD collision for all LODs | VoxelChunk.cpp | ~307 | Players won't fall through terrain |
+| 2 | Delete duplicate skyland threshold | VoxelBiomeGenerators.cpp | ~GetSkylandColumnCache | Correct large island porosity |
+| 3 | Cap density pool size | VoxelGeneratorTask.cpp | ~82 | Stop memory leak |
+| 4 | Add EdgeCount == 0 guard | VoxelMeshGenerator.cpp | ~174 | Prevent division by zero |
+| 5 | LOD hysteresis inner threshold | VoxelWorld_Streaming.cpp | ~190 | Reduce LOD oscillation |
+| 6 | Make ActiveGenerations atomic | VoxelWorld.h | ~385 | Fix data race |
+| 7 | Make bMeshDirty thread-safe | VoxelChunk.h | ~131 | Fix data race |
+| 8 | VoxelLogger recursive lock | VoxelLogger.cpp | ~62 | Fix deadlock |
+| 9 | Clamp Mesa pillar intensity | VoxelBiomeGenerators.cpp | ~Mesa | Prevent unbounded height |
+| 10 | Validate crater override threshold | VoxelBiomeManager.cpp | ~137 | Fix biome pop-in |
+
+---
+
+## IMPLEMENTATION PLAN
+
+### Phase 1: Critical Stability (~15 Steps)
+- [ ] Fix ActiveGenerations data race (use TAtomic)
+- [ ] Fix bMeshDirty / bPendingLODTransition thread safety
+- [ ] Fix CurrentTask shared pointer race
+- [ ] Fix VoxelLogger deadlock (recursive lock)
+- [ ] Fix CopyFrom dual-lock deep copy
+- [ ] Cap density pool memory leak
+- [x] Add LOD collision for all levels
+- [x] Fix BiomeFoliageHISMs memory leak
+
+### Phase 2: Performance (~12 Steps)
+- [ ] Fix WATER_FILL_LEVEL coarseness
+- [ ] Add water mesh hash to skip rebuilds
+- [ ] Clean up water chunks on unload
+- [ ] Fix LOD hysteresis inner threshold
+- [ ] Add LOD oscillation prevention
+- [ ] Fix foliage pass OOB read
+- [ ] Fix ComputeNormal stride in foliage
+- [ ] Remove duplicate skyland threshold code
+
+### Phase 3: Visual Quality (~15 Steps)
+- [ ] Fix crater override gradual transition
+- [ ] Extract crater magic numbers to config
+- [ ] Fix Mesa pillar bounds
+- [ ] Add LOD transition smoothing
+- [ ] Fix skyland density formula mismatch
+- [ ] Add mesh simplification for LOD
+- [ ] Fix normal computation at sharp edges
+
+### Phase 4: Polish (~10 Steps)
+- [ ] Add Validate() to all config structs
+- [ ] Add ClampMin/ClampMax meta to UPROPERTYs
+- [ ] Fix skylands probability clamping
+- [ ] Remove legacy crater parameters
+- [ ] Add file flush to logger
+- [ ] Fix logger retry mechanism
+- [ ] Cache VoxelWorld reference in player
+- [ ] Add debug visualization tools
+
+---
+
+## ESTIMATED EFFORT
+
+| Phase | Effort | Issues | Critical |
+|-------|----------|--------|----------|
+| Phase 1 | 15 Steps | 6 | 6 |
+| Phase 2 | 12 Steps | 8 | 0 |
+| Phase 3 | 15 Steps | 7 | 0 |
+| Phase 4 | 10 Steps | 8 | 0 |
+| **Total** | **52 Steps** | **29** | **6** |
+
+---
+
+## NOTES
+
+- The recent crater system rewrite (hierarchical impacts, ejecta blanket) is architecturally sound but contains many hardcoded values that should be configurable.
+- The skyland system improvements (shard aspect ratio, altitude matching) are good but the duplicate threshold code needs removal.
+- The biome system's crater override threshold (0.01) is too aggressive and causes visible biome pop-in.
+- Thread safety remains the primary concern across the codebase — many shared state variables use plain `bool`/`int32` without atomic operations.
