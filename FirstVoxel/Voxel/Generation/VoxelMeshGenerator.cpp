@@ -405,7 +405,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 
 		const FColor& VC = GetQuadColor(ColX, ColY);
 
-		if (bD0Solid)
+		if (!bD0Solid) // FIX: Inverted condition to fix inside-out front-faces
 		{
 			EmitTriangle(Dest, IndicesDest, i2, i1, i0, OutwardNormal, VC);
 			EmitTriangle(Dest, IndicesDest, i3, i2, i0, OutwardNormal, VC);
