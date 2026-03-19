@@ -2,9 +2,17 @@
 // VoxelWaterSimulator.h  [canonical: Voxel/Water/]
 // =============================================================================
 //
-// Cellular-automata water simulation operating on FVoxelWaterData stored
-// inside AVoxelChunk actors. Driven by UVoxelWorldWaterComponent at a
-// configurable tick interval (Water.SimStepInterval).
+// Cellular-automata water simulation system for voxel terrain.
+//
+// Implements realistic water physics including gravity flow, lateral spreading,
+// and water source management within the chunk-based world system. Operates
+// on FVoxelWaterData stored inside AVoxelChunk actors and is driven by
+// UVoxelWorldWaterComponent at a configurable tick interval.
+//
+// @thread-safety Game-thread only. All public methods must be called from
+//                the game thread. No internal locking is used.
+// @performance   O(N) per chunk where N is number of water cells.
+//                Optimized for sparse water distribution with early termination.
 //
 // -- SIMULATION RULES (one Step() call) ---------------------------------------
 //
@@ -41,10 +49,20 @@
 //   Returns TArray<FIntVector> of chunk coords whose Cells[] changed.
 //   UVoxelWorldWaterComponent calls AVoxelChunk::RebuildWaterMesh() on each.
 //
-// -- THREAD SAFETY ------------------------------------------------------------
+// -- PERFORMANCE CHARACTERISTICS ----------------------------------------------
 //
-//   ALL public methods must be called from the GAME THREAD.
-//   No locking is used; the game-thread-only contract is enforced by design.
+//   - Processing order: bottom-to-top for natural gravity simulation
+//   - Early termination when cells are empty or sources
+//   - Chunk-based processing for memory efficiency
+//   - Dirty chunk tracking to minimize mesh updates
+//   - Sparse water distribution optimization
+//
+// -- INTEGRATION NOTES --------------------------------------------------------
+//
+//   - Designed for integration with VoxelChunkManager chunk lifecycle
+//   - Works with UVoxelWorldWaterComponent for automatic tick scheduling
+//   - Supports water sources, flowing water, and solid terrain interaction
+//   - Thread-safe chunk registration system
 // =============================================================================
 #pragma once
 

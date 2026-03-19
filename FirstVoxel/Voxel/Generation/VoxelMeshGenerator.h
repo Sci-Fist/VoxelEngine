@@ -2,11 +2,19 @@
 // VoxelMeshGenerator.h
 // =============================================================================
 //
-// Stateless, thread-safe Surface Nets mesh builder.
+// Stateless, thread-safe Surface Nets mesh builder for voxel terrain.
+//
 // Converts a 3D density field into a ProceduralMesh-ready dataset split into
 // two material sections: FlatMesh (top-facing) and SlopeMesh (cliff/wall).
+// Implements a robust Surface Nets algorithm with deterministic winding,
+// optimized flat/slope classification, and walkability improvements.
 //
-// -- ALGORITHM ----------------------------------------------------------------
+// @thread-safety Thread-safe. All public methods can be called from background
+//                threads without external synchronization.
+// @performance   O(N³) density sampling, O(N²) mesh output for N³ voxel chunk.
+//                Uses ParallelFor for vertex placement and optimized quad emission.
+//
+// -- ALGORITHM OVERVIEW -------------------------------------------------------
 //
 //  PASS 1 — Vertex placement
 //    For every cell whose 8 corners contain a density sign change
@@ -75,10 +83,19 @@
 //  (9 lookups) and snaps.  The old O(V²) brute-force search caused
 //  ~48 M comparisons when 12 background tasks ran concurrently.
 //
-// -- THREAD SAFETY ------------------------------------------------------------
+// -- PERFORMANCE CHARACTERISTICS ----------------------------------------------
 //
-//  GenerateMesh() is fully stateless. Safe to call from multiple background
-//  threads simultaneously.
+//  - Vertex placement: O(N³) density sampling with ParallelFor over Z slices
+//  - Quad emission: O(N²) quads for N³ voxel chunk
+//  - Memory: O(N³) for density array, O(N²) for output mesh data
+//  - Thread safety: Fully stateless, safe for concurrent background generation
+//
+// -- INTEGRATION NOTES --------------------------------------------------------
+//
+//  - Designed for use with VoxelChunkManager background generation pipeline
+//  - Output meshes are ready for ProceduralMeshComponent::CreateMeshSection
+//  - Supports LOD via InStepSize parameter (1=full, 2=half, 4=quarter resolution)
+//  - FlatMesh and SlopeMesh use different materials for optimized rendering
 // =============================================================================
 
 #pragma once

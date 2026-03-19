@@ -17,6 +17,9 @@
 #include "Async/ParallelFor.h"
 #include "VoxelLogger.h"
 
+static FCriticalSection      GDensityPoolLock;
+static TArray<TArray<float>> GDensityPool;
+
 // All surface biomes in EVoxelBiome order (cast to uint8 gives array index).
 // Desert was previously missing here, silently preventing desert foliage from
 // ever being pre-cached or spawned.
@@ -78,6 +81,15 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     }
 }
 
+FVoxelGeneratorTask::~FVoxelGeneratorTask()
+{
+    if (Densities.Num() > 0)
+    {
+        FScopeLock Lock(&GDensityPoolLock);
+        GDensityPool.Add(MoveTemp(Densities));
+    }
+}
+
 // ============================================================
 //  Execute
 // ============================================================
@@ -117,6 +129,14 @@ void FVoxelGeneratorTask::BuildDensityField()
     const int32 VoxelCS = ChunkSize;
     const int32 EffCS   = ChunkSize / StepSize;
 
+    {
+        FScopeLock Lock(&GDensityPoolLock);
+        if (GDensityPool.Num() > 0)
+        {
+            Densities = MoveTemp(GDensityPool.Last());
+            GDensityPool.RemoveAt(GDensityPool.Num() - 1, 1, false);
+        }
+    }
     Densities.SetNumUninitialized(TotalSamples);
 
     static FVoxelDensityGenerator FallbackGenerator;
@@ -176,8 +196,8 @@ void FVoxelGeneratorTask::BuildDensityField()
         const int32 Y = Index / EffectiveSize;
         const int32 X = Index % EffectiveSize;
 
-        const float WorldX = WorldOrigin.X + (X - 1.f) * EffVoxelSize;
-        const float WorldY = WorldOrigin.Y + (Y - 1.f) * EffVoxelSize;
+        const float WorldX = FMath::RoundToFloat(WorldOrigin.X + (X - 1.f) * EffVoxelSize);
+        const float WorldY = FMath::RoundToFloat(WorldOrigin.Y + (Y - 1.f) * EffVoxelSize);
 
 
         // ---- Per-column work (O(n^2)) ----

@@ -100,8 +100,19 @@ void AFirstVoxelHUD::DrawHUD()
         const int32 Head = TitleWorld->GetQueueHead();
         const int32 Total = TitleWorld->GetQueueCount();
         FString StatusText = FString::Printf(TEXT("Chunks: %d / %d"), Head, Total);
-        if (Head >= Total && Total > 0) StatusText = TEXT("Finalizing geometry... Ready shortly.");
-        if (Total <= 0) StatusText = TEXT("Requesting generation coordinates...");
+        
+        if (TitleWorld->IsWaitingForInitialSpawn())
+        {
+            StatusText = FString::Printf(TEXT("Preparing Spawning Area: %d / %d"), Head, Total);
+        }
+        else if (Head >= Total && Total > 0)
+        {
+            StatusText = TEXT("Finalizing geometry... Ready shortly.");
+        }
+        else if (Total <= 0)
+        {
+            StatusText = TEXT("Requesting generation coordinates...");
+        }
         
         float StatusW, StatusH;
         GetTextSize(StatusText, StatusW, StatusH, SmallFont, 1.0f);

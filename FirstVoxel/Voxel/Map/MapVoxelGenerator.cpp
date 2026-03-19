@@ -1,8 +1,11 @@
 // VoxelMapGenerator.cpp
 // 
 // CPU-based top-down world map generator for the voxel engine.
+//
 // Provides thread-safe map generation without touching UObjects, producing
 // a flat BGRA pixel buffer suitable for UTexture2D upload on the game thread.
+// This implementation creates detailed topographic maps with biome visualization
+// and debugging overlays for the voxel world.
 //
 // ARCHITECTURE OVERVIEW:
 // This generator creates a top-down representation of the voxel world by
@@ -24,6 +27,21 @@
 // - Minimal memory allocation (single pixel buffer)
 // - Static sampling functions avoid object instantiation
 // - Optimized color calculations with precomputed palettes
+//
+// MAP GENERATION PIPELINE:
+// 1. World-to-pixel coordinate transformation
+// 2. Biome weight sampling and color blending
+// 3. Height-based brightness adjustment
+// 4. Water depth coloring for submerged areas
+// 5. Topographic contour line generation
+// 6. Debug overlay rendering (loaded chunks, grid lines)
+// 7. Player position indicator placement
+//
+// COLOR BLENDING ALGORITHM:
+// - Base color: Weighted average of biome colors based on biome weights
+// - Height shading: Non-linear brightness curve (power function) for elevation
+// - Water blending: Linear interpolation to deep blue for submerged terrain
+// - Contour lines: Yellow for major lines (10,000 units), white for minor lines (2,000 units)
 
 #include "Voxel/Map/VoxelMapGenerator.h"
 #include "Voxel/Biomes/VoxelBiomeManager.h"

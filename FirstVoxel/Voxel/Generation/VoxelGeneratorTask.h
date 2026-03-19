@@ -6,7 +6,13 @@
 // complete mesh, foliage, and water-source dataset ready for upload on the
 // game thread. All work runs on a background thread; no UObject API is touched.
 //
-// -- PIPELINE (called by Execute() in order) ----------------------------------
+// @thread-safety Thread-safe. All processing runs on background threads without
+//                UObject dependencies. Results are plain C++ containers safe
+//                for game-thread upload via AVoxelChunk::ApplyMesh().
+// @performance   O(N³) density generation, O(N²) mesh output for N³ voxel chunk.
+//                Optimized with ParallelFor, per-column caching, and early termination.
+//
+// -- PIPELINE OVERVIEW --------------------------------------------------------
 //
 //   BuildDensityField()    Fill Densities[(EffSize+3)^3] via ParallelFor.
 //                          Per-column work (biome weights, surface height,
@@ -25,7 +31,16 @@
 //   PlaceWaterSources()    Scan for enclosed air-on-solid depressions and
 //                          emit world-voxel coordinates for water spawning.
 //
-// -- FOLIAGE SLOT LAYOUT ------------------------------------------------------
+// -- PERFORMANCE OPTIMIZATIONS ------------------------------------------------
+//
+//   - Per-column caching: Biome weights and surface heights computed once per
+//     XY column (O(N²)) instead of per voxel (O(N³))
+//   - ParallelFor processing for density field generation
+//   - Early termination for cancellation and extreme density states
+//   - LOD-aware processing with StepSize parameter
+//   - Memory-efficient density array with padding for Surface Nets algorithm
+//
+// -- FOLIAGE SYSTEM ARCHITECTURE ---------------------------------------------
 //
 //   FoliageSlots[] is built once in the constructor from the config.
 //   PerFoliageTransforms[s] holds all spawn transforms for slot s.
@@ -36,17 +51,46 @@
 //   Legacy fallback (no per-biome foliage configured):
 //     LegacyTreeTransforms  / LegacyGrassTransforms are populated instead.
 //
-// -- CANCELLATION -------------------------------------------------------------
+//   Foliage placement algorithm:
+//   1. Iterate through mesh triangles
+//   2. Filter by normal direction (upward-facing)
+//   3. Sample biome weights at triangle center
+//   4. Spawn appropriate foliage types based on biome configuration
+//   5. Apply density and slope constraints
+//
+// -- WATER SOURCE DETECTION ---------------------------------------------------
+//
+//   PlaceWaterSources() implements terrain analysis to find suitable water
+//   spawning locations:
+//   1. Scan for terrain depressions (air voxels surrounded by solid)
+//   2. Identify skyland flat surfaces suitable for water pools
+//   3. Validate slope and accessibility constraints
+//   4. Emit world-voxel coordinates for water system initialization
+//
+// -- CANCELLATION AND LIFETIME MANAGEMENT -------------------------------------
 //
 //   Call Cancel() from any thread to set bCancelled. Execute() checks this
 //   flag between sub-passes and returns early. AVoxelChunk::GenerationId
 //   provides a second guard: the game-thread callback discards results from
 //   any task whose ID no longer matches the chunk's current generation.
 //
-// -- THREAD SAFETY ------------------------------------------------------------
+//   This dual-cancellation system ensures:
+//   - Immediate response to cancellation requests
+//   - Prevention of stale data being applied to chunks
+//   - Safe cleanup of background tasks
 //
-//   No UObject methods are called inside Execute(). All outputs are plain C++
-//   containers. AVoxelChunk::ApplyMesh() uploads them on the game thread.
+// -- INTEGRATION WITH CHUNK SYSTEM --------------------------------------------
+//
+//   Designed for seamless integration with VoxelChunkManager:
+//   - Chunk coordinates and world origin provided as input
+//   - Results uploaded via AVoxelChunk::ApplyMesh() on game thread
+//   - GenerationId ensures result validity
+//   - Supports LOD system with configurable StepSize
+//
+//   Output data flow:
+//   1. Density field → Surface Nets mesh generation
+//   2. Mesh data → Foliage placement and water source detection
+//   3. Combined results → Game thread upload and rendering
 // =============================================================================
 #pragma once
 
@@ -75,6 +119,8 @@ public:
 		float                         InMaxFoliageSlope,  // legacy fallback slope
 		struct FVoxelDataMap*         InDataMap
 	);
+
+	~FVoxelGeneratorTask();
 
 	/** Runs BuildDensityField -> BuildMesh -> CalculateFoliage on a background thread. */
 	void Execute();

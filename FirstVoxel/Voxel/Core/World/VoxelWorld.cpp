@@ -250,8 +250,8 @@ void AVoxelWorld::Tick(float DeltaTime)
 	{
 		SpawnWaitAccum += DeltaTime;
 
-		// Hard timeout: 45 s. Generous to handle slow machines.
-		const bool bTimedOut = (SpawnWaitAccum > 45.f);
+		// Hard timeout: 90 s. Generous to handle slow machines and large meshes.
+		const bool bTimedOut = (SpawnWaitAccum > 90.f);
 
 		// Count how many spawn-area chunks have their COLLISION body ready
 		// (not just mesh uploaded). Collision cooking is async and finishes

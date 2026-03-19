@@ -1,8 +1,11 @@
 // VoxelWaterSimulator.cpp
 // 
 // Cellular automata-based water simulation system for the voxel engine.
+//
 // Implements realistic water physics including gravity flow, lateral spreading,
-// and water source management within the chunk-based world system.
+// and water source management within the chunk-based world system. This
+// implementation provides a robust foundation for dynamic water behavior
+// in voxel terrain with performance optimizations for large-scale worlds.
 //
 // ARCHITECTURE OVERVIEW:
 // This simulator uses a cellular automata approach where each voxel cell
@@ -21,6 +24,14 @@
 // - Dirty chunk tracking to minimize mesh updates
 // - Bottom-to-top processing order for natural gravity simulation
 // - Early termination when cells are empty or sources
+// - Sparse water distribution optimization
+//
+// CELLULAR AUTOMATA RULES:
+// Each simulation step processes water cells in the following order:
+// 1. Source refresh: Reset source cells to full water level
+// 2. Gravity flow: Move water downward if space available
+// 3. Lateral spread: Distribute water horizontally when blocked
+// 4. Boundary handling: Discard water flowing out of loaded chunks
 
 #include "Voxel/Water/VoxelWaterSimulator.h"
 

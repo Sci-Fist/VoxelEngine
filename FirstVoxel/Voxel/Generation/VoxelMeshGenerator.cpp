@@ -1,9 +1,22 @@
 // VoxelMeshGenerator.cpp
-// Surface Nets implementation.
-// Converts a 3D density field into smooth terrain mesh, splitting quads into
-// FlatMesh (normal.Z >= SlopeThreshold) and SlopeMesh (normal.Z < SlopeThreshold).
+// Surface Nets implementation for voxel terrain mesh generation.
 //
-// FIXES IN THIS REVISION:
+// Converts a 3D density field into smooth terrain mesh using the Surface Nets
+// algorithm, splitting quads into FlatMesh (normal.Z >= SlopeThreshold) and
+// SlopeMesh (normal.Z < SlopeThreshold) for optimized material rendering.
+//
+// ALGORITHM OVERVIEW:
+// The Surface Nets algorithm generates smooth isosurfaces from discrete density
+// fields by placing vertices at the average of edge intersections and connecting
+// them to form quads. This implementation includes several key improvements:
+//
+// PERFORMANCE OPTIMIZATIONS:
+// - ParallelFor for vertex placement across Z slices
+// - O(V) spatial grid for top-flattening instead of O(V²) brute force
+// - Deterministic winding order to prevent checkerboard artifacts
+// - Fast-path gradient computation for interior cells
+//
+// FIXES AND IMPROVEMENTS:
 //   1. EdgeTable removed. Pass 1 now uses correct Surface Nets gate:
 //      (CubeIndex != 0 && CubeIndex != 255).
 //      The old MC EdgeTable had mirrored duplicate rows that caused valid
@@ -261,9 +274,8 @@ void FVoxelMeshGenerator::GenerateMesh(
 		}
 	});
 
-	// FIX: Apply top-flattening inline to unified list before splitting
-	// to prevent tearing against SlopeMesh boundaries.
-	FlattenCellTops(EffectiveVoxelSize, CellVertices, CellNormals, VertexIndices, S);
+	// FIX: Disabled to prevent tearing at adjacent chunk boundaries
+	// FlattenCellTops(EffectiveVoxelSize, CellVertices, CellNormals, VertexIndices, S);
 
 	// ── Pre-compute biome vertex colours (O(n²), cached per XY column) ────
 	TArray<FColor> ColumnColors;

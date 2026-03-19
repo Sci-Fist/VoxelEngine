@@ -340,11 +340,15 @@ float FVoxelBiomeGenerators::GetCraterHeight(
   const FVector Off = Config.GetSeedOffset();
   const float nX = X + Off.X, nY = Y + Off.Y;
 
-  // Calculate distance from world center for hierarchical system
-  const float DistFromCenter = FMath::Sqrt(X * X + Y * Y);
+  // Calculate distance from forced crater center for hierarchical system
+  const float dx = X - CRC.ForcedCraterCenter.X;
+  const float dy = Y - CRC.ForcedCraterCenter.Y;
+  const float DistFromCenter = FMath::Sqrt(dx * dx + dy * dy);
   
   // Central crater dominance falloff
-  const float CentralDominance = FMath::Exp(-DistFromCenter / (CRC.CentralCraterRadius * 0.8f));
+  // Central crater dominance falloff: solid inside the rim, fading outside
+  const float CenterDistNorm = DistFromCenter / CRC.CentralCraterRadius;
+  const float CentralDominance = FMath::SmoothStep(1.3f, 0.85f, CenterDistNorm); 
   
   // Base terrain height
    // Ambient rolling noise for surrounding terrain to prevent flat lands
@@ -358,8 +362,8 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     const float NormalizedDist = FMath::Clamp(DistFromCenter / CRC.CentralCraterRadius, 0.f, 1.f);
     
     // Rim zone definitions
-    const float RimStart = 0.082f;   
-    const float RimEnd = 0.086f;     
+    const float RimStart = 0.80f;   
+    const float RimEnd = 0.86f;     
     
     // CRATER SHAPE: Create proper impact crater profile
     const float FloorFade = FMath::SmoothStep(RimStart, 0.0f, NormalizedDist);
@@ -386,7 +390,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
       CentralHeight = FMath::Lerp(FloorDepth, RimPeak, CurveT);
     } else {
       // Outside rim: steep drop-off directly back down to surrounding world
-      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + 0.02f, NormalizedDist); 
+      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + 0.14f, NormalizedDist); 
       const float RimPeak = LocalPlains + RandomRimHeight;
       const float DropTarget = LocalPlains + RandomRimHeight * 0.05f; 
       CentralHeight = FMath::Lerp(RimPeak, DropTarget, DropT);
@@ -467,7 +471,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(
       const float SlabFade = FMath::SmoothStep(0.f, 0.1f, CenterDis) * FMath::SmoothStep(1.f, 0.9f, CenterDis);
       if (CurveDirection != 0.0f) {
         const float CurveShape = FMath::Sin(CenterDis * 3.14159f * 4.0f); 
-        const float TopCurve = CurveDirection * FMath::Abs(CurveShape) * 1800.f; // 18m tall curves
+        const float TopCurve = CurveDirection * FMath::Abs(CurveShape) * 6000.f; // 60m tall curves (Multiplied from 18m)
         CentralHeight += TopCurve * SlabFade;
       }
     }
@@ -523,16 +527,18 @@ float FVoxelBiomeGenerators::GetCraterHeight(
       
       // Add organic erosion noise to outer rim
       const float ErosionNoise = FastNoise3D(nX * 0.0015f, nY * 0.0015f, 0.f) * CRC.RimNoiseAmplitude * 0.4f;
-      if (NormalizedDist < 0.20f) {
-        const float Fade = FMath::SmoothStep(0.20f, 0.17f, NormalizedDist); 
+      if (NormalizedDist > RimEnd && NormalizedDist < RimEnd + 0.10f) {
+        const float CenterDis = (NormalizedDist - RimEnd) / 0.10f;
+        const float Fade = FMath::SmoothStep(0.f, 0.2f, CenterDis) * FMath::SmoothStep(1.f, 0.8f, CenterDis); 
         CentralHeight += ErosionNoise * Fade * FMath::Exp(-(NormalizedDist - RimEnd) * 6.0f);
       }
 
       // Add rim noise for natural irregularity (Continuous Fade)
       const float RimNoise = FastNoise3D(nX * 0.0012f, nY * 0.0012f, 0.f) * CRC.RimNoiseAmplitude;
-      if (NormalizedDist < 0.25f) {
-        const float Fade = FMath::SmoothStep(0.25f, 0.22f, NormalizedDist); 
-        CentralHeight += RimNoise * Fade * FMath::Exp(-NormalizedDist * 4.0f); 
+      if (NormalizedDist > RimEnd && NormalizedDist < RimEnd + 0.15f) {
+        const float CenterDis = (NormalizedDist - RimEnd) / 0.15f;
+        const float Fade = FMath::SmoothStep(0.f, 0.2f, CenterDis) * FMath::SmoothStep(1.f, 0.8f, CenterDis); 
+        CentralHeight += RimNoise * Fade * FMath::Exp(-(NormalizedDist - RimEnd) * 4.0f); 
       }
     
     // Apply central crater with distance-based blending

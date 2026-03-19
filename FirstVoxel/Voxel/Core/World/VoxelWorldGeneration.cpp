@@ -724,10 +724,10 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
 	// Spawn chunks in a focused grid around the spawn position
 	// This ensures the player has solid ground without overwhelming the generation system
-	// FIX: Set RadiusXY to 7 to create a 15x15 area (from -7 to +7 = 15 chunks total)
-	// This gives us approximately 16x16 chunks around the spawn point for proper crater coverage
+	// FIX: Set RadiusXY to 4 to create a 9x9 area (from -4 to +4 = 9 chunks total)
+	// This gives us a 9x9 grid of high-priority chunks to wait for without triggering timeouts.
 	TArray<FIntVector> SpawnAreaCoords;
-	const int32 RadiusXY = 7; 
+	const int32 RadiusXY = 4; 
 	for (int32 x = -RadiusXY; x <= RadiusXY; ++x)
 	{
 		for (int32 y = -RadiusXY; y <= RadiusXY; ++y)

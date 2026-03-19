@@ -1,18 +1,40 @@
 // VoxelMapGenerator.h  [canonical location: Voxel/Map/]
-// CPU-based top-down world map sampler. Thread-safe — no UObjects touched.
-// Produces a flat BGRA pixel buffer uploadable to UTexture2D on the game thread.
+// CPU-based top-down world map generator for voxel terrain visualization.
 //
+// Thread-safe implementation that produces a flat BGRA pixel buffer suitable
+// for UTexture2D upload on the game thread. Generates topographic maps with
+// biome-based coloring, elevation visualization, and debugging overlays.
+//
+// @thread-safety Thread-safe. All public methods can be called from background
+//                threads without external synchronization.
+// @performance   O(N²) for N×N pixel resolution using ParallelFor processing.
+//                Optimized for large map generation with minimal memory overhead.
+//
+// MAP COORDINATE SYSTEM:
 // Map pixel (px, py) maps to world coordinate:
 //   WorldX = CenterX + (px - Resolution*0.5) * PixelWorldSize
 //   WorldY = CenterY + (py - Resolution*0.5) * PixelWorldSize
 //
-// Color logic per pixel:
-//   1. Blend biome colors by weight
-//   2. Multiply by height-based brightness
-//   3. Below SeaLevel → fade to deep blue
-//   4. Contour lines every 2000 world units (topographic style)
-//   5. Loaded chunks get a subtle brightness ring
-//   6. Player dot at center (red 3×3 px)
+// COLOR GENERATION PIPELINE:
+//   1. Biome blending: Mix biome colors by weight for base terrain color
+//   2. Height shading: Apply brightness based on elevation (higher = brighter)
+//   3. Water depth: Blend to deep blue for areas below sea level
+//   4. Topographic contours: Add elevation lines every 2000 world units
+//   5. Debug overlays: Highlight loaded chunks and chunk grid boundaries
+//   6. Player indicator: Red dot at map center for player position
+//
+// PERFORMANCE CHARACTERISTICS:
+// - Parallel processing using ParallelFor for optimal multi-core utilization
+// - Static sampling functions avoid object instantiation overhead
+// - Minimal memory allocation (single pixel buffer)
+// - Optimized color calculations with precomputed palettes
+// - Resolution-independent processing suitable for large maps
+//
+// INTEGRATION NOTES:
+// - Designed for use with VoxelMapWidget UI component
+// - Output format compatible with UTexture2D::UpdateTextureRegions
+// - Supports dynamic resolution scaling for performance/quality balance
+// - Includes debugging features for chunk loading visualization
 #pragma once
 
 #include "CoreMinimal.h"
