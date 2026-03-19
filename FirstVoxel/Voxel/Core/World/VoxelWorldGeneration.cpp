@@ -795,9 +795,17 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 	}
 
 	// Sort spawn area chunks by distance from player to generate closest first
-	// FIX: Prioritize chunks that are in crater biome to ensure crater generation
+	// FIX: Prioritize chunks directly below the player column first to guarantee footing,
+	// then crater biome chunks.
 	SpawnAreaCoords.Sort([SpawnCoord, this](const FIntVector& A, const FIntVector& B) {
-		// Check if chunks are in crater biome
+		// 1. Prioritize chunks strictly in the player's column AND below the player
+		const bool bIsBelowA = (A.X == SpawnCoord.X && A.Y == SpawnCoord.Y && A.Z < SpawnCoord.Z);
+		const bool bIsBelowB = (B.X == SpawnCoord.X && B.Y == SpawnCoord.Y && B.Z < SpawnCoord.Z);
+		
+		if (bIsBelowA && !bIsBelowB) return true;
+		if (!bIsBelowA && bIsBelowB) return false;
+
+		// 2. Check if chunks are in crater biome
 		const FVector WorldPosA = ChunkCoordToWorld(A);
 		const FVector WorldPosB = ChunkCoordToWorld(B);
 		
