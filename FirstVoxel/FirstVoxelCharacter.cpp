@@ -219,6 +219,10 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AFirstVoxelCharacter::SelectToolSmooth);
 	PlayerInputComponent->BindKey(EKeys::Four,  IE_Pressed, this, &AFirstVoxelCharacter::SelectToolFlatten);
 
+	// ── Flight & Map (Keyboard F / M) ───────────────────────────────────────
+	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
+	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
+
 	// ── Auto-walk (keyboard R / gamepad Select) ─────────────────────────────
 	PlayerInputComponent->BindKey(EKeys::R,                      IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left,   IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);

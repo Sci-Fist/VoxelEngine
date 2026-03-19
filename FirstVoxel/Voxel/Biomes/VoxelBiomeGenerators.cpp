@@ -358,7 +358,9 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     const float NormalizedDist = FMath::Clamp(DistFromCenter / CRC.CentralCraterRadius, 0.f, 1.f);
     
     // CRATER SHAPE: Create proper impact crater profile
-    float CentralHeight = BasePlains + CRC.CentralCraterDepth; // Start with floor
+    const float FloorFade = FMath::SmoothStep(RimStart, 0.0f, NormalizedDist);
+    const float LocalPlains = Config.SeaLevel + 4000.f + SurroundNoise * (1.0f - FloorFade);
+    float CentralHeight = LocalPlains + CRC.CentralCraterDepth; // Start with floor
     
     // Rim zone definitions
     const float RimStart = 0.082f;   
@@ -374,19 +376,19 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     // 1. BASE HEIGHT PROFILE (Continuous branching)
     if (NormalizedDist < RimStart) {
       // Inside rim: flat floor
-      CentralHeight = BasePlains + CRC.CentralCraterDepth;
+      CentralHeight = LocalPlains + CRC.CentralCraterDepth;
     } else if (NormalizedDist < RimEnd) {
-      // Thin rim wall: very steep transition with curved profile
+      // Thin rim wall: smooth transition with SmoothStep for continuous slope
       const float RimT = (NormalizedDist - RimStart) / (RimEnd - RimStart); 
-      const float CurveT = FMath::Pow(RimT, 0.2f); 
-      const float RimPeak = BasePlains + RandomRimHeight;
-      const float FloorDepth = BasePlains + CRC.CentralCraterDepth;
+      const float CurveT = FMath::SmoothStep(0.0f, 1.0f, RimT); 
+      const float RimPeak = LocalPlains + RandomRimHeight;
+      const float FloorDepth = LocalPlains + CRC.CentralCraterDepth;
       CentralHeight = FMath::Lerp(FloorDepth, RimPeak, CurveT);
     } else {
       // Outside rim: steep drop-off directly back down to surrounding world
-      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + 0.02f, NormalizedDist); // Steeper: 0.02 fallback interval over 0.05
-      const float RimPeak = BasePlains + RandomRimHeight;
-      const float DropTarget = BasePlains + RandomRimHeight * 0.05f; // Drops almost fully back to BasePlains height
+      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + 0.02f, NormalizedDist); 
+      const float RimPeak = LocalPlains + RandomRimHeight;
+      const float DropTarget = LocalPlains + RandomRimHeight * 0.05f; 
       CentralHeight = FMath::Lerp(RimPeak, DropTarget, DropT);
     }
 
@@ -419,11 +421,13 @@ float FVoxelBiomeGenerators::GetCraterHeight(
       const float Ang = FMath::Atan2(nY, nX);
 
       // --- 📌 LEDGES: Flat horizontal shelves on the cliff sides ---
-      if (RimT > 0.45f && RimT < 0.65f) {
-        // Create a flat step centered at 55% up the wall height
-        const float LedgeFade = FMath::SmoothStep(0.45f, 0.55f, RimT) * FMath::SmoothStep(0.65f, 0.55f, RimT);
-        const float LedgeHeight = BasePlains + RandomRimHeight * 0.55f;
-        CentralHeight = FMath::Lerp(CentralHeight, LedgeHeight, LedgeFade * 0.82f);
+      if ((RimT > 0.20f && RimT < 0.35f) || (RimT > 0.55f && RimT < 0.68f)) {
+        const float IsLower = (RimT < 0.4f) ? 1.0f : 0.0f;
+        const float CenterT = IsLower ? 0.275f : 0.615f;
+        const float FadeW = IsLower ? 0.075f : 0.065f;
+        const float LedgeFade = FMath::SmoothStep(CenterT - FadeW, CenterT, RimT) * FMath::SmoothStep(CenterT + FadeW, CenterT, RimT);
+        const float LedgeHeight = LocalPlains + RandomRimHeight * CenterT;
+        CentralHeight = FMath::Lerp(CentralHeight, LedgeHeight, LedgeFade * 0.85f);
       }
 
       // --- ⛰️ BUTTRESSES: Steep, massive rock masses projecting from the cliff ---
@@ -450,8 +454,8 @@ float FVoxelBiomeGenerators::GetCraterHeight(
       const float CenterDis = (NormalizedDist - RockMin) / (RockMax - RockMin);
       const float RockFade = FMath::SmoothStep(0.f, 0.4f, CenterDis) * FMath::SmoothStep(1.f, 0.6f, CenterDis);
       const float RockNoise = FastNoise3D(nX * 0.006f, nY * 0.006f, 0.f);
-      if (RockNoise > 0.20f) {
-        CentralHeight += (RockNoise - 0.20f) * 1600.f * RockFade; 
+      if (RockNoise > 0.10f) {
+        CentralHeight += (RockNoise - 0.10f) * 2500.f * RockFade; 
       }
     }
 
