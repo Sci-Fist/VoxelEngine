@@ -582,8 +582,9 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 	Chunk->DensityGenerator   = DensityGenerator.Get();
 	
 	// FIX: Inject absolute anchor offsets to center the mathematical Crater spawn basin
-	// relative to where the world actor stands flawlessly.
-	Chunk->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(GetActorLocation().X, GetActorLocation().Y);
+	// relative to where the player will spawn (PlayerStart position), not the VoxelWorld actor.
+	// This ensures the crater is centered at the actual spawn location.
+	Chunk->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
 
 	// FIX: Propagate world-level SlopeThreshold into the generation config so
 	// VoxelMeshGenerator uses the right cutoff for flat vs slope classification.

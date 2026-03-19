@@ -134,7 +134,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (GDensityPool.Num() > 0)
         {
             Densities = MoveTemp(GDensityPool.Last());
-            GDensityPool.RemoveAt(GDensityPool.Num() - 1, 1, false);
+            GDensityPool.RemoveAt(GDensityPool.Num() - 1, 1, EAllowShrinking::No);
         }
     }
     Densities.SetNumUninitialized(TotalSamples);
@@ -147,6 +147,16 @@ void FVoxelGeneratorTask::BuildDensityField()
     const FVoxelCavePass    CavePass;
     const FVoxelSkylandPass SkylandPass;
 
+    // PERFORMANCE FIX: Evaluate toggle flags once at function level for reuse
+    const bool bEnableForest  = Config.Performance.bEnableForest;
+    const bool bEnableDesert  = Config.Performance.bEnableDesert;
+    const bool bEnablePeaks   = Config.Performance.bEnablePeaks;
+    const bool bEnableCliffs  = Config.Performance.bEnableCliffs;
+    const bool bEnableMesa    = Config.Performance.bEnableMesa;
+    const bool bEnableCraters = Config.Performance.bEnableCraters;
+    const bool bEnableSurface = Config.Performance.bEnableSurface;
+    const bool bEnableCaves   = Config.Performance.bEnableCaves;
+    const bool bEnableSkylands = Config.Performance.bEnableSkylands;
 
     ColumnWeights.SetNumUninitialized(EffCS * EffCS);
 
@@ -204,26 +214,31 @@ void FVoxelGeneratorTask::BuildDensityField()
         // Biome weights and surface height are the same for the entire
         // vertical column, so they are computed once here and reused
         // for every Z below.
-        const FVoxelBiomeWeightMap BaseWeights = Provider->GetBiomeWeights(WorldX, WorldY, Config);
-        FVoxelBiomeWeightMap Weights = BaseWeights;
+        // PERFORMANCE FIX: Apply toggles in-place instead of copying
+        FVoxelBiomeWeightMap Weights = Provider->GetBiomeWeights(WorldX, WorldY, Config);
 
-        if (!Config.Performance.bEnableForest)  Weights.SetWeight(EVoxelBiome::Forest,  0.f);
-        if (!Config.Performance.bEnableDesert)  Weights.SetWeight(EVoxelBiome::Desert,  0.f);
-        if (!Config.Performance.bEnablePeaks)   Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
-        if (!Config.Performance.bEnableCliffs)  Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
-        if (!Config.Performance.bEnableMesa)    Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
-        if (!Config.Performance.bEnableCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
+        // PERFORMANCE FIX: Use pre-evaluated toggle flags
+        if (!bEnableForest)  Weights.SetWeight(EVoxelBiome::Forest,  0.f);
+        if (!bEnableDesert)  Weights.SetWeight(EVoxelBiome::Desert,  0.f);
+        if (!bEnablePeaks)   Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
+        if (!bEnableCliffs)  Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
+        if (!bEnableMesa)    Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
+        if (!bEnableCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
 
         Weights.Normalize();
 
-        const float               SurfaceHeight  = FVoxelBiomeManager::GetSurfaceHeightStatic(
+        const float SurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(
                                                       WorldX, WorldY, Weights, Config);
 
-        // Neutral layout for Crystal Caverns to prevent breacking into crater floor
-        FVoxelBiomeWeightMap CavernWeights = Weights;
-        CavernWeights.SetWeight(EVoxelBiome::Craters, 0.f);
-        CavernWeights.Normalize();
-        const float NeutralSurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(WorldX, WorldY, CavernWeights, Config);
+        // PERFORMANCE FIX: Only calculate NeutralSurfaceHeight if craters are enabled
+        float NeutralSurfaceHeight = SurfaceHeight;
+        if (bEnableCraters && Weights.GetWeight(EVoxelBiome::Craters) > 0.01f)
+        {
+            FVoxelBiomeWeightMap CavernWeights = Weights;
+            CavernWeights.SetWeight(EVoxelBiome::Craters, 0.f);
+            CavernWeights.Normalize();
+            NeutralSurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(WorldX, WorldY, CavernWeights, Config);
+        }
 
         // Cache weights AND surface height for foliage pass (inner non-padding columns only).
         // Storing SurfaceHeight here avoids calling GetSurfaceHeightStatic() again in
@@ -311,6 +326,43 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         // ---- Column Range Checks for Early-Out (Area 2 Optimization) ----
         const float MinWorldZ = WorldOrigin.Z - EffVoxelSize;
+
+        // PERFORMANCE FIX: Re-enable air column early-exit optimization
+        // Skip expensive per-voxel calculations for columns that are entirely air
+        if (bEnableSkylands)
+        {
+            const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+            const float OverhangMaxDist = Config.Performance.bEnableOverhangs ? Config.Overhangs.MaxDistFromSurface : 0.f;
+            const float SafeAirMinZ = SurfaceHeight + OverhangMaxDist + 200.f;
+            const float SkyLowerBound = SurfaceHeight
+                + SC.MinAltitudeAboveTerrain
+                - (SC.BaseIslandSize * SC.ThicknessRatio)
+                - 400.f;
+
+            if (MinWorldZ > SafeAirMinZ && MaxWorldZ < SkyLowerBound)
+            {
+                // Fill entire column with air - skip expensive per-voxel calculations
+                for (int32 Z = 0; Z < EffectiveSize; ++Z)
+                {
+                    const int32 Idx = X + Y * EffectiveSize + Z * EffectiveSize * EffectiveSize;
+                    const float WorldZ = WorldOrigin.Z + (Z - 1.f) * EffVoxelSize;
+                    float D = -2.0f;
+                    if (DataMap)
+                    {
+                        const int32 GX = FMath::FloorToInt(WorldX / VoxelSize);
+                        const int32 GY = FMath::FloorToInt(WorldY / VoxelSize);
+                        const int32 GZ = FMath::FloorToInt(WorldZ / VoxelSize);
+                        float Override;
+                        if (DataMap->GetDensity(FIntVector(GX, GY, GZ), Override))
+                        {
+                            D = (Override < 0.f) ? FMath::Min(D, Override) : FMath::Max(D, Override);
+                        }
+                    }
+                    Densities[Idx] = D;
+                }
+                return;  // Skip to next column (return in ParallelFor lambda)
+            }
+        }
 
         // 1. Bedrock fully solid check
         if (MaxWorldZ < Config.CaveTunnels.BedrockDepth)

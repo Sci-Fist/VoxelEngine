@@ -557,13 +557,13 @@ struct FCraterBiomeConfig
 
     // Central Crater Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterRadius = 105000.f;  // Tripled from 35000 for much larger central crater (1050m diameter)
+    float CentralCraterRadius = 18000.f;  // Reduced from 105000 for smaller, more focused crater (180m diameter)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterDepth = -2500.f;  // Reduced depth from -5000 to -2500 for less extreme crater depth
+    float CentralCraterDepth = -3500.f;  // Deeper basin for more dramatic impact
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Central Crater")
-    float CentralCraterRimHeight = 2500.f;  // Reduced rim height from 4000 to 2500 for less extreme walls
+    float CentralCraterRimHeight = 4500.f;  // Higher rim for dramatic rising walls
 
     // Secondary Crater Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Secondary Craters")

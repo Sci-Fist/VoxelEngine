@@ -361,38 +361,57 @@ float FVoxelBiomeGenerators::GetCraterHeight(
     // Central crater shape calculation
     const float NormalizedDist = FMath::Clamp(DistFromCenter / CRC.CentralCraterRadius, 0.f, 1.f);
     
-    // Rim zone definitions
-    const float RimStart = 0.80f;   
-    const float RimEnd = 0.86f;     
+    // Rim zone definitions - WIDER rim for visible walls
+    const float RimStart = 0.65f;   
+    const float RimEnd = 0.92f;     
     
     // CRATER SHAPE: Create proper impact crater profile
     const float FloorFade = FMath::SmoothStep(RimStart, 0.0f, NormalizedDist);
     const float LocalPlains = Config.SeaLevel + 4000.f + SurroundNoise * (1.0f - FloorFade);
     float CentralHeight = LocalPlains + CRC.CentralCraterDepth; // Start with floor
     
-    // Calculate base rim height with minimum constraint
-    const float MinRimHeight = FMath::Abs(CRC.CentralCraterDepth) * 0.8f; 
-    const float BaseRimHeight = FMath::Max(CRC.CentralCraterRimHeight, MinRimHeight) * 3.0f; // Heightened rim from 1.5x up to 3.0x    
+    // Calculate base rim height with minimum constraint - DRAMATIC rim
+    const float MinRimHeight = FMath::Abs(CRC.CentralCraterDepth) * 1.5f; 
+    const float BaseRimHeight = FMath::Max(CRC.CentralCraterRimHeight, MinRimHeight) * 4.0f; // Heightened rim from 3.0x up to 4.0x    
     // Add random variation to rim height for natural appearance
     const float RimVariation = FastNoise3D(nX * 0.0005f, nY * 0.0005f, 0.f) * 0.3f;
     const float RandomRimHeight = BaseRimHeight * (1.0f + RimVariation * 0.2f); 
 
     // 1. BASE HEIGHT PROFILE (Continuous branching)
     if (NormalizedDist < RimStart) {
-      // Inside rim: flat floor
-      CentralHeight = LocalPlains + CRC.CentralCraterDepth;
-    } else if (NormalizedDist < RimEnd) {
-      // Thin rim wall: smooth transition with SmoothStep for continuous slope
-      const float RimT = (NormalizedDist - RimStart) / (RimEnd - RimStart); 
-      const float CurveT = FMath::SmoothStep(0.0f, 1.0f, RimT); 
-      const float RimPeak = LocalPlains + RandomRimHeight;
+      // Inside rim: BOWL-SHAPED depression like a real meteor crater
+      // Gradual slope from rim to center, deeper at the middle
+      const float BowlShape = FMath::Pow(1.0f - (NormalizedDist / RimStart), 0.6f);
       const float FloorDepth = LocalPlains + CRC.CentralCraterDepth;
-      CentralHeight = FMath::Lerp(FloorDepth, RimPeak, CurveT);
+      const float RimBase = LocalPlains + CRC.CentralCraterDepth * 0.3f; // Higher at rim edge
+      CentralHeight = FMath::Lerp(RimBase, FloorDepth, BowlShape);
+      
+      // Add subtle floor variation for natural debris/sediment
+      const float FloorNoise = FastNoise3D(nX * 0.003f, nY * 0.003f, 0.f) * 150.f;
+      CentralHeight += FloorNoise * (1.0f - BowlShape * 0.5f); // More noise near edges
+    } else if (NormalizedDist < RimEnd) {
+      // RISING RIM WALL: Gets thinner and curves upward like ejecta slabs
+      const float RimT = (NormalizedDist - RimStart) / (RimEnd - RimStart); 
+      
+      // Rising curve: starts wide at base, narrows and rises to peak
+      const float RisingCurve = FMath::Pow(RimT, 0.5f); // Square root for dramatic rise
+      
+      // Thinning factor: rim gets thinner as it rises (curved slab effect)
+      const float ThinningFactor = 1.0f - RimT * 0.6f; // Narrows to 40% at top
+      
+      // Height rises dramatically toward rim peak
+      const float RimPeak = LocalPlains + RandomRimHeight * 1.5f; // 50% taller
+      const float FloorDepth = LocalPlains + CRC.CentralCraterDepth;
+      CentralHeight = FMath::Lerp(FloorDepth, RimPeak, RisingCurve);
+      
+      // Add vertical curvature - upper part curves inward (slab effect)
+      const float SlabCurve = FMath::Sin(RimT * 3.14159f * 0.5f) * 200.f * ThinningFactor;
+      CentralHeight += SlabCurve;
     } else {
-      // Outside rim: steep drop-off directly back down to surrounding world
-      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + 0.14f, NormalizedDist); 
-      const float RimPeak = LocalPlains + RandomRimHeight;
-      const float DropTarget = LocalPlains + RandomRimHeight * 0.05f; 
+      // Outside rim: GRADUAL slope like a real meteor crater rim
+      const float DropT = FMath::SmoothStep(RimEnd, RimEnd + 0.25f, NormalizedDist); 
+      const float RimPeak = LocalPlains + RandomRimHeight * 1.5f;
+      const float DropTarget = LocalPlains + RandomRimHeight * 0.4f; 
       CentralHeight = FMath::Lerp(RimPeak, DropTarget, DropT);
     }
 

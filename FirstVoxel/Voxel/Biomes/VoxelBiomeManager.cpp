@@ -102,7 +102,12 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
         const float dx = X - Config.Craters.ForcedCraterCenter.X;
         const float dy = Y - Config.Craters.ForcedCraterCenter.Y;
         const float DistSq = dx * dx + dy * dy;
-        const float Radius = 6400.f; // ~64 meters (approx 4 chunks width total)
+        // FIX: Boost radius must cover the entire crater shape (rim at 1.2x radius).
+        // Old value 6400 (64m) only covered the inner floor, leaving the rim zone
+        // (117-166m) dependent on Perlin noise which may give zero crater weight.
+        // New value = CentralCraterRadius * 1.2 = 180m * 1.2 = 216m ensures
+        // crater biome dominates across floor + rim + ejecta blanket.
+        const float Radius = Config.Craters.CentralCraterRadius * 1.2f;
         if (DistSq < Radius * Radius)
         {
             float Factor = 1.0f - (FMath::Sqrt(DistSq) / Radius);
