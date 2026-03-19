@@ -116,30 +116,32 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     // generation on that XY — so the player always spawns inside a genuine
     // crater without any biome map corruption at world origin.
 
+    // --- Ocean: low altitude below sea-level ---
+    const float ForestHeight = FVoxelBiomeGenerators::GetForestHeight(X, Y, Config);
+    float OceanW = FMath::SmoothStep(Config.SeaLevel - 200.f, Config.SeaLevel - 800.f, ForestHeight);
+
     // --- Crater Override Mask ---
     // Make craters completely override other biomes when active
-    // If crater weight is significant, suppress all other biomes
     if (CratersW > 0.01f)
     {
-        ForestW = 0.f;
-        DesertW = 0.f;
-        PeaksW  = 0.f;
-        CliffsW = 0.f;
-        MesaW   = 0.f;
+        ForestW = 0.f; DesertW = 0.f; PeaksW  = 0.f; CliffsW = 0.f; MesaW   = 0.f; OceanW  = 0.f;
     }
     else
     {
-        // Gradual suppression for weak crater influence
         const float SafeCraterFactor = 1.0f - CratersW;
-        ForestW *= SafeCraterFactor;
-        DesertW *= SafeCraterFactor;
-        PeaksW  *= SafeCraterFactor;
-        CliffsW *= SafeCraterFactor;
-        MesaW   *= SafeCraterFactor;
+        ForestW *= SafeCraterFactor; DesertW *= SafeCraterFactor;
+        PeaksW  *= SafeCraterFactor; CliffsW *= SafeCraterFactor;
+        MesaW   *= SafeCraterFactor; OceanW  *= SafeCraterFactor;
+    }
+
+    // Ocean Override: Suppress others if Ocean is dominant to solidify biome type
+    if (OceanW > 0.6f)
+    {
+        const float Suppress = 1.0f - OceanW;
+        ForestW *= Suppress; DesertW *= Suppress; MesaW *= Suppress;
     }
 
     // --- Toggle Enforcement ---
-    // zero out globally if disabled in options (e.g. Title Menu toggles)
     if (!Config.Performance.bEnableForest)  ForestW  = 0.f;
     if (!Config.Performance.bEnableDesert)  DesertW  = 0.f;
     if (!Config.Performance.bEnablePeaks)   PeaksW   = 0.f;
@@ -153,6 +155,7 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(float X, float Y,
     Map.SetWeight(EVoxelBiome::Mesa,    MesaW);
     Map.SetWeight(EVoxelBiome::Craters, CratersW);
     Map.SetWeight(EVoxelBiome::Desert,  DesertW);
+    Map.SetWeight(EVoxelBiome::Ocean,   OceanW);
 
     Map.Normalize();
     return Map;

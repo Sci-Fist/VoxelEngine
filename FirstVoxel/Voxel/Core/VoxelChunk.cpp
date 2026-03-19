@@ -522,6 +522,18 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		const int32 StepSz     = GetStepSize();
 		const FVector ChunkOrigin = GetActorLocation();
 		
+		// ── Cache 2D Ocean biome weights for the chunk columns ──────────────────
+		TArray<float, TInlineAllocator<32*32>> OceanWeights;
+		OceanWeights.SetNumZeroed(ChunkSize * ChunkSize);
+		for (int32 ly = 0; ly < ChunkSize; ++ly)
+		for (int32 lx = 0; lx < ChunkSize; ++lx)
+		{
+			const float ColX = ChunkOrigin.X + lx * VoxelSize;
+			const float ColY = ChunkOrigin.Y + ly * VoxelSize;
+			const FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(ColX, ColY, GenerationConfig);
+			OceanWeights[lx + ly * ChunkSize] = Weights.GetWeight(EVoxelBiome::Ocean);
+		}
+
 		for (int32 lz = 0; lz < ChunkSize; ++lz)
 		for (int32 ly = 0; ly < ChunkSize; ++ly)
 		for (int32 lx = 0; lx < ChunkSize; ++lx)
@@ -543,7 +555,12 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 					const float WorldZ = ChunkOrigin.Z + lz * VoxelSize;
 					if (WorldZ <= GenerationConfig.SeaLevel)
 					{
-						WaterData.Cells[WIdx] = WATER_SOURCE;
+						// FIX: Only fill if absolute Ocean biome weight says this column is marine layer.
+						const float OceanWeight = OceanWeights[lx + ly * ChunkSize];
+						if (OceanWeight > 0.49f) 
+						{
+							WaterData.Cells[WIdx] = WATER_SOURCE;
+						}
 					}
 				}
 			}

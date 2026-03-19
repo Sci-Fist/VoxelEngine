@@ -53,7 +53,8 @@ enum class EVoxelBiome : uint8
     Cliffs   UMETA(DisplayName="Cliffs"),
     Mesa     UMETA(DisplayName="Mesa"),
     Craters  UMETA(DisplayName="Craters"),
-    Desert   UMETA(DisplayName="Desert")
+    Desert   UMETA(DisplayName="Desert"),
+    Ocean    UMETA(DisplayName="Ocean")
 };
 
 // ============================================================
@@ -76,9 +77,10 @@ struct FIRSTVOXEL_API FVoxelBiomeWeightMap
     float Mesa    = 0.f;
     float Craters = 0.f;
     float Desert  = 0.f;
+    float Ocean   = 0.f;
 
     /** Number of surface biomes tracked by this map. */
-    static constexpr int32 MaxBiomes = 6;
+    static constexpr int32 MaxBiomes = 7;
 
     /** Set the weight for a specific biome (clamped to >= 0). */
     void SetWeight(EVoxelBiome Biome, float Weight)
@@ -92,6 +94,7 @@ struct FIRSTVOXEL_API FVoxelBiomeWeightMap
         case EVoxelBiome::Mesa:    Mesa    = Weight; break;
         case EVoxelBiome::Craters: Craters = Weight; break;
         case EVoxelBiome::Desert:  Desert  = Weight; break;
+        case EVoxelBiome::Ocean:   Ocean   = Weight; break;
         }
     }
 
@@ -106,6 +109,7 @@ struct FIRSTVOXEL_API FVoxelBiomeWeightMap
         case EVoxelBiome::Mesa:    return Mesa;
         case EVoxelBiome::Craters: return Craters;
         case EVoxelBiome::Desert:  return Desert;
+        case EVoxelBiome::Ocean:   return Ocean;
         default:                   return 0.f;
         }
     }
@@ -116,7 +120,7 @@ struct FIRSTVOXEL_API FVoxelBiomeWeightMap
      */
     void Normalize()
     {
-        const float Sum = Forest + Peaks + Cliffs + Mesa + Craters + Desert;
+        const float Sum = Forest + Peaks + Cliffs + Mesa + Craters + Desert + Ocean;
         if (Sum > 1e-6f)
         {
             const float InvSum = 1.f / Sum;
@@ -126,6 +130,7 @@ struct FIRSTVOXEL_API FVoxelBiomeWeightMap
             Mesa    *= InvSum;
             Craters *= InvSum;
             Desert  *= InvSum;
+            Ocean   *= InvSum;
         }
         else
         {
@@ -143,7 +148,8 @@ struct FIRSTVOXEL_API FVoxelBiomeWeightMap
         if (Cliffs  > MaxW) { MaxW = Cliffs;  Best = EVoxelBiome::Cliffs;  }
         if (Mesa    > MaxW) { MaxW = Mesa;    Best = EVoxelBiome::Mesa;    }
         if (Craters > MaxW) { MaxW = Craters; Best = EVoxelBiome::Craters; }
-        if (Desert  > MaxW) {                 Best = EVoxelBiome::Desert;  }
+        if (Desert  > MaxW) { MaxW = Desert;  Best = EVoxelBiome::Desert;  }
+        if (Ocean   > MaxW) {                 Best = EVoxelBiome::Ocean;   }
         return Best;
     }
 
@@ -162,6 +168,7 @@ struct FIRSTVOXEL_API FVoxelBiomeWeightMap
         case 0: return Forest;  case 1: return Peaks;
         case 2: return Cliffs;  case 3: return Mesa;
         case 4: return Craters; case 5: return Desert;
+        case 6: return Ocean;
         default: return Forest;
         }
     }
@@ -174,6 +181,7 @@ struct FIRSTVOXEL_API FVoxelBiomeWeightMap
         case 0: return Forest;  case 1: return Peaks;
         case 2: return Cliffs;  case 3: return Mesa;
         case 4: return Craters; case 5: return Desert;
+        case 6: return Ocean;
         default: return Forest;
         }
     }

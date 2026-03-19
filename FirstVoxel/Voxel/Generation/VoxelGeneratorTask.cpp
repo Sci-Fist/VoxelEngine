@@ -29,6 +29,7 @@ static const EVoxelBiome GBiomeOrder[] =
     EVoxelBiome::Mesa,
     EVoxelBiome::Craters,
     EVoxelBiome::Desert,
+    EVoxelBiome::Ocean,
 };
 static_assert(UE_ARRAY_COUNT(GBiomeOrder) == FVoxelBiomeWeightMap::MaxBiomes,
     "GBiomeOrder must contain exactly one entry per EVoxelBiome value.");

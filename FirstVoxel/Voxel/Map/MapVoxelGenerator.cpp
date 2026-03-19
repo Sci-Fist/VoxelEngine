@@ -45,6 +45,7 @@ const FLinearColor FVoxelMapGenerator::BiomeColors[FVoxelBiomeWeightMap::MaxBiom
     FLinearColor(0.82f, 0.24f, 0.06f, 1.f),   // Mesa    — vivid red-earth for desert plateaus
     FLinearColor(0.18f, 0.16f, 0.22f, 1.f),   // Craters — dark purple-grey for impact zones
     FLinearColor(0.93f, 0.86f, 0.55f, 1.f),   // Desert  — warm sand color for arid regions
+    FLinearColor(0.08f, 0.28f, 0.72f, 1.f),   // Ocean   — deep blue
 };
 
 // Human-readable biome display names for UI and debugging
@@ -56,10 +57,11 @@ const TCHAR* FVoxelMapGenerator::BiomeNames[FVoxelBiomeWeightMap::MaxBiomes] =
     TEXT("Mesa Plateaus"),
     TEXT("Impact Craters"),
     TEXT("Sand Dunes"),
+    TEXT("Open Ocean"),
 };
 
 // Compile-time assertion to ensure palette and names arrays match MaxBiomes count
-static_assert(FVoxelBiomeWeightMap::MaxBiomes == 6,
+static_assert(FVoxelBiomeWeightMap::MaxBiomes == 7,
     "BiomeColors and BiomeNames must each have exactly MaxBiomes entries.");
 
 
