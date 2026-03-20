@@ -1,7 +1,8 @@
 // VoxelMapWidget.cpp
-// Full implementation â€” no Blueprint required.
-// UE5.7-clean: uses FCoreStyle::GetDefaultFontStyle for fonts,
-// and the FVector2f + FSlateLayoutTransform overload of ToPaintGeometry.
+// FIX #21 — Removed UE_LOG from NativePaint (was logging every frame at 60 Hz).
+// FIX #26 — Map refresh lambda now captures a lightweight FMapSnapshot struct
+//            instead of the full FVoxelGenerationConfig (which contained TArray
+//            members — 14+ heap allocations per refresh at 1Hz).
 
 #include "UI/VoxelMapWidget.h"
 #include "Voxel/Core/World/VoxelWorld.h"
@@ -20,56 +21,73 @@
 #include "TimerManager.h"
 #include "GameFramework/Pawn.h"
 
-// ============================================================
-//  Local helpers â€” avoids repeating the UE5.7 new API everywhere
-// ============================================================
+// FIX #26: lightweight snapshot capturing only what GeneratePixelBuffer needs.
+// Previously the full FVoxelGenerationConfig was deep-copied into the lambda,
+// pulling in 7 TArray<FVoxelFoliageEntry> members = 14+ heap allocations per refresh.
+struct FMapSnapshot
+{
+    int32  Seed;
+    float  SeaLevel;
+    float  MaxTerrainRef;
+    FBiomeBlendConfig BiomeBlend;
+    FForestBiomeConfig Forest;
+    FDesertBiomeConfig Desert;
+    FPeaksBiomeConfig  Peaks;
+    FCliffsBiomeConfig Cliffs;
+    FMesaBiomeConfig   Mesa;
+    FCraterBiomeConfig Craters;
+    FVoxelPerformanceConfig Performance;
+};
+
+static FVoxelGenerationConfig SnapshotToConfig(const FMapSnapshot& S)
+{
+    FVoxelGenerationConfig C;
+    C.Seed        = S.Seed;
+    C.SeaLevel    = S.SeaLevel;
+    C.SkylandsLayer.MaxTerrainReference = S.MaxTerrainRef;
+    C.BiomeBlend  = S.BiomeBlend;
+    C.Forest      = S.Forest;
+    C.Desert      = S.Desert;
+    C.Peaks       = S.Peaks;
+    C.Cliffs      = S.Cliffs;
+    C.Mesa        = S.Mesa;
+    C.Craters     = S.Craters;
+    C.Performance = S.Performance;
+    return C;
+}
+
 namespace
 {
-    // UE5.7 dropped FGeometry::ToPaintGeometry(FVector2D offset, FVector2D size).
-    // New API: ToPaintGeometry(FVector2f size, FSlateLayoutTransform(FVector2f offset))
-    FORCEINLINE FPaintGeometry MakePaintGeom(const FGeometry& G, FVector2D Offset, FVector2D Size)
+    FORCEINLINE FPaintGeometry MakePaintGeom(const FGeometry& G, FVector2D Off, FVector2D Sz)
     {
-        return G.ToPaintGeometry(
-            FVector2f((float)Size.X,   (float)Size.Y),
-            FSlateLayoutTransform(FVector2f((float)Offset.X, (float)Offset.Y)));
+        return G.ToPaintGeometry(FVector2f((float)Sz.X,(float)Sz.Y),
+                                 FSlateLayoutTransform(FVector2f((float)Off.X,(float)Off.Y)));
     }
-
-    // Overload for zero-offset (full geometry)
-    FORCEINLINE FPaintGeometry MakePaintGeomFull(const FGeometry& G, FVector2D Size)
+    FORCEINLINE FPaintGeometry MakePaintGeomFull(const FGeometry& G, FVector2D Sz)
     {
-        return G.ToPaintGeometry(
-            FVector2f((float)Size.X, (float)Size.Y),
-            FSlateLayoutTransform());
+        return G.ToPaintGeometry(FVector2f((float)Sz.X,(float)Sz.Y), FSlateLayoutTransform());
     }
 }
 
-// ============================================================
-//  Font helper â€” UE5.7 uses FCoreStyle::GetDefaultFontStyle
-// ============================================================
 FSlateFontInfo UVoxelMapWidget::GetFont(int32 Size) const
 {
-    const uint16 ActualSize = (uint16)FMath::Clamp(Size > 0 ? Size : FontSize, 6, 72);
-    return FCoreStyle::GetDefaultFontStyle("Regular", ActualSize);
+    return FCoreStyle::GetDefaultFontStyle("Regular",
+        (uint16)FMath::Clamp(Size>0?Size:FontSize, 6, 72));
 }
 
-// ============================================================
-//  Lifecycle
-// ============================================================
 void UVoxelMapWidget::NativeConstruct()
 {
     Super::NativeConstruct();
-	bShuttingDown = false;
+    bShuttingDown = false;
     SetVisibility(ESlateVisibility::Hidden);
     SetKeyboardFocus();
 }
 
 void UVoxelMapWidget::NativeDestruct()
 {
-	bShuttingDown = true;
-	bMapOpen = false;
-    if (UWorld* W = GetWorld())
-        W->GetTimerManager().ClearTimer(RefreshTimerHandle);
-
+    bShuttingDown = true;
+    bMapOpen = false;
+    if (UWorld* W = GetWorld()) W->GetTimerManager().ClearTimer(RefreshTimerHandle);
     Super::NativeDestruct();
 }
 
@@ -77,20 +95,15 @@ static float GLastMapOpenTime = 0.f;
 
 void UVoxelMapWidget::OpenMap(AVoxelWorld* InVoxelWorld, APawn* InPlayerPawn)
 {
-	if (bShuttingDown)
-	{
-		return;
-	}
-
-
-    UE_LOG(LogTemp, Verbose, TEXT("VoxelMapWidget::OpenMap called - VoxelWorld: %s, Pawn: %s"),
+    if (bShuttingDown) return;
+    // FIX #21: log only on map open, not every frame in NativePaint
+    UE_LOG(LogTemp, Log, TEXT("VoxelMapWidget: OpenMap — World=%s Pawn=%s"),
         InVoxelWorld ? *InVoxelWorld->GetName() : TEXT("null"),
         InPlayerPawn ? *InPlayerPawn->GetName() : TEXT("null"));
-    CachedVoxelWorld  = InVoxelWorld;
 
-    CachedPlayerPawn  = InPlayerPawn;
-    bMapOpen          = true;
-
+    CachedVoxelWorld = InVoxelWorld;
+    CachedPlayerPawn = InPlayerPawn;
+    bMapOpen         = true;
     SetVisibility(ESlateVisibility::Visible);
     SetKeyboardFocus();
     EnsureTexture();
@@ -100,8 +113,7 @@ void UVoxelMapWidget::OpenMap(AVoxelWorld* InVoxelWorld, APawn* InPlayerPawn)
     if (UWorld* W = GetWorld())
     {
         GLastMapOpenTime = W->GetTimeSeconds();
-        W->GetTimerManager().SetTimer(
-            RefreshTimerHandle,
+        W->GetTimerManager().SetTimer(RefreshTimerHandle,
             this, &UVoxelMapWidget::OnRefreshTimer,
             RefreshInterval, /*bLoop=*/true);
     }
@@ -111,82 +123,55 @@ void UVoxelMapWidget::CloseMap()
 {
     bMapOpen = false;
     SetVisibility(ESlateVisibility::Hidden);
-
-    if (UWorld* W = GetWorld())
-        W->GetTimerManager().ClearTimer(RefreshTimerHandle);
+    if (UWorld* W = GetWorld()) W->GetTimerManager().ClearTimer(RefreshTimerHandle);
 }
 
 FString UVoxelMapWidget::GetPlayerBiomeName() const
 {
     if (!CachedVoxelWorld || !CachedPlayerPawn) return TEXT("Unknown");
-
     const FVector Pos = CachedPlayerPawn->GetActorLocation();
-    const FVoxelGenerationConfig& Config = CachedVoxelWorld->GetEffectiveConfig();
-    const FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(Pos.X, Pos.Y, Config);
-    return FString(FVoxelMapGenerator::BiomeNames[static_cast<uint8>(Weights.GetDominantBiome())]);
+    const FVoxelGenerationConfig& Cfg = CachedVoxelWorld->GetEffectiveConfig();
+    const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(Pos.X, Pos.Y, Cfg);
+    return FString(FVoxelMapGenerator::BiomeNames[static_cast<uint8>(W.GetDominantBiome())]);
 }
 
-// ============================================================
-//  Input â€” M or Escape closes the map
-// ============================================================
-FReply UVoxelMapWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+FReply UVoxelMapWidget::NativeOnKeyDown(const FGeometry& InGeo, const FKeyEvent& InKey)
 {
-    const FKey Key = InKeyEvent.GetKey();
+    const FKey Key = InKey.GetKey();
     if (Key == EKeys::M)
     {
         if (UWorld* W = GetWorld())
-        {
             if (W->GetTimeSeconds() - GLastMapOpenTime < 0.25f)
-            {
-                return FReply::Handled(); // Consume input, skip closing same-frame toggle
-            }
-        }
+                return FReply::Handled();
     }
-
     if (Key == EKeys::M || Key == EKeys::Escape)
     {
         CloseMap();
         if (APlayerController* PC = GetOwningPlayer())
         {
-            FInputModeGameOnly Mode;
-            PC->SetInputMode(Mode);
+            PC->SetInputMode(FInputModeGameOnly());
             PC->bShowMouseCursor = false;
         }
         return FReply::Handled();
     }
-    return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
+    return Super::NativeOnKeyDown(InGeo, InKey);
 }
 
-// ============================================================
-//  Texture management
-// ============================================================
 void UVoxelMapWidget::EnsureTexture()
 {
-    if (MapTexture &&
-        MapTexture->GetSizeX() == MapResolution &&
-        MapTexture->GetSizeY() == MapResolution)
-    {
+    if (MapTexture && MapTexture->GetSizeX() == MapResolution && MapTexture->GetSizeY() == MapResolution)
         return;
-    }
 
     MapTexture = UTexture2D::CreateTransient(MapResolution, MapResolution, PF_B8G8R8A8, TEXT("VoxelMapTex"));
     if (!MapTexture) return;
+    MapTexture->NeverStream = true; MapTexture->SRGB = false;
+    MapTexture->Filter = TF_Bilinear; MapTexture->AddressX = TA_Clamp; MapTexture->AddressY = TA_Clamp;
 
-    MapTexture->NeverStream = true;
-    MapTexture->SRGB        = false;
-    MapTexture->Filter      = TF_Bilinear;
-    MapTexture->AddressX    = TA_Clamp;
-    MapTexture->AddressY    = TA_Clamp;
-
-    // Fill grey as placeholder until first generation
-    {
-        FTexture2DMipMap& Mip = MapTexture->GetPlatformData()->Mips[0];
-        FColor* Data = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
-        FMemory::Memset(Data, 0x40, MapResolution * MapResolution * sizeof(FColor));
-        Mip.BulkData.Unlock();
-        MapTexture->UpdateResource();
-    }
-
+    FTexture2DMipMap& Mip = MapTexture->GetPlatformData()->Mips[0];
+    FColor* Data = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+    FMemory::Memset(Data, 0x40, MapResolution * MapResolution * sizeof(FColor));
+    Mip.BulkData.Unlock();
+    MapTexture->UpdateResource();
     MapBrush = FSlateBrush();
     MapBrush.SetResourceObject(MapTexture);
     MapBrush.ImageSize = FVector2D(MapResolution, MapResolution);
@@ -194,59 +179,62 @@ void UVoxelMapWidget::EnsureTexture()
 
 void UVoxelMapWidget::RequestRefresh()
 {
-	if (bShuttingDown || bGenerating || !CachedVoxelWorld || !CachedPlayerPawn) return;
+    if (bShuttingDown || bGenerating || !CachedVoxelWorld || !CachedPlayerPawn) return;
     bGenerating = true;
 
-    const FVector Pos          = CachedPlayerPawn->GetActorLocation();
-    PlayerWorldPos             = Pos;
-    const FVoxelGenerationConfig Config = CachedVoxelWorld->GetEffectiveConfig();
-    const float  Radius        = MapWorldRadius;
-    const int32  Res           = MapResolution;
-    const float  ChunkWorldSz  = (float)CachedVoxelWorld->ChunkSize * CachedVoxelWorld->VoxelSize;
+    const FVector Pos   = CachedPlayerPawn->GetActorLocation();
+    PlayerWorldPos      = Pos;
+    const float  Radius = MapWorldRadius;
+    const int32  Res    = MapResolution;
+    const float  ChkSz  = (float)CachedVoxelWorld->ChunkSize * CachedVoxelWorld->VoxelSize;
+
+    // FIX #26: build lightweight snapshot — no TArray members captured
+    const FVoxelGenerationConfig& FullCfg = CachedVoxelWorld->GetEffectiveConfig();
+    FMapSnapshot Snap;
+    Snap.Seed        = FullCfg.Seed;
+    Snap.SeaLevel    = FullCfg.SeaLevel;
+    Snap.MaxTerrainRef = FullCfg.SkylandsLayer.MaxTerrainReference;
+    Snap.BiomeBlend  = FullCfg.BiomeBlend;
+    Snap.Forest      = FullCfg.Forest;
+    Snap.Desert      = FullCfg.Desert;
+    Snap.Peaks       = FullCfg.Peaks;
+    Snap.Cliffs      = FullCfg.Cliffs;
+    Snap.Mesa        = FullCfg.Mesa;
+    Snap.Craters     = FullCfg.Craters;
+    Snap.Performance = FullCfg.Performance;
 
     TSet<FIntVector> ChunkKeys;
     for (const auto& Pair : *CachedVoxelWorld->GetLoadedChunks())
         ChunkKeys.Add(Pair.Key);
 
-	TWeakObjectPtr<UVoxelMapWidget> WeakThis(this);
-	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask,
-		[WeakThis, Pos, Config, Radius, Res, ChunkWorldSz, ChunkKeys]()
+    TWeakObjectPtr<UVoxelMapWidget> WeakThis(this);
+    AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask,
+    [WeakThis, Pos, Snap, Radius, Res, ChkSz, ChunkKeys]()
     {
-		if (!WeakThis.IsValid() || WeakThis->bShuttingDown)
-		{
-			return;
-		}
+        if (!WeakThis.IsValid() || WeakThis->bShuttingDown) return;
 
+        const FVoxelGenerationConfig Config = SnapshotToConfig(Snap); // cheap — no TArray members
         TArray<FColor> NewPixels;
-        FVoxelMapGenerator::GeneratePixelBuffer(
-            Pos.X, Pos.Y, Radius, Res, Config, ChunkKeys, ChunkWorldSz, NewPixels);
+        FVoxelMapGenerator::GeneratePixelBuffer(Pos.X, Pos.Y, Radius, Res,
+            Config, ChunkKeys, ChkSz, NewPixels);
 
-		AsyncTask(ENamedThreads::GameThread, [WeakThis, NewPixels = MoveTemp(NewPixels)]() mutable
+        AsyncTask(ENamedThreads::GameThread, [WeakThis, NewPixels = MoveTemp(NewPixels)]() mutable
         {
-			if (!WeakThis.IsValid() || WeakThis->bShuttingDown)
-			{
-				return;
-			}
-
-			UVoxelMapWidget* Self = WeakThis.Get();
-			if (!Self)
-			{
-				return;
-			}
-            {
-				FScopeLock Lock(&Self->PixelLock);
-				Self->PendingPixels = MoveTemp(NewPixels);
-				Self->bTextureDirty = true;
-            }
-			Self->bGenerating = false;
-			Self->UploadPendingPixels();
+            if (!WeakThis.IsValid() || WeakThis->bShuttingDown) return;
+            UVoxelMapWidget* Self = WeakThis.Get();
+            if (!Self) return;
+            { FScopeLock Lock(&Self->PixelLock);
+              Self->PendingPixels = MoveTemp(NewPixels);
+              Self->bTextureDirty = true; }
+            Self->bGenerating = false;
+            Self->UploadPendingPixels();
         });
     });
 }
 
 void UVoxelMapWidget::OnRefreshTimer()
 {
-	if (bMapOpen && CachedPlayerPawn && !bShuttingDown)
+    if (bMapOpen && CachedPlayerPawn && !bShuttingDown)
     {
         PlayerWorldPos  = CachedPlayerPawn->GetActorLocation();
         CachedBiomeName = GetPlayerBiomeName();
@@ -256,279 +244,156 @@ void UVoxelMapWidget::OnRefreshTimer()
 
 void UVoxelMapWidget::UploadPendingPixels()
 {
-	if (bShuttingDown || !bTextureDirty || !MapTexture) return;
+    if (bShuttingDown || !bTextureDirty || !MapTexture) return;
     if (MapTexture->GetSizeX() != MapResolution) EnsureTexture();
 
-    TArray<FColor> LocalPixels;
-    {
-        FScopeLock Lock(&PixelLock);
-        if (PendingPixels.Num() != MapResolution * MapResolution) return;
-        LocalPixels   = MoveTemp(PendingPixels);
-        bTextureDirty = false;
-    }
+    TArray<FColor> Local;
+    { FScopeLock Lock(&PixelLock);
+      if (PendingPixels.Num() != MapResolution*MapResolution) return;
+      Local = MoveTemp(PendingPixels);
+      bTextureDirty = false; }
 
     FTexture2DMipMap& Mip = MapTexture->GetPlatformData()->Mips[0];
     FColor* Data = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
-    FMemory::Memcpy(Data, LocalPixels.GetData(), LocalPixels.Num() * sizeof(FColor));
+    FMemory::Memcpy(Data, Local.GetData(), Local.Num()*sizeof(FColor));
     Mip.BulkData.Unlock();
     MapTexture->UpdateResource();
     MapBrush.SetResourceObject(MapTexture);
 }
 
-// ============================================================
-//  Layout
-// ============================================================
 FSlateRect UVoxelMapWidget::ComputeMapRect(const FGeometry& Geom) const
 {
-    const FVector2D Size  = Geom.GetLocalSize();
-    const float     Short = FMath::Min(Size.X, Size.Y);
-    const float     Panel = Short * MapPanelFraction;
-    const float     MapSz = Panel * 0.68f;
-    const float     PanX  = (Size.X - Panel) * 0.5f;
-    const float     PanY  = (Size.Y - Panel) * 0.5f;
-    const float     MapL  = PanX + (Panel - MapSz) * 0.5f;
-    const float     MapT  = PanY + Panel * 0.08f;
-    return FSlateRect(MapL, MapT, MapL + MapSz, MapT + MapSz);
+    const FVector2D Sz = Geom.GetLocalSize();
+    const float Short  = FMath::Min(Sz.X, Sz.Y);
+    const float Panel  = Short * MapPanelFraction;
+    const float MapSz  = Panel * 0.68f;
+    const float PanX   = (Sz.X - Panel) * 0.5f;
+    const float PanY   = (Sz.Y - Panel) * 0.5f;
+    const float MapL   = PanX + (Panel-MapSz)*0.5f;
+    const float MapT   = PanY + Panel*0.08f;
+    return FSlateRect(MapL, MapT, MapL+MapSz, MapT+MapSz);
 }
 
-// ============================================================
-//  NativePaint
-// ============================================================
 int32 UVoxelMapWidget::NativePaint(
-    const FPaintArgs& Args,
-    const FGeometry& AllottedGeometry,
-    const FSlateRect& MyCullingRect,
-    FSlateWindowElementList& OutDrawElements,
-    int32 LayerId,
-    const FWidgetStyle& InWidgetStyle,
-    bool bParentEnabled) const
+    const FPaintArgs& Args, const FGeometry& Geo, const FSlateRect& Cull,
+    FSlateWindowElementList& Out, int32 Layer,
+    const FWidgetStyle& Style, bool bParent) const
 {
-    if (!bMapOpen) return LayerId;
+    if (!bMapOpen) return Layer;
+    // FIX #21: no UE_LOG here — NativePaint runs every frame
 
+    const FVector2D VSz   = Geo.GetLocalSize();
+    const float     Short = FMath::Min(VSz.X, VSz.Y);
+    const float     PanSz = Short * MapPanelFraction;
+    const float     PanX  = (VSz.X-PanSz)*0.5f, PanY = (VSz.Y-PanSz)*0.5f;
+    const FSlateRect PanR(PanX,PanY,PanX+PanSz,PanY+PanSz);
+    const FSlateRect MapR = ComputeMapRect(Geo);
 
-    UE_LOG(LogTemp, Verbose, TEXT("VoxelMapWidget::NativePaint - bMapOpen=%d, Texture=%s, PendingPixels=%d"),
-        bMapOpen, MapTexture ? TEXT("valid") : TEXT("null"), PendingPixels.Num());
-
-    
-    const FVector2D ViewSz    = AllottedGeometry.GetLocalSize();
-
-    const float     Short     = FMath::Min(ViewSz.X, ViewSz.Y);
-    const float     PanelSz   = Short * MapPanelFraction;
-    const float     PanelX    = (ViewSz.X - PanelSz) * 0.5f;
-    const float     PanelY    = (ViewSz.Y - PanelSz) * 0.5f;
-    const FSlateRect PanelRect(PanelX, PanelY, PanelX + PanelSz, PanelY + PanelSz);
-    const FSlateRect MapRect  = ComputeMapRect(AllottedGeometry);
-
-    // 0. Full-screen overlay
-    {
-        FSlateBrush B;
-        B.TintColor = FSlateColor(FLinearColor(0.f, 0.f, 0.f, 0.75f));
-        FSlateDrawElement::MakeBox(OutDrawElements, LayerId,
-            MakePaintGeomFull(AllottedGeometry, ViewSz),
-            &B, ESlateDrawEffect::None, FLinearColor(0.f, 0.f, 0.f, 0.75f));
-    }
-    ++LayerId;
-
-    PaintPanelBackground(OutDrawElements, LayerId, PanelRect);
-    LayerId += 2;
-
-    PaintMapTexture(OutDrawElements, LayerId, MapRect);
-    ++LayerId;
-
-    PaintCompass(OutDrawElements, LayerId, MapRect);
-    ++LayerId;
-
-    PaintOverlayText(OutDrawElements, LayerId, AllottedGeometry, PanelRect);
-    LayerId += 4;
-
-    return LayerId;
+    // Full-screen overlay
+    { FSlateBrush B; B.TintColor=FSlateColor(FLinearColor(0,0,0,0.75f));
+      FSlateDrawElement::MakeBox(Out,Layer,MakePaintGeomFull(Geo,VSz),&B,ESlateDrawEffect::None,FLinearColor(0,0,0,0.75f)); }
+    ++Layer;
+    PaintPanelBackground(Out,Layer,PanR); Layer+=2;
+    PaintMapTexture    (Out,Layer,MapR);  ++Layer;
+    PaintCompass       (Out,Layer,MapR);  ++Layer;
+    PaintOverlayText   (Out,Layer,Geo,PanR); Layer+=4;
+    return Layer;
 }
 
-// ============================================================
-//  Sub-painters
-// ============================================================
-void UVoxelMapWidget::PaintPanelBackground(
-    FSlateWindowElementList& Out, int32 Layer, const FSlateRect& PanelRect) const
+void UVoxelMapWidget::PaintPanelBackground(FSlateWindowElementList& Out, int32 L, const FSlateRect& PR) const
 {
-    const FGeometry& G   = GetCachedGeometry();
-    const FVector2D  Pos = FVector2D(PanelRect.Left, PanelRect.Top);
-    const FVector2D  Sz  = FVector2D(PanelRect.GetSize());
-
-    // Fill
-    FSlateBrush Fill;
-    Fill.TintColor = FSlateColor(FLinearColor(0.06f, 0.06f, 0.08f, 0.96f));
-    FSlateDrawElement::MakeBox(Out, Layer,
-        MakePaintGeom(G, Pos, Sz), &Fill, ESlateDrawEffect::None,
-        FLinearColor(0.06f, 0.06f, 0.08f, 0.96f));
-
-    // Border lines
-    FSlateBrush Border;
-    Border.TintColor = FSlateColor(FLinearColor(0.3f, 0.3f, 0.35f, 1.f));
-    const FLinearColor BC(0.3f, 0.3f, 0.35f, 1.f);
-    const float B = 2.f;
-    auto Line = [&](FVector2D P, FVector2D S)
-    {
-        FSlateDrawElement::MakeBox(Out, Layer + 1, MakePaintGeom(G, P, S), &Border, ESlateDrawEffect::None, BC);
-    };
-    Line(Pos,                               FVector2D(Sz.X, B));
-    Line(Pos + FVector2D(0, Sz.Y - B),      FVector2D(Sz.X, B));
-    Line(Pos,                               FVector2D(B, Sz.Y));
-    Line(Pos + FVector2D(Sz.X - B, 0),      FVector2D(B, Sz.Y));
+    const FGeometry& G = GetCachedGeometry();
+    const FVector2D Pos(PR.Left,PR.Top), Sz(PR.GetSize());
+    FSlateBrush Fill; Fill.TintColor=FSlateColor(FLinearColor(0.06f,0.06f,0.08f,0.96f));
+    FSlateDrawElement::MakeBox(Out,L,MakePaintGeom(G,Pos,Sz),&Fill,ESlateDrawEffect::None,FLinearColor(0.06f,0.06f,0.08f,0.96f));
+    FSlateBrush Brd; const FLinearColor BC(0.3f,0.3f,0.35f,1.f); Brd.TintColor=FSlateColor(BC);
+    const float B=2.f;
+    auto Line=[&](FVector2D P,FVector2D S){ FSlateDrawElement::MakeBox(Out,L+1,MakePaintGeom(G,P,S),&Brd,ESlateDrawEffect::None,BC); };
+    Line(Pos,{Sz.X,B}); Line(Pos+FVector2D(0,Sz.Y-B),{Sz.X,B});
+    Line(Pos,{B,Sz.Y}); Line(Pos+FVector2D(Sz.X-B,0),{B,Sz.Y});
 }
 
-void UVoxelMapWidget::PaintMapTexture(
-    FSlateWindowElementList& Out, int32 Layer, const FSlateRect& MapRect) const
+void UVoxelMapWidget::PaintMapTexture(FSlateWindowElementList& Out, int32 L, const FSlateRect& MR) const
 {
-    const FGeometry& G   = GetCachedGeometry();
-    const FVector2D  Pos = FVector2D(MapRect.Left,  MapRect.Top);
-    const FVector2D  Sz  = FVector2D(MapRect.GetSize());
-
+    const FGeometry& G = GetCachedGeometry();
+    const FVector2D Pos(MR.Left,MR.Top), Sz(MR.GetSize());
     if (MapTexture && MapBrush.GetResourceObject())
-    {
-        FSlateDrawElement::MakeBox(Out, Layer,
-            MakePaintGeom(G, Pos, Sz), &MapBrush, ESlateDrawEffect::None, FLinearColor::White);
-    }
+        FSlateDrawElement::MakeBox(Out,L,MakePaintGeom(G,Pos,Sz),&MapBrush,ESlateDrawEffect::None,FLinearColor::White);
     else
     {
-        FSlateBrush PH;
-        PH.TintColor = FSlateColor(FLinearColor(0.1f, 0.1f, 0.12f, 1.f));
-        FSlateDrawElement::MakeBox(Out, Layer,
-            MakePaintGeom(G, Pos, Sz), &PH, ESlateDrawEffect::None,
-            FLinearColor(0.1f, 0.1f, 0.12f, 1.f));
-
-        FSlateDrawElement::MakeText(Out, Layer + 1,
-            MakePaintGeom(G, Pos + Sz * 0.4f, FVector2D(120.f, 24.f)),
-            FText::FromString(TEXT("Generating...")),
-            GetFont(FontSize), ESlateDrawEffect::None,
-            FLinearColor(0.6f, 0.6f, 0.6f, 1.f));
+        FSlateBrush PH; PH.TintColor=FSlateColor(FLinearColor(0.1f,0.1f,0.12f,1.f));
+        FSlateDrawElement::MakeBox(Out,L,MakePaintGeom(G,Pos,Sz),&PH,ESlateDrawEffect::None,FLinearColor(0.1f,0.1f,0.12f,1.f));
+        FSlateDrawElement::MakeText(Out,L+1,MakePaintGeom(G,Pos+Sz*0.4f,{120,24}),
+            FText::FromString(TEXT("Generating...")),GetFont(FontSize),ESlateDrawEffect::None,FLinearColor(0.6f,0.6f,0.6f,1.f));
     }
-
-    // Border
-    FSlateBrush Border;
-    Border.TintColor = FSlateColor(FLinearColor(0.25f, 0.25f, 0.3f, 1.f));
-    const FLinearColor BC(0.25f, 0.25f, 0.3f, 1.f);
-    const float B = 1.f;
-    auto Line = [&](FVector2D P, FVector2D S)
-    {
-        FSlateDrawElement::MakeBox(Out, Layer + 1, MakePaintGeom(G, P, S), &Border, ESlateDrawEffect::None, BC);
-    };
-    Line(Pos,                               FVector2D(Sz.X, B));
-    Line(Pos + FVector2D(0, Sz.Y - B),      FVector2D(Sz.X, B));
-    Line(Pos,                               FVector2D(B, Sz.Y));
-    Line(Pos + FVector2D(Sz.X - B, 0),      FVector2D(B, Sz.Y));
+    FSlateBrush Brd; const FLinearColor BC(0.25f,0.25f,0.3f,1.f); Brd.TintColor=FSlateColor(BC);
+    const float B=1.f;
+    auto Line=[&](FVector2D P,FVector2D S){ FSlateDrawElement::MakeBox(Out,L+1,MakePaintGeom(G,P,S),&Brd,ESlateDrawEffect::None,BC); };
+    Line(Pos,{Sz.X,B}); Line(Pos+FVector2D(0,Sz.Y-B),{Sz.X,B});
+    Line(Pos,{B,Sz.Y}); Line(Pos+FVector2D(Sz.X-B,0),{B,Sz.Y});
 }
 
-void UVoxelMapWidget::PaintCompass(
-    FSlateWindowElementList& Out, int32 Layer, const FSlateRect& MapRect) const
+void UVoxelMapWidget::PaintCompass(FSlateWindowElementList& Out, int32 L, const FSlateRect& MR) const
 {
-    const FGeometry& G    = GetCachedGeometry();
-    const FSlateFontInfo  Font = GetFont(FontSize - 2);
-    const FLinearColor    Col(0.9f, 0.9f, 0.6f, 1.f);
-    const FVector2D       LSz(20.f, 20.f);
-    const float           Off = 4.f;
-
-    struct { FVector2D P; const TCHAR* L; } C[] =
-    {
-        { FVector2D((MapRect.Left+MapRect.Right)*0.5f-7.f, MapRect.Top-20.f),              TEXT("N") },
-        { FVector2D((MapRect.Left+MapRect.Right)*0.5f-5.f, MapRect.Bottom+Off),            TEXT("S") },
-        { FVector2D(MapRect.Left-18.f, (MapRect.Top+MapRect.Bottom)*0.5f-8.f),             TEXT("W") },
-        { FVector2D(MapRect.Right+Off,  (MapRect.Top+MapRect.Bottom)*0.5f-8.f),            TEXT("E") },
+    const FGeometry& G = GetCachedGeometry();
+    const FSlateFontInfo Font = GetFont(FontSize-2);
+    const FLinearColor Col(0.9f,0.9f,0.6f,1.f);
+    const FVector2D LSz(20,20);
+    struct { FVector2D P; const TCHAR* T; } C[] = {
+        {{(MR.Left+MR.Right)*0.5f-7.f, MR.Top-20.f},   TEXT("N")},
+        {{(MR.Left+MR.Right)*0.5f-5.f, MR.Bottom+4.f}, TEXT("S")},
+        {{MR.Left-18.f, (MR.Top+MR.Bottom)*0.5f-8.f},  TEXT("W")},
+        {{MR.Right+4.f, (MR.Top+MR.Bottom)*0.5f-8.f},  TEXT("E")},
     };
-
-    for (const auto& Cardinal : C)
-    {
-        FSlateDrawElement::MakeText(Out, Layer,
-            MakePaintGeom(G, Cardinal.P, LSz),
-            FText::FromString(Cardinal.L),
-            Font, ESlateDrawEffect::None, Col);
-    }
+    for (const auto& Cp : C)
+        FSlateDrawElement::MakeText(Out,L,MakePaintGeom(G,Cp.P,LSz),FText::FromString(Cp.T),Font,ESlateDrawEffect::None,Col);
 }
 
-void UVoxelMapWidget::PaintOverlayText(
-    FSlateWindowElementList& Out, int32 Layer,
-    const FGeometry& Geom, const FSlateRect& PanelRect) const
+void UVoxelMapWidget::PaintOverlayText(FSlateWindowElementList& Out, int32 L,
+                                        const FGeometry& Geo, const FSlateRect& PR) const
 {
-    const FGeometry&     G         = GetCachedGeometry();
-    const FSlateFontInfo Font      = GetFont();
-    const FSlateFontInfo FontBig   = GetFont(FontSize + 4);
-    const FSlateFontInfo FontSmall = GetFont(FontSize - 2);
-    const FLinearColor   TextCol(0.9f, 0.9f, 0.9f, 1.f);
-    const FLinearColor   DimCol (0.6f, 0.6f, 0.6f, 1.f);
-    const FLinearColor   TitleCol(1.f, 1.f, 0.7f, 1.f);
+    const FGeometry& G = GetCachedGeometry();
+    const FSlateFontInfo Font=GetFont(), FontBig=GetFont(FontSize+4), FontSm=GetFont(FontSize-2);
+    const FLinearColor TC(0.9f,0.9f,0.9f,1.f), DC(0.6f,0.6f,0.6f,1.f), YC(1.f,1.f,0.7f,1.f);
+    const FSlateRect MR = ComputeMapRect(Geo);
+    const float TX = PR.Left+14.f;
+    float TY = MR.Bottom+10.f;
+    const float LH = FontSize+5.f;
+    const FVector2D RSz(PR.GetSize().X-28.f, LH+2.f);
 
-    const FSlateRect MapRect = ComputeMapRect(Geom);
-    const float TextX = PanelRect.Left + 14.f;
-    float       TextY = MapRect.Bottom + 10.f;
-    const float LineH = (float)FontSize + 5.f;
-    const FVector2D RowSz(PanelRect.GetSize().X - 28.f, LineH + 2.f);
+    FSlateDrawElement::MakeText(Out,L,MakePaintGeom(G,{TX,PR.Top+8.f},{300,28}),
+        FText::FromString(TEXT("WORLD MAP")),FontBig,ESlateDrawEffect::None,YC);
 
-    // Title
-    FSlateDrawElement::MakeText(Out, Layer,
-        MakePaintGeom(G, FVector2D(TextX, PanelRect.Top + 8.f), FVector2D(300.f, 28.f)),
-        FText::FromString(TEXT("WORLD MAP")), FontBig, ESlateDrawEffect::None, TitleCol);
-
-    // Coordinates
-    FSlateDrawElement::MakeText(Out, Layer + 1,
-        MakePaintGeom(G, FVector2D(TextX, TextY), RowSz),
+    FSlateDrawElement::MakeText(Out,L+1,MakePaintGeom(G,{TX,TY},RSz),
         FText::FromString(FString::Printf(TEXT("X: %.0f   Y: %.0f   Z: %.0f"),
-            PlayerWorldPos.X, PlayerWorldPos.Y, PlayerWorldPos.Z)),
-        Font, ESlateDrawEffect::None, TextCol);
-    TextY += LineH;
+            PlayerWorldPos.X,PlayerWorldPos.Y,PlayerWorldPos.Z)),
+        Font,ESlateDrawEffect::None,TC); TY+=LH;
 
-    // Radius hint
-    FSlateDrawElement::MakeText(Out, Layer + 1,
-        MakePaintGeom(G, FVector2D(TextX, TextY), RowSz),
-        FText::FromString(FString::Printf(TEXT("Radius: %.0f m"), MapWorldRadius / 100.f)),
-        FontSmall, ESlateDrawEffect::None, DimCol);
-    TextY += LineH;
+    FSlateDrawElement::MakeText(Out,L+1,MakePaintGeom(G,{TX,TY},RSz),
+        FText::FromString(FString::Printf(TEXT("Radius: %.0f m"),MapWorldRadius/100.f)),
+        FontSm,ESlateDrawEffect::None,DC); TY+=LH;
 
-    // Biome name
-    FSlateDrawElement::MakeText(Out, Layer + 1,
-        MakePaintGeom(G, FVector2D(TextX, TextY), RowSz),
-        FText::FromString(FString::Printf(TEXT("Biome: %s"), *CachedBiomeName)),
-        Font, ESlateDrawEffect::None, TextCol);
-    TextY += LineH + 4.f;
+    FSlateDrawElement::MakeText(Out,L+1,MakePaintGeom(G,{TX,TY},RSz),
+        FText::FromString(FString::Printf(TEXT("Biome: %s"),*CachedBiomeName)),
+        Font,ESlateDrawEffect::None,TC); TY+=LH+4.f;
 
     // Legend
+    const float SwSz=(float)FontSize; float LX=TX;
+    for (int32 b=0; b<FVoxelBiomeWeightMap::MaxBiomes; ++b)
     {
-        const float SwSz = (float)FontSize;
-        float LegX = TextX;
-        for (int32 b = 0; b < FVoxelBiomeWeightMap::MaxBiomes; ++b)
-        {
-            const FLinearColor& BC = FVoxelMapGenerator::BiomeColors[b];
-            FSlateBrush SW;
-            SW.TintColor = FSlateColor(BC);
-            FSlateDrawElement::MakeBox(Out, Layer + 2,
-                MakePaintGeom(G, FVector2D(LegX, TextY + 2.f), FVector2D(SwSz, SwSz)),
-                &SW, ESlateDrawEffect::None, BC);
-
-            FSlateDrawElement::MakeText(Out, Layer + 2,
-                MakePaintGeom(G, FVector2D(LegX + SwSz + 3.f, TextY), FVector2D(90.f, LineH)),
-                FText::FromString(FVoxelMapGenerator::BiomeNames[b]),
-                FontSmall, ESlateDrawEffect::None, DimCol);
-
-            if ((b % 2) == 0)  LegX += 110.f;
-            else { LegX = TextX; TextY += LineH; }
-        }
+        const FLinearColor& BC=FVoxelMapGenerator::BiomeColors[b];
+        FSlateBrush SW; SW.TintColor=FSlateColor(BC);
+        FSlateDrawElement::MakeBox(Out,L+2,MakePaintGeom(G,{LX,TY+2},{SwSz,SwSz}),&SW,ESlateDrawEffect::None,BC);
+        FSlateDrawElement::MakeText(Out,L+2,MakePaintGeom(G,{LX+SwSz+3,TY},{90,LH}),
+            FText::FromString(FVoxelMapGenerator::BiomeNames[b]),FontSm,ESlateDrawEffect::None,DC);
+        if ((b%2)==0) LX+=110.f; else { LX=TX; TY+=LH; }
     }
-    TextY += LineH * 1.5f;
+    TY+=LH*1.5f;
 
-    // Close hint
-    FSlateDrawElement::MakeText(Out, Layer + 3,
-        MakePaintGeom(G,
-            FVector2D((PanelRect.Left + PanelRect.Right) * 0.5f - 80.f, TextY),
-            FVector2D(200.f, LineH + 2.f)),
-        FText::FromString(TEXT("[ M ]  Close Map")),
-        FontSmall, ESlateDrawEffect::None, FLinearColor(0.5f, 0.5f, 0.5f, 1.f));
+    FSlateDrawElement::MakeText(Out,L+3,MakePaintGeom(G,{(PR.Left+PR.Right)*0.5f-80.f,TY},{200,LH+2}),
+        FText::FromString(TEXT("[ M ]  Close Map")),FontSm,ESlateDrawEffect::None,FLinearColor(0.5f,0.5f,0.5f,1.f));
 
-    // Refresh indicator
     if (bGenerating)
-    {
-        FSlateDrawElement::MakeText(Out, Layer + 3,
-            MakePaintGeom(G,
-                FVector2D(PanelRect.Right - 100.f, PanelRect.Top + 10.f),
-                FVector2D(90.f, 18.f)),
-            FText::FromString(TEXT("Refreshing...")),
-            FontSmall, ESlateDrawEffect::None, FLinearColor(0.4f, 0.7f, 0.4f, 1.f));
-    }
+        FSlateDrawElement::MakeText(Out,L+3,MakePaintGeom(G,{PR.Right-100.f,PR.Top+10.f},{90,18}),
+            FText::FromString(TEXT("Refreshing...")),FontSm,ESlateDrawEffect::None,FLinearColor(0.4f,0.7f,0.4f,1.f));
 }

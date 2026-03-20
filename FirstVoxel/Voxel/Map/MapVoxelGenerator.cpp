@@ -1,203 +1,123 @@
-// VoxelMapGenerator.cpp
-// 
-// CPU-based top-down world map generator for the voxel engine.
+// MapVoxelGenerator.cpp
 //
-// Provides thread-safe map generation without touching UObjects, producing
-// a flat BGRA pixel buffer suitable for UTexture2D upload on the game thread.
-// This implementation creates detailed topographic maps with biome visualization
-// and debugging overlays for the voxel world.
+// FIX #36 — Replaced two separate GetBiomeWeightsStatic + GetSurfaceHeightStatic
+//            calls per pixel with one GetWeightsAndSurfaceHeightStatic call.
+//            At 256×256 = 65536 pixels this halves the biome noise evaluations.
 //
-// ARCHITECTURE OVERVIEW:
-// This generator creates a top-down representation of the voxel world by
-// sampling terrain height and biome data at regular intervals across a
-// specified world area. The implementation is designed for performance
-// with parallel processing and minimal memory overhead.
+// FIX #42 — Loaded chunk XY check now uses a pre-built TSet<TPair<int32,int32>>
+//            (one entry per unique XY pair) so each pixel does a single O(1)
+//            lookup instead of 14 Z-level TSet::Contains probes.
 //
-// KEY FEATURES:
-// - Thread-safe operation without UObject dependencies
-// - Parallel processing for optimal performance
-// - Biome-based color blending with height-based brightness
-// - Topographic contour lines for elevation visualization
-// - Loaded chunk highlighting for debugging
-// - Player position indicator
-// - Chunk grid visualization
-//
-// PERFORMANCE CHARACTERISTICS:
-// - Uses ParallelFor for multi-threaded pixel processing
-// - Minimal memory allocation (single pixel buffer)
-// - Static sampling functions avoid object instantiation
-// - Optimized color calculations with precomputed palettes
-//
-// MAP GENERATION PIPELINE:
-// 1. World-to-pixel coordinate transformation
-// 2. Biome weight sampling and color blending
-// 3. Height-based brightness adjustment
-// 4. Water depth coloring for submerged areas
-// 5. Topographic contour line generation
-// 6. Debug overlay rendering (loaded chunks, grid lines)
-// 7. Player position indicator placement
-//
-// COLOR BLENDING ALGORITHM:
-// - Base color: Weighted average of biome colors based on biome weights
-// - Height shading: Non-linear brightness curve (power function) for elevation
-// - Water blending: Linear interpolation to deep blue for submerged terrain
-// - Contour lines: Yellow for major lines (10,000 units), white for minor lines (2,000 units)
+// FIX #44 — North indicator is now a filled triangle (7 pixels) instead of a
+//            single invisible pixel.
 
 #include "Voxel/Map/VoxelMapGenerator.h"
 #include "Voxel/Biomes/VoxelBiomeManager.h"
 #include "Voxel/Biomes/VoxelBiomeGenerators.h"
 #include "Async/ParallelFor.h"
 
-// ---------------------------------------------------------------
-//  Biome Colour Palette and Names
-// ---------------------------------------------------------------
-// Predefined color palette for biome visualization
-// Colors are carefully chosen to provide good contrast and intuitive representation
-// Order must match EVoxelBiome enum values when cast to uint8:
-//   0=Forest  1=Peaks  2=Cliffs  3=Mesa  4=Craters  5=Desert
 const FLinearColor FVoxelMapGenerator::BiomeColors[FVoxelBiomeWeightMap::MaxBiomes] =
 {
-    FLinearColor(0.07f, 0.60f, 0.07f, 1.f),   // Forest  — vivid green for vegetation
-    FLinearColor(0.80f, 0.84f, 0.98f, 1.f),   // Peaks   — icy blue-white for snow/ice
-    FLinearColor(0.62f, 0.33f, 0.10f, 1.f),   // Cliffs  — warm brown for rock formations
-    FLinearColor(0.82f, 0.24f, 0.06f, 1.f),   // Mesa    — vivid red-earth for desert plateaus
-    FLinearColor(0.18f, 0.16f, 0.22f, 1.f),   // Craters — dark purple-grey for impact zones
-    FLinearColor(0.93f, 0.86f, 0.55f, 1.f),   // Desert  — warm sand color for arid regions
-    FLinearColor(0.08f, 0.28f, 0.72f, 1.f),   // Ocean   — deep blue
+    FLinearColor(0.07f, 0.60f, 0.07f, 1.f),
+    FLinearColor(0.80f, 0.84f, 0.98f, 1.f),
+    FLinearColor(0.62f, 0.33f, 0.10f, 1.f),
+    FLinearColor(0.82f, 0.24f, 0.06f, 1.f),
+    FLinearColor(0.18f, 0.16f, 0.22f, 1.f),
+    FLinearColor(0.93f, 0.86f, 0.55f, 1.f),
+    FLinearColor(0.08f, 0.28f, 0.72f, 1.f),
 };
 
-// Human-readable biome display names for UI and debugging
 const TCHAR* FVoxelMapGenerator::BiomeNames[FVoxelBiomeWeightMap::MaxBiomes] =
 {
-    TEXT("Lush Forest"),
-    TEXT("Jagged Peaks"),
-    TEXT("Steep Cliffs"),
-    TEXT("Mesa Plateaus"),
-    TEXT("Impact Craters"),
-    TEXT("Sand Dunes"),
+    TEXT("Lush Forest"),   TEXT("Jagged Peaks"), TEXT("Steep Cliffs"),
+    TEXT("Mesa Plateaus"), TEXT("Impact Craters"),TEXT("Sand Dunes"),
     TEXT("Open Ocean"),
 };
 
-// Compile-time assertion to ensure palette and names arrays match MaxBiomes count
 static_assert(FVoxelBiomeWeightMap::MaxBiomes == 7,
-    "BiomeColors and BiomeNames must each have exactly MaxBiomes entries.");
-
+    "BiomeColors and BiomeNames must have exactly MaxBiomes entries.");
 
 void FVoxelMapGenerator::GeneratePixelBuffer(
-
     float                         CenterX,
-
     float                         CenterY,
-
     float                         WorldRadius,
-
     int32                         Resolution,
-
     const FVoxelGenerationConfig& Config,
-
     const TSet<FIntVector>&       LoadedChunkCoords,
-
     float                         ChunkWorldSize,
-
     TArray<FColor>&               OutPixels)
-
 {
-
-    // Debug: Log map generation parameters
-    UE_LOG(LogTemp, Verbose, TEXT("VoxelMapGenerator::GeneratePixelBuffer - Center=(%.1f,%.1f) Radius=%.1f Res=%d ChunkSize=%.1f LoadedChunks=%d"),
-        CenterX, CenterY, WorldRadius, Resolution, ChunkWorldSize, LoadedChunkCoords.Num());
-
-    
-    // Initialize output pixel buffer with required size
-
-    // Resolution × Resolution for square map output
-
     OutPixels.SetNumUninitialized(Resolution * Resolution);
 
-
-    // Calculate world-to-pixel conversion factors
     const float PixelWorldSize = (WorldRadius * 2.f) / (float)Resolution;
     const float SeaLevel       = Config.SeaLevel;
     const float MaxHeight      = Config.SkylandsLayer.MaxTerrainReference;
-    
-    // Calculate player dot size based on resolution
     const int32 DotRadius      = FMath::Max(2, Resolution / 64);
     const int32 HalfRes        = Resolution / 2;
 
-    // Parallel processing of map pixels for optimal performance
-    // Each thread processes one row of pixels (py coordinate)
+    // FIX #42: pre-build a flat XY set — one lookup per pixel instead of 14
+    // A uint64 packs (X & 0xFFFFFFFF) | ((uint64)Y << 32) for a cheap key
+    TSet<uint64> LoadedXY;
+    LoadedXY.Reserve(LoadedChunkCoords.Num());
+    for (const FIntVector& CC : LoadedChunkCoords)
+    {
+        const uint64 Key = ((uint64)(uint32)CC.X) | ((uint64)(uint32)CC.Y << 32);
+        LoadedXY.Add(Key);
+    }
+
     ParallelFor(Resolution, [&](int32 py)
     {
-        // Calculate world Y coordinate for this pixel row
         const float WorldY = CenterY + (py - HalfRes) * PixelWorldSize;
 
-        // Process each pixel in the current row
         for (int32 px = 0; px < Resolution; ++px)
         {
-            // Calculate world X coordinate for this pixel
             const float WorldX = CenterX + (px - HalfRes) * PixelWorldSize;
 
-            // Sample biome weights and surface height at world coordinates
-            // Uses static methods to avoid object instantiation and ensure thread safety
-            FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(WorldX, WorldY, Config);
-            const float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(WorldX, WorldY, Weights, Config);
+            // FIX #36: single batched call instead of two separate evaluations
+            const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WorldX, WorldY, Config);
+            const FVoxelBiomeWeightMap& W = Wh.Weights;
+            const float SurfH             = Wh.SurfaceHeight;
 
-            // Calculate base color by blending biome colors according to weights
             FLinearColor C(0.f, 0.f, 0.f, 1.f);
             for (int32 b = 0; b < FVoxelBiomeWeightMap::MaxBiomes; ++b)
-                C += BiomeColors[b] * Weights[b];
+                C += BiomeColors[b] * W[b];
 
-            // Apply height-based brightness adjustment
-            // Higher elevations are brighter, lower elevations are darker
-            // Uses power curve for non-linear brightness distribution
-            const float Brightness = 0.20f + 0.80f * FMath::Pow(FMath::Clamp(SurfH / MaxHeight, 0.f, 1.f), 0.6f);
+            const float Brightness = 0.20f + 0.80f * FMath::Pow(
+                FMath::Clamp(SurfH / MaxHeight, 0.f, 1.f), 0.6f);
             C *= Brightness;
             C.A = 1.f;
 
-            // Water depth coloring for areas below sea level
-            // Deep water transitions from terrain color to deep blue
             if (SurfH < SeaLevel)
             {
                 const float WD = FMath::Clamp((SeaLevel - SurfH) / 2000.f, 0.f, 1.f);
                 C = FMath::Lerp(C, FLinearColor(0.08f, 0.28f, 0.72f, 1.f), WD);
             }
 
-            // Topographic contour lines for elevation visualization
-            // Major lines every 10,000 units, minor lines every 2,000 units
             if (SurfH > SeaLevel)
             {
-                const float CI  = 2000.f;  // Contour interval
+                const float CI  = 2000.f;
                 const float Mod = FMath::Fmod(FMath::Abs(SurfH - SeaLevel), CI);
-                const float HW  = FMath::Max(PixelWorldSize * 0.7f, 60.f);  // Line width in world units
-                
+                const float HW  = FMath::Max(PixelWorldSize * 0.7f, 60.f);
                 if (Mod < HW || Mod > CI - HW)
                 {
-                    // Determine if this is a major contour line (every 5th line)
                     const float MajMod = FMath::Fmod(FMath::Abs(SurfH - SeaLevel), 10000.f);
-                    const bool bMajor  = MajMod < HW * 2.f || MajMod > 10000.f - HW * 2.f;
-                    
-                    // Major lines are yellow, minor lines are white
+                    const bool  bMajor = MajMod < HW * 2.f || MajMod > 10000.f - HW * 2.f;
                     const FLinearColor CC = bMajor
-                        ? FLinearColor(0.9f, 0.8f, 0.3f, 1.f) : FLinearColor(1.f, 1.f, 1.f, 1.f);
+                        ? FLinearColor(0.9f, 0.8f, 0.3f, 1.f)
+                        : FLinearColor(1.f,  1.f,  1.f,  1.f);
                     C = FMath::Lerp(C, CC, bMajor ? 0.55f : 0.28f);
                 }
             }
 
-            // Highlight loaded chunks for debugging purposes
-            // Adds subtle brightness to chunks currently in memory
+            // FIX #42: single O(1) lookup per pixel
             if (ChunkWorldSize > 0.f)
             {
-                const FIntVector CC(FMath::FloorToInt(WorldX / ChunkWorldSize),
-                                    FMath::FloorToInt(WorldY / ChunkWorldSize), 0);
-                bool bLoaded = false;
-                // Check multiple Z levels to account for chunk height
-                for (int32 cz = -2; cz <= 12 && !bLoaded; ++cz)
-                    bLoaded = LoadedChunkCoords.Contains(FIntVector(CC.X, CC.Y, cz));
-                if (bLoaded) C += FLinearColor(0.07f, 0.07f, 0.07f, 0.f);
+                const int32  CX  = FMath::FloorToInt(WorldX / ChunkWorldSize);
+                const int32  CY2 = FMath::FloorToInt(WorldY / ChunkWorldSize);
+                const uint64 Key = ((uint64)(uint32)CX) | ((uint64)(uint32)CY2 << 32);
+                if (LoadedXY.Contains(Key)) C += FLinearColor(0.07f, 0.07f, 0.07f, 0.f);
             }
 
-            // Draw chunk grid lines for debugging
-            // Only shown at high resolutions to avoid visual clutter
             if (ChunkWorldSize > 0.f && Resolution >= 128)
             {
                 const float ModX = FMath::Fmod(FMath::Abs(WorldX), ChunkWorldSize);
@@ -206,13 +126,11 @@ void FVoxelMapGenerator::GeneratePixelBuffer(
                     C = FMath::Lerp(C, FLinearColor(0.f, 0.f, 0.f, 1.f), 0.25f);
             }
 
-            // Convert linear color to final pixel format
             OutPixels[py * Resolution + px] = C.ToFColor(true);
         }
     });
 
-    // Draw player position indicator (red dot with white border)
-    // Always centered on the map regardless of actual player position
+    // Player dot
     for (int32 dy = -DotRadius; dy <= DotRadius; ++dy)
     for (int32 dx = -DotRadius; dx <= DotRadius; ++dx)
     {
@@ -221,15 +139,31 @@ void FVoxelMapGenerator::GeneratePixelBuffer(
             const int32 px = HalfRes + dx, py = HalfRes + dy;
             if (px >= 0 && px < Resolution && py >= 0 && py < Resolution)
             {
-                // Create white border around red center
                 const bool bBorder = (dx*dx + dy*dy > (DotRadius-1)*(DotRadius-1));
                 OutPixels[py * Resolution + px] = bBorder ? FColor::White : FColor::Red;
             }
         }
     }
 
-    // Draw north indicator (yellow marker above player dot)
-    const int32 CY = DotRadius + 2, CX = HalfRes;
-    if (CX >= 0 && CX < Resolution && CY >= 0 && CY < Resolution)
-        OutPixels[CY * Resolution + CX] = FColor(255, 255, 100, 255);
+    // FIX #44: north indicator — filled 3×5 arrow instead of single invisible pixel
+    // Draws a small upward-pointing triangle above the player dot
+    {
+        const int32 TipY   = HalfRes - DotRadius - 3;
+        const int32 TipX   = HalfRes;
+        const FColor ArrowColor(255, 255, 100, 255);
+
+        auto SafeSet = [&](int32 px, int32 py) {
+            if (px >= 0 && px < Resolution && py >= 0 && py < Resolution)
+                OutPixels[py * Resolution + px] = ArrowColor;
+        };
+
+        // tip row
+        SafeSet(TipX, TipY);
+        // row +1
+        SafeSet(TipX-1, TipY+1); SafeSet(TipX, TipY+1); SafeSet(TipX+1, TipY+1);
+        // row +2
+        for (int32 dx = -2; dx <= 2; ++dx) SafeSet(TipX+dx, TipY+2);
+        // row +3 (base)
+        for (int32 dx = -2; dx <= 2; ++dx) SafeSet(TipX+dx, TipY+3);
+    }
 }

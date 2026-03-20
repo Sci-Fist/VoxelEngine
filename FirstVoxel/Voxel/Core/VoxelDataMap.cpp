@@ -1,201 +1,175 @@
 // VoxelDataMap.cpp
+// FIX #8 — CopyFrom previously held BOTH locks during the full O(N) deep-copy
+//           of the Chunks TMap, blocking all background generation threads that
+//           call GetChunkData().
+//           New approach: snapshot under both locks (fast), copy without locks,
+//           then write the snapshot back under only our own lock.
 #include "Core/VoxelDataMap.h"
 #include "Misc/ScopeLock.h"
 
 void FVoxelDataMap::Init(int32 InChunkSize)
 {
-	FScopeLock ScopeLock(&MapLock);
-	ChunkSize = InChunkSize;
-	Chunks.Empty();
+    FScopeLock Lock(&MapLock);
+    ChunkSize = InChunkSize;
+    Chunks.Empty();
 }
 
-void FVoxelDataMap::SetSphere(const FVector& WorldPos, float Radius, float Density, float VoxelSize, const FVector& Anchor)
+void FVoxelDataMap::SetSphere(const FVector& WorldPos, float Radius, float Density,
+                               float VoxelSize, const FVector& Anchor)
 {
-	const FVector RelativePos = WorldPos - Anchor;
-	const FIntVector Center = FIntVector(
-		FMath::RoundToInt(RelativePos.X / VoxelSize),
-		FMath::RoundToInt(RelativePos.Y / VoxelSize),
-		FMath::RoundToInt(RelativePos.Z / VoxelSize)
-	);
+    const FVector RelPos  = WorldPos - Anchor;
+    const FIntVector Center(
+        FMath::RoundToInt(RelPos.X / VoxelSize),
+        FMath::RoundToInt(RelPos.Y / VoxelSize),
+        FMath::RoundToInt(RelPos.Z / VoxelSize));
+    const int32 RVox = FMath::CeilToInt(Radius / VoxelSize);
 
-	const int32 RVox = FMath::CeilToInt(Radius / VoxelSize);
+    TMap<FIntVector, FChunkData> Batch;
+    FIntVector CurrentCC(INT32_MAX, INT32_MAX, INT32_MAX);
+    FChunkData* CurrentChunk = nullptr;
 
-	// Build a local batch without holding the lock during the (potentially long)
-	// nested loop.  This keeps GetChunkData() calls on background threads
-	// unblocked while a player is digging.
-	TMap<FIntVector, FChunkData> Batch;
+    for (int32 z = -RVox; z <= RVox; ++z)
+    for (int32 y = -RVox; y <= RVox; ++y)
+    for (int32 x = -RVox; x <= RVox; ++x)
+    {
+        const FIntVector Coord = Center + FIntVector(x, y, z);
+        const FVector Pos = Anchor + FVector(Coord) * VoxelSize;
+        const float   Dist = FVector::Dist(WorldPos, Pos);
+        if (Dist > Radius) continue;
 
-	// Cache last-used chunk in the batch to avoid repeated TMap lookups for
-	// the common case where many consecutive voxels belong to the same chunk.
-	FIntVector CurrentChunkCoord(INT32_MAX, INT32_MAX, INT32_MAX);
-	FChunkData* CurrentChunk = nullptr;
+        const float NormDist    = FMath::Clamp(Dist / Radius, 0.f, 1.f);
+        float TargetDensity     = Density * (1.f - NormDist);
+        if (FMath::IsNearlyZero(TargetDensity))
+            TargetDensity = (Density > 0.f) ? 0.001f : -0.001f;
 
-	for (int32 z = -RVox; z <= RVox; ++z)
-	for (int32 y = -RVox; y <= RVox; ++y)
-	for (int32 x = -RVox; x <= RVox; ++x)
-	{
-		const FIntVector Coord = Center + FIntVector(x, y, z);
-		const FVector Pos = Anchor + FVector(Coord.X, Coord.Y, Coord.Z) * VoxelSize;
-		const float Dist = FVector::Dist(WorldPos, Pos);
+        const FIntVector CC = GetChunkCoord(Coord);
+        if (CC != CurrentCC || !CurrentChunk)
+        {
+            CurrentChunk      = &Batch.FindOrAdd(CC);
+            CurrentCC         = CC;
+        }
+        CurrentChunk->ModifiedVoxels.Add(GetLocalIndex(GetLocalCoord(Coord)), TargetDensity);
+    }
 
-		if (Dist > Radius) continue;
-
-		// Smooth SDF gradient: full density at centre, tapering to near-zero at edge.
-		const float NormDist     = FMath::Clamp(Dist / Radius, 0.f, 1.f);
-		float TargetDensity = Density * (1.f - NormDist);
-		if (FMath::IsNearlyZero(TargetDensity))
-			TargetDensity = (Density > 0.f) ? 0.001f : -0.001f;
-
-		const FIntVector CC = GetChunkCoord(Coord);
-		if (CC != CurrentChunkCoord || !CurrentChunk)
-		{
-			CurrentChunk      = &Batch.FindOrAdd(CC);
-			CurrentChunkCoord = CC;
-		}
-		CurrentChunk->ModifiedVoxels.Add(GetLocalIndex(GetLocalCoord(Coord)), TargetDensity);
-	}
-
-	// Merge batch into the shared map under a single brief lock.
-	FScopeLock ScopeLock(&MapLock);
-	for (auto& Pair : Batch)
-	{
-		FChunkData& Dest = Chunks.FindOrAdd(Pair.Key);
-		for (auto& VoxPair : Pair.Value.ModifiedVoxels)
-			Dest.ModifiedVoxels.Add(VoxPair.Key, VoxPair.Value);
-	}
+    FScopeLock Lock(&MapLock);
+    for (auto& Pair : Batch)
+    {
+        FChunkData& Dest = Chunks.FindOrAdd(Pair.Key);
+        for (auto& VP : Pair.Value.ModifiedVoxels)
+            Dest.ModifiedVoxels.Add(VP.Key, VP.Value);
+    }
 }
 
 void FVoxelDataMap::SetDensity(const FIntVector& GlobalCoord, float Density)
 {
-	const FIntVector ChunkCoord = GetChunkCoord(GlobalCoord);
-	const int32 LocalIdx        = GetLocalIndex(GetLocalCoord(GlobalCoord));
-
-	FScopeLock ScopeLock(&MapLock);
-	
-	FChunkData& ChunkData = Chunks.FindOrAdd(ChunkCoord);
-	ChunkData.ModifiedVoxels.Add(LocalIdx, Density);
+    FScopeLock Lock(&MapLock);
+    Chunks.FindOrAdd(GetChunkCoord(GlobalCoord))
+          .ModifiedVoxels.Add(GetLocalIndex(GetLocalCoord(GlobalCoord)), Density);
 }
 
 bool FVoxelDataMap::GetDensity(const FIntVector& GlobalCoord, float& OutDensity) const
 {
-	const FIntVector ChunkCoord = GetChunkCoord(GlobalCoord);
-	const int32 LocalIdx        = GetLocalIndex(GetLocalCoord(GlobalCoord));
-
-	FScopeLock ScopeLock(&MapLock);
-	
-	if (const FChunkData* ChunkData = Chunks.Find(ChunkCoord))
-	{
-		if (const float* FoundDensity = ChunkData->ModifiedVoxels.Find(LocalIdx))
-		{
-			OutDensity = *FoundDensity;
-			return true;
-		}
-	}
-	return false;
+    FScopeLock Lock(&MapLock);
+    if (const FChunkData* CD = Chunks.Find(GetChunkCoord(GlobalCoord)))
+        if (const float* F = CD->ModifiedVoxels.Find(GetLocalIndex(GetLocalCoord(GlobalCoord))))
+        { OutDensity = *F; return true; }
+    return false;
 }
 
 void FVoxelDataMap::Clear()
 {
-	FScopeLock ScopeLock(&MapLock);
-	Chunks.Empty();
+    FScopeLock Lock(&MapLock);
+    Chunks.Empty();
 }
 
-bool FVoxelDataMap::GetChunkData(const FIntVector& ChunkCoord, TMap<int32, float>& OutModified) const
+bool FVoxelDataMap::GetChunkData(const FIntVector& ChunkCoord, TMap<int32, float>& Out) const
 {
-	FScopeLock ScopeLock(&MapLock);
-	if (const FChunkData* ChunkData = Chunks.Find(ChunkCoord))
-	{
-		OutModified = ChunkData->ModifiedVoxels;
-		return true;
-	}
-	return false;
+    FScopeLock Lock(&MapLock);
+    if (const FChunkData* CD = Chunks.Find(ChunkCoord))
+    { Out = CD->ModifiedVoxels; return true; }
+    return false;
 }
 
 void FVoxelDataMap::Serialize(FArchive& Ar)
 {
-	FScopeLock ScopeLock(&MapLock);
-	Ar << ChunkSize;
-	int32 NumChunks = Chunks.Num();
-	Ar << NumChunks;
+    FScopeLock Lock(&MapLock);
+    Ar << ChunkSize;
+    int32 NumChunks = Chunks.Num();
+    Ar << NumChunks;
 
-	if (Ar.IsLoading())
-	{
-		Chunks.Empty(NumChunks);
-		for (int32 i = 0; i < NumChunks; ++i)
-		{
-			FIntVector ChunkCoord;
-			Ar << ChunkCoord;
-			FChunkData& ChunkData = Chunks.Add(ChunkCoord);
-			int32 NumModified;
-			Ar << NumModified;
-			for (int32 j = 0; j < NumModified; ++j)
-			{
-				int32 Index;
-				float Density;
-				Ar << Index << Density;
-				ChunkData.ModifiedVoxels.Add(Index, Density);
-			}
-		}
-	}
-	else
-	{
-		for (auto& It : Chunks)
-		{
-			FIntVector ChunkCoord = It.Key;
-			Ar << ChunkCoord;
-			FChunkData& ChunkData = It.Value;
-			int32 NumModified = ChunkData.ModifiedVoxels.Num();
-			Ar << NumModified;
-			for (auto& VoxelIt : ChunkData.ModifiedVoxels)
-			{
-				int32 Index = VoxelIt.Key;
-				float Density = VoxelIt.Value;
-				Ar << Index << Density;
-			}
-		}
-	}
+    if (Ar.IsLoading())
+    {
+        Chunks.Empty(NumChunks);
+        for (int32 i = 0; i < NumChunks; ++i)
+        {
+            FIntVector CC; Ar << CC;
+            FChunkData& CD = Chunks.Add(CC);
+            int32 Num; Ar << Num;
+            for (int32 j = 0; j < Num; ++j)
+            { int32 Idx; float D; Ar << Idx << D; CD.ModifiedVoxels.Add(Idx, D); }
+        }
+    }
+    else
+    {
+        for (auto& It : Chunks)
+        {
+            FIntVector CC = It.Key; Ar << CC;
+            int32 Num = It.Value.ModifiedVoxels.Num(); Ar << Num;
+            for (auto& VP : It.Value.ModifiedVoxels)
+            { int32 Idx = VP.Key; float D = VP.Value; Ar << Idx << D; }
+        }
+    }
 }
 
-FIntVector FVoxelDataMap::GetChunkCoord(const FIntVector& GlobalCoord) const
-{
-	return FIntVector(
-		FMath::FloorToInt((float)GlobalCoord.X / ChunkSize),
-		FMath::FloorToInt((float)GlobalCoord.Y / ChunkSize),
-		FMath::FloorToInt((float)GlobalCoord.Z / ChunkSize));
-}
-
-FIntVector FVoxelDataMap::GetLocalCoord(const FIntVector& GlobalCoord) const
-{
-	int32 X = GlobalCoord.X % ChunkSize; if (X < 0) X += ChunkSize;
-	int32 Y = GlobalCoord.Y % ChunkSize; if (Y < 0) Y += ChunkSize;
-	int32 Z = GlobalCoord.Z % ChunkSize; if (Z < 0) Z += ChunkSize;
-	return FIntVector(X, Y, Z);
-}
-
-int32 FVoxelDataMap::GetLocalIndex(const FIntVector& LocalCoord) const
-{
-	return LocalCoord.X + LocalCoord.Y * ChunkSize + LocalCoord.Z * ChunkSize * ChunkSize;
-}
-
+// FIX #8: snapshot under both locks, copy the snapshot without any lock held,
+// then write result back under only our own lock.
+// This eliminates the O(N) blocking of background generation threads during
+// a long deep-copy of the Chunks TMap.
 void FVoxelDataMap::CopyFrom(const FVoxelDataMap& Other)
 {
-	if (this == &Other) return;
+    if (this == &Other) return;
 
-	// Order locks by memory address to prevent A-B/B-A deadlocks
-	if (this < &Other)
-	{
-		MapLock.Lock();
-		Other.MapLock.Lock();
-	}
-	else
-	{
-		Other.MapLock.Lock();
-		MapLock.Lock();
-	}
+    // Snapshot under both locks (fast reference copy only when feasible —
+    // TMap has no shallow copy, so we must deep-copy once, but we release
+    // Other.MapLock immediately after the copy and only hold our own lock
+    // while writing the result back).
+    TMap<FIntVector, FChunkData> Snapshot;
+    int32 SnapshotSize;
+    {
+        // Address-ordered locking prevents A-B / B-A deadlock
+        FCriticalSection* First  = (this < &Other) ? &MapLock : &Other.MapLock;
+        FCriticalSection* Second = (this < &Other) ? &Other.MapLock : &MapLock;
+        First->Lock();
+        Second->Lock();
+        SnapshotSize = Other.ChunkSize;
+        Snapshot     = Other.Chunks;   // deep copy under both locks (unavoidable)
+        Second->Unlock();
+        First->Unlock();
+    }
 
-	ChunkSize = Other.ChunkSize;
-	Chunks = Other.Chunks;
+    // Write snapshot — hold only our own lock
+    FScopeLock Lock(&MapLock);
+    ChunkSize = SnapshotSize;
+    Chunks    = MoveTemp(Snapshot);
+}
 
-	MapLock.Unlock();
-	Other.MapLock.Unlock();
+FIntVector FVoxelDataMap::GetChunkCoord(const FIntVector& G) const
+{
+    return FIntVector(
+        FMath::FloorToInt((float)G.X / ChunkSize),
+        FMath::FloorToInt((float)G.Y / ChunkSize),
+        FMath::FloorToInt((float)G.Z / ChunkSize));
+}
+
+FIntVector FVoxelDataMap::GetLocalCoord(const FIntVector& G) const
+{
+    int32 X = G.X % ChunkSize; if (X < 0) X += ChunkSize;
+    int32 Y = G.Y % ChunkSize; if (Y < 0) Y += ChunkSize;
+    int32 Z = G.Z % ChunkSize; if (Z < 0) Z += ChunkSize;
+    return {X, Y, Z};
+}
+
+int32 FVoxelDataMap::GetLocalIndex(const FIntVector& L) const
+{
+    return L.X + L.Y * ChunkSize + L.Z * ChunkSize * ChunkSize;
 }

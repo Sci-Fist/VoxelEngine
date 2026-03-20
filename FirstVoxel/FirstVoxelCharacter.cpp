@@ -1,4 +1,13 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// FIX #20 — CustomFloorCheck sphere sweep removed. Landed() + UpdateFloorFromAdjustment
+//            is the correct and sufficient solution for voxel floor detection.
+//            The sweep was firing 60× per second while falling — unnecessary overhead.
+// FIX #22 — Smooth tool outer sphere now passes bRebuildChunks=true so chunks
+//            in the full-radius annulus are marked dirty after each smooth step.
+// FIX #24 — DoLook pitch convention unified. Both input paths now pass pitch
+//            with the same sign; no more inconsistent `MouseY * -1.f` in Tick.
+// FIX #25 — FindAndCacheVoxelWorld() called in BeginPlay so the one-time
+//            actor list scan happens at load time, not on first tool press.
 
 #include "FirstVoxelCharacter.h"
 
@@ -24,49 +33,27 @@ DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 AFirstVoxelCharacter::AFirstVoxelCharacter()
 {
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
-
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = true;
 
+	bUseControllerRotationYaw  = true;
+	bUseControllerRotationRoll = false;
 
-
-	bUseControllerRotationYaw   = true;
-
-	bUseControllerRotationRoll  = false;
-
-
-
-
-	GetCharacterMovement()->bUseControllerDesiredRotation = true;  // Face camera when standing still
-
-
-
-	GetCharacterMovement()->RotationRate                 = FRotator(0.f, 500.f, 0.f);
-	GetCharacterMovement()->bOrientRotationToMovement    = false;  // Don't override controller rotation with movement direction
-
-
-	GetCharacterMovement()->bUseFlatBaseForFloorChecks   = true; // FIX: prevents Rounded capsule Slip on Voxel wedges
-
-	GetCharacterMovement()->SetWalkableFloorAngle(60.0f);        // FIX: prevents slope slides from locking landing anims
-
-	GetCharacterMovement()->AirControl                   = 0.35f;
-
-	GetCharacterMovement()->MaxWalkSpeed                 = 500.f;
-
-	GetCharacterMovement()->MinAnalogWalkSpeed           = 20.f;
-
-	GetCharacterMovement()->BrakingDecelerationWalking   = 2000.f;
-
-
-	GetCharacterMovement()->BrakingDecelerationFalling   = 1500.f;
-
-	GetCharacterMovement()->MaxStepHeight                 = 100.f;  // Allow climbing 1m height differences (voxel size)
-
-
+	GetCharacterMovement()->bUseControllerDesiredRotation = true;
+	GetCharacterMovement()->RotationRate                  = FRotator(0.f, 500.f, 0.f);
+	GetCharacterMovement()->bOrientRotationToMovement     = false;
+	GetCharacterMovement()->bUseFlatBaseForFloorChecks    = true;
+	GetCharacterMovement()->SetWalkableFloorAngle(60.f);
+	GetCharacterMovement()->AirControl                    = 0.35f;
+	GetCharacterMovement()->MaxWalkSpeed                  = 500.f;
+	GetCharacterMovement()->MinAnalogWalkSpeed            = 20.f;
+	GetCharacterMovement()->BrakingDecelerationWalking    = 2000.f;
+	GetCharacterMovement()->BrakingDecelerationFalling    = 1500.f;
+	GetCharacterMovement()->MaxStepHeight                 = 100.f;
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
-	CameraBoom->TargetArmLength        = 400.f;
+	CameraBoom->TargetArmLength         = 400.f;
 	CameraBoom->bUsePawnControlRotation = true;
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
@@ -76,47 +63,37 @@ AFirstVoxelCharacter::AFirstVoxelCharacter()
 	FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
 	FirstPersonCamera->SetupAttachment(GetMesh(), TEXT("head"));
 	FirstPersonCamera->bUsePawnControlRotation = true;
-	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, 100.f)); // Offset to eye level
+	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, 100.f));
 	FirstPersonCamera->SetVisibility(false);
 
-	// Initialize camera properties
-	CameraTransitionSpeed = 5.0f;
-	ThirdPersonDistance = 300.0f;
-	ThirdPersonHeight = 100.0f;
-	ThirdPersonLookAtOffset = 50.0f;
-
-	// Set default camera mode to third person
-	bIsFirstPerson = false;
-	bIsThirdPerson = true;
+	CameraTransitionSpeed    = 5.f;
+	ThirdPersonDistance      = 300.f;
+	ThirdPersonHeight        = 100.f;
+	ThirdPersonLookAtOffset  = 50.f;
+	bIsFirstPerson           = false;
+	bIsThirdPerson           = true;
 }
 
 void AFirstVoxelCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-
-
-	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
+	if (APlayerController* PC = Cast<APlayerController>(Controller))
 	{
-		if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem =
-			ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
+		if (UEnhancedInputLocalPlayerSubsystem* Sub =
+			ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
 		{
-			InputSubsystem->AddMappingContext(MappingContext, 0);
+			Sub->AddMappingContext(MappingContext, 0);
 		}
 	}
 
-	// Reset dig/build timestamps so re-entering PIE never blocks the first action
 	DigLastActionTime   = -1.f;
 	BuildLastActionTime = -1.f;
-	// FIX: Clear the cached VoxelWorld pointer on each BeginPlay.
-	// Without this, PIE restart leaves a stale pointer to the destroyed actor
-	// from the previous session, causing all tool raycasts to silently fail.
-	CachedVoxelWorld = nullptr;
+	CachedVoxelWorld    = nullptr;
 
-	// ── FIX: Disable Collision for Visual Attachment components ──────────
-	// If a brush radius sphere or wireframe is added in Blueprints, it can
-	// support the actor's weight and suspend the capsule in air, causing
-	// continuous falling animation locks.
+	// FIX #25: cache VoxelWorld at load time, not on first tool use
+	FindAndCacheVoxelWorld();
+
 	TArray<UPrimitiveComponent*> PrimitiveComps;
 	GetComponents<UPrimitiveComponent>(PrimitiveComps);
 	for (UPrimitiveComponent* Comp : PrimitiveComps)
@@ -124,159 +101,90 @@ void AFirstVoxelCharacter::BeginPlay()
 		if (Comp && Comp != GetCapsuleComponent() && Comp != GetMesh())
 		{
 			Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			UE_LOG(LogTemplateCharacter, Log, TEXT("Disabled landing collision on widget: %s"), *Comp->GetName());
 		}
 	}
 }
 
 void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-	// Auto-load input assets when not pre-assigned via a Blueprint subclass
-	if (!JumpAction)
-		JumpAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Jump.IA_Jump"));
-	if (!MoveAction)
-		MoveAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Move.IA_Move"));
-	if (!LookAction)
-		LookAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Look.IA_Look"));
-	if (!MouseLookAction)
-		MouseLookAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_MouseLook.IA_MouseLook"));
-	if (!MappingContext)
-		MappingContext = LoadObject<UInputMappingContext>(nullptr, TEXT("/Game/Input/IMC_Default.IMC_Default"));
-	if (!ToggleFlyAction)
-		ToggleFlyAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Fly.IA_Fly"));
-	if (!FlyDownAction)
-		FlyDownAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_FlyDown.IA_FlyDown"));
-	if (!MapAction)
-		MapAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Map.IA_Map"));
-	if (!PauseAction)
-		PauseAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Pause.IA_Pause"));
-	if (!ToggleCameraAction)
-		ToggleCameraAction = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_ToggleCamera.IA_ToggleCamera"));
+	if (!JumpAction)        JumpAction        = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Jump.IA_Jump"));
+	if (!MoveAction)        MoveAction        = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Move.IA_Move"));
+	if (!LookAction)        LookAction        = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Look.IA_Look"));
+	if (!MouseLookAction)   MouseLookAction   = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_MouseLook.IA_MouseLook"));
+	if (!MappingContext)    MappingContext     = LoadObject<UInputMappingContext>(nullptr, TEXT("/Game/Input/IMC_Default.IMC_Default"));
+	if (!ToggleFlyAction)   ToggleFlyAction   = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Fly.IA_Fly"));
+	if (!FlyDownAction)     FlyDownAction     = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_FlyDown.IA_FlyDown"));
+	if (!MapAction)         MapAction         = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Map.IA_Map"));
+	if (!PauseAction)       PauseAction       = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Pause.IA_Pause"));
+	if (!ToggleCameraAction)ToggleCameraAction= LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_ToggleCamera.IA_ToggleCamera"));
 
-	if (UEnhancedInputComponent* EnhancedIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
+	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
-		// Add Mapping Context here ensures it is pushed when possessed/input joins
 		if (APlayerController* PC = Cast<APlayerController>(GetController()))
-		{
-			if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
-			{
-				Subsystem->AddMappingContext(MappingContext, 0);
-			}
-		}
+			if (UEnhancedInputLocalPlayerSubsystem* Sub = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+				Sub->AddMappingContext(MappingContext, 0);
 
-		// Jump (keyboard/gamepad A)
 		if (JumpAction)
 		{
-			EnhancedIC->BindAction(JumpAction, ETriggerEvent::Started,   this, &ACharacter::Jump);
-			EnhancedIC->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
+			EIC->BindAction(JumpAction, ETriggerEvent::Started,   this, &ACharacter::Jump);
+			EIC->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 		}
-
-		// Look / Move — guarded: raw key polling in Tick is the primary path anyway
-		if (LookAction)      EnhancedIC->BindAction(LookAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
-		if (MouseLookAction) EnhancedIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
-		if (MoveAction)      EnhancedIC->BindAction(MoveAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Move);
-
-		// Sprint (keyboard Shift) — guarded: SprintAction is optional, not auto-loaded
+		if (LookAction)        EIC->BindAction(LookAction,        ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
+		if (MouseLookAction)   EIC->BindAction(MouseLookAction,   ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Look);
+		if (MoveAction)        EIC->BindAction(MoveAction,        ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Move);
 		if (SprintAction)
 		{
-			EnhancedIC->BindAction(SprintAction, ETriggerEvent::Started,   this, &AFirstVoxelCharacter::Sprint);
-			EnhancedIC->BindAction(SprintAction, ETriggerEvent::Completed, this, &AFirstVoxelCharacter::StopSprinting);
+			EIC->BindAction(SprintAction, ETriggerEvent::Started,   this, &AFirstVoxelCharacter::Sprint);
+			EIC->BindAction(SprintAction, ETriggerEvent::Completed, this, &AFirstVoxelCharacter::StopSprinting);
 		}
-
-		// Dig / Build — optional; polling fallback in Tick handles LMB/RMB directly
-		if (DigAction)   EnhancedIC->BindAction(DigAction,   ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Dig);
-		if (BuildAction) EnhancedIC->BindAction(BuildAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Build);
-
-		// Flight toggle / map
-		if (ToggleFlyAction)
-			EnhancedIC->BindAction(ToggleFlyAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleFly);
-		if (MapAction)
-			EnhancedIC->BindAction(MapAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleMap);
-		if (PauseAction)
-			EnhancedIC->BindAction(PauseAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::TogglePauseMenu);
-
-		// Explicit fly-down action (Ctrl)
-		if (FlyDownAction)
-			EnhancedIC->BindAction(FlyDownAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::FlyDown);
-
-		// Camera toggle (V key / Y button)
-		if (ToggleCameraAction)
-			EnhancedIC->BindAction(ToggleCameraAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleCameraMode);
+		if (DigAction)         EIC->BindAction(DigAction,   ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Dig);
+		if (BuildAction)       EIC->BindAction(BuildAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Build);
+		if (ToggleFlyAction)   EIC->BindAction(ToggleFlyAction,    ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleFly);
+		if (MapAction)         EIC->BindAction(MapAction,          ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleMap);
+		if (PauseAction)       EIC->BindAction(PauseAction,        ETriggerEvent::Started, this, &AFirstVoxelCharacter::TogglePauseMenu);
+		if (FlyDownAction)     EIC->BindAction(FlyDownAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::FlyDown);
+		if (ToggleCameraAction)EIC->BindAction(ToggleCameraAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleCameraMode);
 	}
 
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp,   IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &AFirstVoxelCharacter::DecreaseRadius);
-
-	// Tool Wheel Bindings
 	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed,  this, &AFirstVoxelCharacter::OpenToolWheel);
 	PlayerInputComponent->BindKey(EKeys::Q, IE_Released, this, &AFirstVoxelCharacter::CloseToolWheel);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Pressed,  this, &AFirstVoxelCharacter::OpenToolWheel);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder, IE_Released, this, &AFirstVoxelCharacter::CloseToolWheel);
-
-	// ── Tool selection (Keyboard 1-4) ─────────────────────────────────────
 	PlayerInputComponent->BindKey(EKeys::One,   IE_Pressed, this, &AFirstVoxelCharacter::SelectToolDig);
 	PlayerInputComponent->BindKey(EKeys::Two,   IE_Pressed, this, &AFirstVoxelCharacter::SelectToolBuild);
 	PlayerInputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AFirstVoxelCharacter::SelectToolSmooth);
 	PlayerInputComponent->BindKey(EKeys::Four,  IE_Pressed, this, &AFirstVoxelCharacter::SelectToolFlatten);
-
-	// ── Flight & Map (Keyboard F / M) ───────────────────────────────────────
-	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
-	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
-
-	// ── Auto-walk (keyboard R / gamepad Select) ─────────────────────────────
-	PlayerInputComponent->BindKey(EKeys::R,                      IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left,   IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
-
-	// ── Gamepad bindings ─────────────────────────────────────────────────────
-	// B  → Toggle Flight
+	PlayerInputComponent->BindKey(EKeys::F,     IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
+	PlayerInputComponent->BindKey(EKeys::M,     IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
+	PlayerInputComponent->BindKey(EKeys::R,                    IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
-	// Y  → Toggle Map
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top,   IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
-	// X  → Toggle Camera
 	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left,  IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
-	// Start → Pause menu (Start was previously bound to Map but is more
-	// conventionally used for pause on consoles; Map stays on Y button only)
 	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Right,    IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
-	// RB → Increase Brush Radius
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder,    IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
-	// LB → Decrease Brush Radius
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder,     IE_Pressed, this, &AFirstVoxelCharacter::DecreaseRadius);
-
-	// ── Tool selection (D-Pad) ─────────────────────────────────────────────
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Up,    IE_Pressed, this, &AFirstVoxelCharacter::SelectToolDig);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Right, IE_Pressed, this, &AFirstVoxelCharacter::SelectToolBuild);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Down,  IE_Pressed, this, &AFirstVoxelCharacter::SelectToolSmooth);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_DPad_Left,  IE_Pressed, this, &AFirstVoxelCharacter::SelectToolFlatten);
 }
 
-
 void AFirstVoxelCharacter::Tick(float DeltaTime)
-
 {
-
 	Super::Tick(DeltaTime);
 
-
-
-	// Custom floor detection fallback for voxel terrain
-
-	// This runs every tick when falling to ensure we don't get stuck in falling animation
-	CustomFloorCheck();
+	// FIX #20: CustomFloorCheck sphere sweep removed from Tick.
+	// Landed() + UpdateFloorFromAdjustment() already handles voxel floor snapping.
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
-
 	if (!PC) return;
 
-
-	// ── Pause guard: skip all gameplay input while the pause menu is open ─────
-	// The pause menu uses FInputModeUIOnly which already blocks Enhanced Input
-	// bindings, but the raw key-polling below (IsInputKeyDown / GetInputAnalogKeyState)
-	// still reads hardware state. Skipping the Tick body prevents movement,
-	// digging, and look from firing while the menu is visible.
 	if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
 		if (HUD->IsPaused() || HUD->bShowTitleScreen) return;
 
-	// ── Input Device Detection ────────────────────────────────────────────
 	const float GPLx = PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftX);
 	const float GPLy = PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftY);
 	const float GPRx = PC->GetInputAnalogKeyState(EKeys::Gamepad_RightX);
@@ -309,68 +217,39 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 	const bool bFlying = GetCharacterMovement() &&
 		GetCharacterMovement()->MovementMode == MOVE_Flying;
 
-	// ── 0. Auto-walk (cancelled by any manual move input) ───────────────────
 	if (bAutoWalk)
 	{
-		// Cancel auto-walk if player pushes any movement controls
 		if (!bLastInputWasGamepad)
 		{
 			if (PC->IsInputKeyDown(EKeys::W) || PC->IsInputKeyDown(EKeys::S) ||
 				PC->IsInputKeyDown(EKeys::A) || PC->IsInputKeyDown(EKeys::D))
-			{
 				bAutoWalk = false;
-				UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk cancelled by manual input"));
-			}
 		}
-		else // Gamepad
-		{
-			if (FMath::Abs(GPLx) > 0.15f || FMath::Abs(GPLy) > 0.15f)
-			{
-				bAutoWalk = false;
-				UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk cancelled by manual input"));
-			}
-		}
+		else if (FMath::Abs(GPLx) > 0.15f || FMath::Abs(GPLy) > 0.15f)
+			bAutoWalk = false;
 
-		// If auto-walk is still active, move forward
-		if (bAutoWalk)
-		{
-			DoMove(0.f, 1.f);
-		}
+		if (bAutoWalk) DoMove(0.f, 1.f);
 	}
 
-	// ── 1. Keyboard: Move (WASD) ──────────────────────────────────────────
-	// Handled exclusively by Enhanced Input Action (MoveAction) to support 
-	// player control rebindings and layout flexibility configurations.
-
-	// ── 2. Keyboard: Flight vertical (Space = rise, Ctrl = descend) ──────────
-	// FIX: Only inject vertical movement when already flying. Space also binds
-	// Jump (ACharacter::Jump) but MOVE_Flying mode ignores the jump impulse, so
-	// polling IsInputKeyDown here is safe — it won't cause a double-jump on land.
-	// LeftControl is polled here as a backup; FlyDown() via Input also
-	// fires for Ctrl — both paths call AddMovementInput so there's no conflict.
 	if (bFlying && !bLastInputWasGamepad)
 	{
 		if (PC->IsInputKeyDown(EKeys::SpaceBar))    AddMovementInput(FVector::UpVector,  1.f);
 		if (PC->IsInputKeyDown(EKeys::LeftControl)) AddMovementInput(FVector::UpVector, -1.f);
-		if (PC->IsInputKeyDown(EKeys::C))           AddMovementInput(FVector::UpVector, -1.f); // bonus: C to descend
+		if (PC->IsInputKeyDown(EKeys::C))           AddMovementInput(FVector::UpVector, -1.f);
 	}
 
-
-
-	// ── 3. Gamepad: Left Stick Move ──────────────────────────────────────
 	if (FMath::Abs(GPLx) > 0.15f || FMath::Abs(GPLy) > 0.15f)
 		DoMove(GPLx, GPLy);
 
-	// ── 4. Gamepad: Right Stick Look ─────────────────────────────────────
 	if (FMath::Abs(GPRx) > 0.1f || FMath::Abs(GPRy) > 0.1f)
 	{
 		if (bToolWheelOpen)
 		{
 			const float Angle = FMath::RadiansToDegrees(FMath::Atan2(-GPRy, GPRx));
-			if (Angle >= -135.f && Angle < -45.f)      SelectToolByIndex(1); // Build (Top)
-			else if (Angle >= -45.f && Angle < 45.f) SelectToolByIndex(2); // Smooth (Right)
-			else if (Angle >= 45.f && Angle < 135.f) SelectToolByIndex(3); // Flatten (Bottom)
-			else                                      SelectToolByIndex(0); // Dig (Left)
+			if      (Angle >= -135.f && Angle < -45.f) SelectToolByIndex(1);
+			else if (Angle >= -45.f  && Angle <  45.f) SelectToolByIndex(2);
+			else if (Angle >=  45.f  && Angle < 135.f) SelectToolByIndex(3);
+			else                                         SelectToolByIndex(0);
 		}
 		else
 		{
@@ -380,48 +259,31 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 		}
 	}
 
-	// ── 5. Gamepad: Flight vertical (A = up, X = down) ───────────────────
 	if (bFlying)
 	{
 		if (PC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Bottom)) AddMovementInput(FVector::UpVector,  1.f);
 		if (PC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Left))   AddMovementInput(FVector::UpVector, -1.f);
 	}
 
-	// ── 6. Gamepad: Triggers → Dig (RT) / Build (LT) ─────────────────────
-	if (GPRT > 0.3f || GPLT > 0.3f)
-	{
-		ApplyCurrentTool();
-	}
+	if (GPRT > 0.3f || GPLT > 0.3f) ApplyCurrentTool();
 
-	// ── 9. Mouse: LMB → Dig / RMB → Build ───────────────────────────────
-	// Input bindings only fire when DigAction/BuildAction assets are assigned
-	// in the Blueprint subclass. Polling here guarantees mouse dig/build always works
-	// regardless of whether those assets are set up, matching the gamepad trigger path.
 	if (!bLastInputWasGamepad)
 	{
 		if (PC->IsInputKeyDown(EKeys::LeftMouseButton))
-		{
-			CurrentTool = EVoxelToolMode::Dig;
-			ApplyCurrentTool();
-		}
+		{ CurrentTool = EVoxelToolMode::Dig;   ApplyCurrentTool(); }
 		else if (PC->IsInputKeyDown(EKeys::RightMouseButton))
-		{
-			CurrentTool = EVoxelToolMode::Build;
-			ApplyCurrentTool();
-		}
+		{ CurrentTool = EVoxelToolMode::Build; ApplyCurrentTool(); }
 	}
 
-	// ── 7. Gamepad: LS Click → Sprint toggle ─────────────────────────────
 	if (PC->WasInputKeyJustPressed(EKeys::Gamepad_LeftThumbstick))
 	{
 		if (GetCharacterMovement())
 		{
-			const bool bIsSprinting = GetCharacterMovement()->MaxWalkSpeed > 600.f;
-			GetCharacterMovement()->MaxWalkSpeed = bIsSprinting ? 500.f : 900.f;
+			const bool bSprinting = GetCharacterMovement()->MaxWalkSpeed > 600.f;
+			GetCharacterMovement()->MaxWalkSpeed = bSprinting ? 500.f : 900.f;
 		}
 	}
 
-	// ── 8. Mouse look fallback (when Input doesn't supply deltas) ─
 	if (bToolWheelOpen && !bLastInputWasGamepad)
 	{
 		FVector2D ScreenSize;
@@ -435,10 +297,10 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 				if (Dir.Size() > 20.f)
 				{
 					const float Angle = FMath::RadiansToDegrees(FMath::Atan2(Dir.Y, Dir.X));
-					if (Angle >= -135.f && Angle < -45.f)      SelectToolByIndex(1); // Build (Top)
-					else if (Angle >= -45.f && Angle < 45.f) SelectToolByIndex(2); // Smooth (Right)
-					else if (Angle >= 45.f && Angle < 135.f) SelectToolByIndex(3); // Flatten (Bottom)
-					else                                      SelectToolByIndex(0); // Dig (Left)
+					if      (Angle >= -135.f && Angle < -45.f) SelectToolByIndex(1);
+					else if (Angle >= -45.f  && Angle <  45.f) SelectToolByIndex(2);
+					else if (Angle >=  45.f  && Angle < 135.f) SelectToolByIndex(3);
+					else                                         SelectToolByIndex(0);
 				}
 			}
 		}
@@ -448,12 +310,16 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 		float MouseX, MouseY;
 		PC->GetInputMouseDelta(MouseX, MouseY);
 		if (FMath::Abs(MouseX) > 0.001f || FMath::Abs(MouseY) > 0.001f)
-			DoLook(MouseX, MouseY * -1.f);
+		{
+			// FIX #24: same sign convention as the Enhanced Input Look callback
+			// Both paths now call DoLook(Yaw, Pitch) where Pitch is the raw delta
+			// without manual negation here — DoLook handles the add direction.
+			DoLook(MouseX, MouseY);
+		}
 	}
 	bLookedThisFrame = false;
 }
 
-// ---------------------------------------------------------------------------
 void AFirstVoxelCharacter::Move(const FInputActionValue& Value)
 {
 	const FVector2D V = Value.Get<FVector2D>();
@@ -475,38 +341,30 @@ void AFirstVoxelCharacter::DoMove(float Right, float Forward)
 	AddMovementInput(FRotationMatrix(Yaw).GetUnitAxis(EAxis::Y), Right);
 }
 
+// FIX #24: unified pitch convention.
+// Previously Tick fallback negated Y before calling DoLook, Look callback did not.
+// Now DoLook is the single place that applies AddControllerPitchInput.
+// Both callers pass the raw delta (positive = look up for Enhanced Input, or raw
+// mouse delta from GetInputMouseDelta where positive Y = mouse moved down).
+// The Enhanced Input mapping already handles axis inversion in the asset, so
+// we don't negate here — this matches how the gamepad stick path works.
 void AFirstVoxelCharacter::DoLook(float Yaw, float Pitch)
 {
 	if (!GetController()) return;
-	// FIXED: Correct mouse look sensitivity and remove inversion
 	AddControllerYawInput(Yaw);
 	AddControllerPitchInput(Pitch);
 }
 
-void AFirstVoxelCharacter::DoJumpStart()
-{
-	// FIX: Do NOT call AddMovementInput here when flying — Tick already polls
-	// SpaceBar every frame for vertical flight input. Calling it here too caused
-	// a one-shot impulse on press but no sustained rise (felt like nothing happened).
-	// Just call Jump() unconditionally; MOVE_Flying mode ignores the jump velocity.
-	Jump();
-}
+void AFirstVoxelCharacter::DoJumpStart() { Jump(); }
+void AFirstVoxelCharacter::DoJumpEnd()   { StopJumping(); }
 
-void AFirstVoxelCharacter::DoJumpEnd() { StopJumping(); }
-
-// FlyDown is the action-bound version (Ctrl key / Input FlyDown action)
-// It only fires while the button is held (ETriggerEvent::Triggered).
 void AFirstVoxelCharacter::FlyDown()
 {
 	if (GetCharacterMovement() && GetCharacterMovement()->MovementMode == MOVE_Flying)
 		AddMovementInput(FVector::UpVector, -1.f);
 }
 
-// FlyVertical kept for backward compatibility; routes to FlyDown
-void AFirstVoxelCharacter::FlyVertical(const FInputActionValue& /*Value*/)
-{
-	FlyDown();
-}
+void AFirstVoxelCharacter::FlyVertical(const FInputActionValue&) { FlyDown(); }
 
 void AFirstVoxelCharacter::ToggleMap()
 {
@@ -519,70 +377,29 @@ void AFirstVoxelCharacter::ToggleFly()
 	if (!GetCharacterMovement()) return;
 	if (GetCharacterMovement()->MovementMode == MOVE_Flying)
 	{
-		// FIX: Restore full collision BEFORE switching to Walking so the
-		// capsule is solid again when the movement mode snaps to ground.
 		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
-		
-		// Properly transition to walking to avoid stuck falling animation
-		// Use UpdateFloorFromAdjustment to force immediate floor detection
 		UCharacterMovementComponent* CMC = GetCharacterMovement();
 		CMC->Velocity = FVector::ZeroVector;
 		CMC->SetMovementMode(MOVE_Walking);
 		CMC->UpdateFloorFromAdjustment();
 		CMC->bJustTeleported = false;
-		
-		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode DISABLED"));
 	}
 	else
 	{
 		GetCharacterMovement()->SetMovementMode(MOVE_Flying);
-		// FIX: Keep collision enabled while flying so terrain dig/build
-		// raycasts still hit the world, and so re-enabling walk collision
-		// works correctly. Flying mode in UE already ignores floor/gravity
-		// without needing to disable the capsule collision entirely.
-		// The old NoCollision call was the root cause of clipping through terrain.
 		GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
-		UE_LOG(LogTemplateCharacter, Log, TEXT("Flight Mode ENABLED"));
 	}
 }
 
-// ── Missing Functions Implementation ──────────────────────────────────────
+void AFirstVoxelCharacter::Sprint()      { if (GetCharacterMovement()) GetCharacterMovement()->MaxWalkSpeed = 900.f; }
+void AFirstVoxelCharacter::StopSprinting(){ if (GetCharacterMovement()) GetCharacterMovement()->MaxWalkSpeed = 500.f; }
 
-void AFirstVoxelCharacter::Sprint()
-{
-	if (GetCharacterMovement())
-	{
-		GetCharacterMovement()->MaxWalkSpeed = 900.f;
-	}
-}
+void AFirstVoxelCharacter::Dig()   { CurrentTool = EVoxelToolMode::Dig;   ApplyCurrentTool(); }
+void AFirstVoxelCharacter::Build() { CurrentTool = EVoxelToolMode::Build; ApplyCurrentTool(); }
 
-void AFirstVoxelCharacter::StopSprinting()
-{
-	if (GetCharacterMovement())
-	{
-		GetCharacterMovement()->MaxWalkSpeed = 500.f;
-	}
-}
-
-void AFirstVoxelCharacter::Dig()
-{
-	CurrentTool = EVoxelToolMode::Dig;
-	ApplyCurrentTool();
-}
-
-void AFirstVoxelCharacter::Build()
-{
-	CurrentTool = EVoxelToolMode::Build;
-	ApplyCurrentTool();
-}
-
-void AFirstVoxelCharacter::SelectToolByIndex(int32 ToolIndex)
-{
-	CurrentTool = static_cast<EVoxelToolMode>(FMath::Clamp(ToolIndex, 0, 3));
-}
-
+void AFirstVoxelCharacter::SelectToolByIndex(int32 I)  { CurrentTool = static_cast<EVoxelToolMode>(FMath::Clamp(I, 0, 3)); }
 void AFirstVoxelCharacter::SelectToolDig()     { SelectToolByIndex(0); }
 void AFirstVoxelCharacter::SelectToolBuild()   { SelectToolByIndex(1); }
 void AFirstVoxelCharacter::SelectToolSmooth()  { SelectToolByIndex(2); }
@@ -591,155 +408,83 @@ void AFirstVoxelCharacter::SelectToolFlatten() { SelectToolByIndex(3); }
 void AFirstVoxelCharacter::ToggleAutoWalk()
 {
 	bAutoWalk = !bAutoWalk;
-	UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk toggled: %s"), bAutoWalk ? TEXT("TRUE") : TEXT("FALSE"));
+	UE_LOG(LogTemplateCharacter, Log, TEXT("Auto-walk: %s"), bAutoWalk ? TEXT("ON") : TEXT("OFF"));
 }
 
 void AFirstVoxelCharacter::IncreaseRadius()
-{
-	InteractionRadius = FMath::Clamp(InteractionRadius + 50.f, 50.f, 1000.f);
-	UE_LOG(LogTemplateCharacter, Log, TEXT("Interaction Radius Increased: %.1f"), InteractionRadius);
-}
-
+{ InteractionRadius = FMath::Clamp(InteractionRadius + 50.f, 50.f, 1000.f); }
 void AFirstVoxelCharacter::DecreaseRadius()
-{
-	InteractionRadius = FMath::Clamp(InteractionRadius - 50.f, 50.f, 1000.f);
-	UE_LOG(LogTemplateCharacter, Log, TEXT("Interaction Radius Decreased: %.1f"), InteractionRadius);
-}
+{ InteractionRadius = FMath::Clamp(InteractionRadius - 50.f, 50.f, 1000.f); }
 
+// FIX #25: cache at BeginPlay; return immediately if already cached
 AVoxelWorld* AFirstVoxelCharacter::FindAndCacheVoxelWorld()
 {
 	if (CachedVoxelWorld) return CachedVoxelWorld;
-
-	// Safely get the first VoxelWorld actor with proper null checking
-	AActor* FoundActor = UGameplayStatics::GetActorOfClass(GetWorld(), AVoxelWorld::StaticClass());
-	if (FoundActor)
-	{
-		CachedVoxelWorld = Cast<AVoxelWorld>(FoundActor);
-	}
+	AActor* A = UGameplayStatics::GetActorOfClass(GetWorld(), AVoxelWorld::StaticClass());
+	if (A) CachedVoxelWorld = Cast<AVoxelWorld>(A);
 	return CachedVoxelWorld;
 }
 
-
 void AFirstVoxelCharacter::ApplyCurrentTool()
 {
-	UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: Tool=%d, Radius=%.1f"), 
-		(uint8)CurrentTool, InteractionRadius);
-
 	AVoxelWorld* World = FindAndCacheVoxelWorld();
-	if (!World) 
-	{
-		UE_LOG(LogTemplateCharacter, Warning, TEXT("ApplyCurrentTool: No VoxelWorld found!"));
-		return;
-	}
+	if (!World) return;
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
-	if (!PC) 
-	{
-		UE_LOG(LogTemplateCharacter, Warning, TEXT("ApplyCurrentTool: No PlayerController!"));
-		return;
-	}
+	if (!PC) return;
 
-	FVector CamLoc;
-	FRotator CamRot;
+	FVector CamLoc; FRotator CamRot;
 	PC->GetPlayerViewPoint(CamLoc, CamRot);
-
-	FVector Start = CamLoc;
-	FVector End = Start + (CamRot.Vector() * 1500.f);
+	const FVector End = CamLoc + CamRot.Vector() * 1500.f;
 
 	FHitResult Hit;
 	FCollisionQueryParams Params;
 	Params.AddIgnoredActor(this);
 	Params.bTraceComplex = true;
 
-	if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, End, ECC_Visibility, Params)) return;
+
+	const FVector ImpactPoint = Hit.ImpactPoint;
+	const float   CurrentTime = GetWorld()->GetTimeSeconds();
+
+	if (CurrentTool == EVoxelToolMode::Dig)
 	{
-		FVector ImpactPoint = Hit.ImpactPoint;
-		UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: Raycast HIT at %s, Normal=%s, Actor=%s"),
-			*ImpactPoint.ToString(), *Hit.ImpactNormal.ToString(),
-			Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("null"));
-		
-		float CurrentTime = GetWorld()->GetTimeSeconds();
-
-		if (CurrentTool == EVoxelToolMode::Dig)
+		if (CurrentTime - DigLastActionTime > 0.05f)
 		{
-			if (CurrentTime - DigLastActionTime > 0.05f)
-			{
-				// FIX: Move INTO the surface (subtract normal) so the sphere actually
-				// overlaps solid voxels. Adding the normal placed the sphere in air.
-				FVector DigPos = ImpactPoint - (Hit.ImpactNormal * (InteractionRadius * 0.5f));
-				
-				// FIX: Ensure coordinate system consistency with VoxelWorld
-				// The VoxelWorld uses GetActorLocation() as its anchor, so we need to
-				// ensure our world positions align with that coordinate system.
-				// This is particularly important for crater spawn alignment.
-				const FVector WorldAnchor = World->GetActorLocation();
-				UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: DIG at %s (radius %.1f) relative to world anchor %s"),
-					*DigPos.ToString(), InteractionRadius, *WorldAnchor.ToString());
-				
-				World->SetVoxelSphere(DigPos, InteractionRadius, -1.0f, true);
-				DigLastActionTime = CurrentTime;
-			}
+			World->SetVoxelSphere(ImpactPoint - Hit.ImpactNormal * InteractionRadius * 0.5f,
+			                      InteractionRadius, -1.f, true);
+			DigLastActionTime = CurrentTime;
 		}
-		else if (CurrentTool == EVoxelToolMode::Build)
+	}
+	else if (CurrentTool == EVoxelToolMode::Build)
+	{
+		if (CurrentTime - BuildLastActionTime > 0.05f)
 		{
-			if (CurrentTime - BuildLastActionTime > 0.05f)
-			{
-				// Build: place sphere just above the surface so new voxels attach cleanly
-				FVector BuildPos = ImpactPoint + (Hit.ImpactNormal * (InteractionRadius * 0.5f));
-				
-				// FIX: Ensure coordinate system consistency with VoxelWorld
-				const FVector WorldAnchor = World->GetActorLocation();
-				UE_LOG(LogTemplateCharacter, Verbose, TEXT("ApplyCurrentTool: BUILD at %s (radius %.1f) relative to world anchor %s"),
-					*BuildPos.ToString(), InteractionRadius, *WorldAnchor.ToString());
-				
-				World->SetVoxelSphere(BuildPos, InteractionRadius, 1.0f, true);
-				BuildLastActionTime = CurrentTime;
-			}
+			World->SetVoxelSphere(ImpactPoint + Hit.ImpactNormal * InteractionRadius * 0.5f,
+			                      InteractionRadius, 1.f, true);
+			BuildLastActionTime = CurrentTime;
 		}
-		else if (CurrentTool == EVoxelToolMode::Smooth)
+	}
+	else if (CurrentTool == EVoxelToolMode::Smooth)
+	{
+		if (CurrentTime - DigLastActionTime > 0.08f)
 		{
-			// SMOOTH: soften terrain by alternating very gentle fill and carve
-			// passes centred just below the surface. Each pass subtracts / adds
-			// a small density delta that rounds off sharp edges without removing
-			// large amounts of material. The fill pass prevents the tool from
-			// hollowing out the terrain the way a plain dig would.
-			if (CurrentTime - DigLastActionTime > 0.08f)
-			{
-				// Step 1: very light carve to shave protruding voxels
-				const FVector SoftPos = ImpactPoint - (Hit.ImpactNormal * (InteractionRadius * 0.15f));
-				World->SetVoxelSphere(SoftPos, InteractionRadius, -0.15f, false);
-				// Step 2: equally light fill to round concave dips back up
-				World->SetVoxelSphere(SoftPos, InteractionRadius * 0.6f, 0.10f, true);
-				DigLastActionTime = CurrentTime;
-			}
+			const FVector SoftPos = ImpactPoint - Hit.ImpactNormal * InteractionRadius * 0.15f;
+			// FIX #22: outer sphere now also triggers chunk rebuild
+			World->SetVoxelSphere(SoftPos, InteractionRadius,        -0.15f, true);
+			World->SetVoxelSphere(SoftPos, InteractionRadius * 0.6f,  0.10f, true);
+			DigLastActionTime = CurrentTime;
 		}
-		else if (CurrentTool == EVoxelToolMode::Flatten)
+	}
+	else if (CurrentTool == EVoxelToolMode::Flatten)
+	{
+		if (CurrentTime - DigLastActionTime > 0.08f)
 		{
-			// FLATTEN: level terrain to the height of the impact point.
-			//
-			// Strategy: two overlapping spheres positioned above and below the
-			// target plane enforce a flat surface at ImpactPoint.Z:
-			//   - Sphere below the plane fills (adds density) to raise low spots.
-			//   - Sphere above the plane carves (removes density) to cut high spots.
-			//
-			// Both spheres are offset by their own radius so their centres sit
-			// exactly one radius away from the target plane, giving maximum
-			// effect right at the plane and tapering to zero at ±2 radii.
-			if (CurrentTime - DigLastActionTime > 0.08f)
-			{
-				const FVector PlaneOrigin = FVector(ImpactPoint.X, ImpactPoint.Y, ImpactPoint.Z);
-				const float   R           = InteractionRadius;
-
-				// Fill anything below the plane (raise low terrain)
-				const FVector FillCentre = PlaneOrigin - FVector(0.f, 0.f, R);
-				World->SetVoxelSphere(FillCentre, R, 1.0f, false);
-
-				// Carve anything above the plane (cut high terrain)
-				const FVector CarveCentre = PlaneOrigin + FVector(0.f, 0.f, R);
-				World->SetVoxelSphere(CarveCentre, R, -1.0f, true);
-
-				DigLastActionTime = CurrentTime;
-			}
+			const FVector Origin = ImpactPoint;
+			const float   R      = InteractionRadius;
+			World->SetVoxelSphere(Origin - FVector(0,0,R),  R,  1.f, false);
+			World->SetVoxelSphere(Origin + FVector(0,0,R),  R, -1.f, true);
+			DigLastActionTime = CurrentTime;
 		}
 	}
 }
@@ -747,10 +492,8 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 void AFirstVoxelCharacter::OpenToolWheel()
 {
 	bToolWheelOpen = true;
-	APlayerController* PC = Cast<APlayerController>(GetController());
-	if (PC)
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
-		// Center the mouse cursor on open
 		if (!bLastInputWasGamepad)
 		{
 			FVector2D ScreenSize;
@@ -760,10 +503,7 @@ void AFirstVoxelCharacter::OpenToolWheel()
 	}
 }
 
-void AFirstVoxelCharacter::CloseToolWheel()
-{
-	bToolWheelOpen = false;
-}
+void AFirstVoxelCharacter::CloseToolWheel() { bToolWheelOpen = false; }
 
 void AFirstVoxelCharacter::TogglePauseMenu()
 {
@@ -775,105 +515,33 @@ void AFirstVoxelCharacter::TogglePauseMenu()
 void AFirstVoxelCharacter::ToggleCameraMode()
 {
 	bIsFirstPerson = !bIsFirstPerson;
-	
 	if (bIsFirstPerson)
 	{
-		// Switch to first person
 		FollowCamera->SetVisibility(false);
 		FirstPersonCamera->SetVisibility(true);
 		FirstPersonCamera->Activate();
-		CameraBoom->TargetArmLength = 0.f; // Retract the boom
+		CameraBoom->TargetArmLength = 0.f;
 	}
 	else
 	{
-		// Switch to third person
 		FirstPersonCamera->SetVisibility(false);
-		
-				FollowCamera->SetVisibility(true);
+		FollowCamera->Activate();
+		FollowCamera->SetVisibility(true);
+		CameraBoom->TargetArmLength = 400.f;
+	}
+}
 
-				FollowCamera->Activate();
+// FIX #20: CustomFloorCheck body is now a no-op. The function declaration is
+// kept in the header for binary compatibility. Landed() handles floor snapping.
+void AFirstVoxelCharacter::CustomFloorCheck()
+{
+	// Intentionally empty — Landed() + UpdateFloorFromAdjustment() is sufficient.
+	// The old sphere sweep here ran every frame while falling (60 Hz physics queries).
+}
 
-				CameraBoom->TargetArmLength = 400.f; // Extend the boom
-
-			}
-
-		}
-		
-		// ---------------------------------------------------------------------------
-		// Custom floor detection for voxel terrain
-		// Uses sphere sweep (like VoxelWorld spawn) for more reliable ground detection
-
-		// ---------------------------------------------------------------------------
-		void AFirstVoxelCharacter::CustomFloorCheck()
-		{
-			if (!GetCharacterMovement() || !GetCharacterMovement()->IsFalling())
-
-				return;
-		
-			// Only check if we're moving downward slowly or have been falling for a bit
-			const float VelZ = GetVelocity().Z;
-			if (VelZ > 100.f) // Still going up (jump apex)
-
-				return;
-		
-			// Perform sphere sweep downward (more robust than capsule on voxel edges)
-			const FVector Start = GetActorLocation();
-
-			const FVector End = Start - FVector(0.f, 0.f, 300.f); // Sweep down 3m
-			FCollisionShape Shape = FCollisionShape::MakeSphere(30.f); // 30cm radius
-
-			FHitResult Hit;
-			FCollisionQueryParams Params;
-			Params.AddIgnoredActor(this);
-			Params.bReturnPhysicalMaterial = false;
-		
-			if (GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity,
-				ECC_WorldStatic, Shape, Params))
-			{
-				// Use more lenient normal threshold for voxel terrain edge cases
-				if (Hit.Normal.Z >= 0.4f) // 0.4 = ~66° from vertical, quite steep but walkable
-				{
-					// Snap to ground position (capsule half-height + small clearance)
-					FVector NewLoc = GetActorLocation();
-					const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-					NewLoc.Z = Hit.ImpactPoint.Z + HalfHeight + 5.f; // 5cm clearance
-		
-					// Only snap if we're close to the ground (within 50cm) to avoid large jumps
-					if (FMath::Abs(NewLoc.Z - GetActorLocation().Z) < 50.f)
-					{
-						SetActorLocation(NewLoc);
-
-		
-
-						// Force walking mode
-						UCharacterMovementComponent* CMC = GetCharacterMovement();
-						CMC->Velocity = FVector::ZeroVector;
-						CMC->SetMovementMode(MOVE_Walking);
-
-						CMC->UpdateFloorFromAdjustment(); // Ensure animation state updates
-					}
-				}
-			}
-		}
-		
-		// ---------------------------------------------------------------------------
-		// Landing override - ensures animation state updates immediately
-
-		// ---------------------------------------------------------------------------
-		void AFirstVoxelCharacter::Landed(const FHitResult& Hit)
-		{
-			Super::Landed(Hit);
-		
-			if (UCharacterMovementComponent* CMC = GetCharacterMovement())
-			{
-				// Force immediate floor validation to update animation state
-				CMC->UpdateFloorFromAdjustment();
-		
-
-				// Debug logging (can be removed later)
-				// UE_LOG(LogTemplateCharacter, Warning, TEXT("Landed: Normal=%s, bWalkable=%d"),
-
-				// 	*Hit.Normal.ToString(), Hit.bWalkableFloor);
-			}
-		}
-
+void AFirstVoxelCharacter::Landed(const FHitResult& Hit)
+{
+	Super::Landed(Hit);
+	if (UCharacterMovementComponent* CMC = GetCharacterMovement())
+		CMC->UpdateFloorFromAdjustment();
+}
