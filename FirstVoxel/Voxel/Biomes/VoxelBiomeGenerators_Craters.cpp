@@ -99,7 +99,7 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
     // FIX: NO MinRimH override, NO 1.5x, NO 1.2x Meteor multiplier.
     // RimHeight is the config value directly, plus a small per-seed variation.
     const float RimVar = BG_Noise(S.nX * 0.0004f, S.nY * 0.0004f, 0.f) * 0.15f;
-    S.RimHeight = C.Craters.CentralCraterRimHeight * 2.5f * (1.f + RimVar);
+    S.RimHeight = C.Craters.CentralCraterRimHeight * (1.f + RimVar);
 
     return S;
 }
