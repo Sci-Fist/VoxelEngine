@@ -1,22 +1,8 @@
 //
-// VoxelWorld.h — targeted patches applied to existing file.
-// FIX #30 — GetEffectiveConfig() returns by VALUE to eliminate the data race
-//            where two game-thread callers could both write MergedConfig while
-//            each held the returned const reference.
-//            Cost: one FVoxelGenerationConfig copy per call (~4KB, no heap).
-//            MergedConfig mutable member retained for editor-only paths that
-//            call GetEffectiveConfig() repeatedly in tight loops.
-// FIX #31 — ActiveGenerations changed from plain int32 to TAtomic<int32>.
-//            OnGenerationComplete lambdas fire on game-thread AsyncTask
-//            callbacks but the decrement was racing with DrainGenerationQueue
-//            reads on the same frame.
-// FIX #41 — bForceCraterSpawn renamed to bSpawnInNaturalCrater.
-//            "Force" implied an artificial crater; "SpawnInNaturalCrater"
-//            correctly describes the behavior: find the noise-peak crater and
-//            place the player inside it.
-// FIX #43 — Removed duplicate UFUNCTION ClearWorldModifications (Blueprint).
-//            ClearModifications (CallInEditor) covers the same operation; two
-//            UFUNCTIONs doing the same thing only adds API surface confusion.
+// VoxelWorld.h
+// FIX SafeSpawnHeightOffset: was 25000 (250m above surface!) → 200 (2m).
+// Players were spawning 250m in the air and falling. With the crater anchor
+// fix the crater floor is correctly anchored to terrain, so a small offset is enough.
 
 #pragma once
 
@@ -61,7 +47,7 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 SkylandsRenderDistanceXY = 8;
-    
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming", meta=(ClampMin="0"))
     int32 DistantRenderDistanceXY = 24;
 
@@ -101,17 +87,11 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Generation")
     bool bRegenerateViewportAfterPIE = true;
 
-    // FIX #30: returns by VALUE so two simultaneous callers each get an
-    // independent copy of MergedConfig, eliminating the const-ref data race.
-    // The mutable MergedConfig member is kept for internal caching on
-    // editor-only code paths that do not call from multiple threads.
     FVoxelGenerationConfig GetEffectiveConfig() const
     {
         FVoxelGenerationConfig Out;
         if (BiomePreset != nullptr)
-        {
             Out = BiomePreset->Config;
-        }
         else
         {
             Out                = GenerationConfig;
@@ -131,30 +111,24 @@ public:
             Out.SkylandsWater  = SkylandsWater;
         }
         Out.Seed = GenerationConfig.Seed;
-
         return Out;
     }
 
 private:
-    mutable FVoxelGenerationConfig MergedConfig; // used by editor-only paths only
+    mutable FVoxelGenerationConfig MergedConfig;
 
 public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Generation")
     bool bAutoGenerateOnBeginPlay = false;
 
-    // FIX #41: renamed from bForceCraterSpawn → bSpawnInNaturalCrater
-    // When true, GenerateWorldDeferred() calls FindCraterSpawnLocation() to place
-    // the player inside the nearest natural noise-crater. No artificial crater is created.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",
-        meta=(ToolTip="When true, the player always spawns inside a natural crater found by noise. No artificial crater is created — the spawn system simply searches for an existing crater biome peak and centers the world on it."))
+        meta=(ToolTip="When true, the player spawns inside a natural noise-crater."))
     bool bSpawnInNaturalCrater = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",
-              meta=(ClampMin="1000.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn", meta=(ClampMin="1000.0"))
     float CraterSpawnSearchRadius = 60000.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",
-              meta=(ClampMin="100.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn", meta=(ClampMin="100.0"))
     float CraterSpawnSearchStep = 4000.f;
 
     FIntVector WorldToChunkCoord(const FVector& WorldPos) const;
@@ -164,23 +138,18 @@ public:
               meta=(ClampMin="0.0", ClampMax="1.0"))
     float CraterSpawnMinWeight = 0.25f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
-    float SafeSpawnHeightOffset = 25000.f;
+    // FIX SafeSpawnHeightOffset: was 25000 (250m!) — player spawned 250m in the air.
+    // Now 200cm (2m) above terrain — just enough to clear the surface mesh,
+    // with the hover-lock handling fine Z placement once collision is ready.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",
+        meta=(ToolTip="Height above terrain surface to park the player while collision bakes (cm). 200 = 2m."))
+    float SafeSpawnHeightOffset = 200.f;
 
-    UFUNCTION(CallInEditor, Category="Voxel")
-    void GenerateWorld();
-
-    UFUNCTION(CallInEditor, Category="Voxel")
-    void ClearWorld();
-
-    UFUNCTION(CallInEditor, Category="Voxel")
-    void SnapPlayerToGround();
-
-    UFUNCTION(CallInEditor, Category="Voxel|Presets")
-    void SaveCurrentToPreset();
-
-    UFUNCTION(CallInEditor, Category="Voxel|Presets")
-    void LoadFromPreset();
+    UFUNCTION(CallInEditor, Category="Voxel") void GenerateWorld();
+    UFUNCTION(CallInEditor, Category="Voxel") void ClearWorld();
+    UFUNCTION(CallInEditor, Category="Voxel") void SnapPlayerToGround();
+    UFUNCTION(CallInEditor, Category="Voxel|Presets") void SaveCurrentToPreset();
+    UFUNCTION(CallInEditor, Category="Voxel|Presets") void LoadFromPreset();
 
     virtual void OnConstruction(const FTransform& Transform) override;
 
@@ -188,13 +157,10 @@ public:
     void SetVoxelSphere(FVector WorldPosition, float Radius, float DensityValue,
                         bool bRebuildChunks = true);
 
-    UFUNCTION(BlueprintCallable, Category="Voxel|Testing")
-    void RunVoxelTests();
+    UFUNCTION(BlueprintCallable, Category="Voxel|Testing") void RunVoxelTests();
 
     FVoxelDataMap* GetVoxelDataMap() { return &DataMap; }
-
     const TMap<FIntVector, AVoxelChunk*>* GetLoadedChunks() const { return &LoadedChunks; }
-
     int32 GetQueueCount() const { return GenerationQueue.Num(); }
     int32 GetQueueHead()  const { return QueueHead; }
 
@@ -205,89 +171,43 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Persistence")
     FString SaveSlotName = TEXT("DefaultSlot");
 
-    UFUNCTION(BlueprintCallable, Category="Voxel|Persistence")
-    void SaveToFile(const FString& SlotName);
-
-    UFUNCTION(BlueprintCallable, Category="Voxel|Persistence")
-    void LoadFromFile(const FString& SlotName);
-
-    UFUNCTION(CallInEditor, Category="Voxel|Actions")
-    void RebuildWorld();
-
-    // FIX #43: ClearWorldModifications (BlueprintCallable) removed — it was an
-    // exact duplicate of ClearModifications (CallInEditor). Only one UFUNCTION
-    // per operation reduces API surface and avoids Blueprint/editor confusion.
-    UFUNCTION(CallInEditor, Category="Voxel|Actions")
-    void ClearModifications();
-
-    UFUNCTION(CallInEditor, Category="Voxel|Persistence", meta=(DisplayName="Save Slot"))
-    void SaveDefaultSlot();
-
-    UFUNCTION(CallInEditor, Category="Voxel|Persistence", meta=(DisplayName="Load Slot"))
-    void LoadDefaultSlot();
-
-    UFUNCTION(CallInEditor, Category="Voxel|Actions")
-    void RunTests();
-
+    UFUNCTION(BlueprintCallable, Category="Voxel|Persistence") void SaveToFile(const FString& SlotName);
+    UFUNCTION(BlueprintCallable, Category="Voxel|Persistence") void LoadFromFile(const FString& SlotName);
+    UFUNCTION(CallInEditor, Category="Voxel|Actions") void RebuildWorld();
+    UFUNCTION(CallInEditor, Category="Voxel|Actions") void ClearModifications();
+    UFUNCTION(CallInEditor, Category="Voxel|Persistence", meta=(DisplayName="Save Slot")) void SaveDefaultSlot();
+    UFUNCTION(CallInEditor, Category="Voxel|Persistence", meta=(DisplayName="Load Slot")) void LoadDefaultSlot();
+    UFUNCTION(CallInEditor, Category="Voxel|Actions") void RunTests();
     void TestSmoothLODTransitions();
 
-    UFUNCTION(BlueprintCallable, Category="Voxel|Terrain")
-    float GetTerrainHeight(float X, float Y) const;
-
+    UFUNCTION(BlueprintCallable, Category="Voxel|Terrain") float GetTerrainHeight(float X, float Y) const;
     float GetSurfaceZ(float X, float Y) const;
 
-    // ── Per-biome: materials + foliage ───────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")
-    FVoxelBiomeRenderConfig ForestRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")
-    FVoxelBiomeWaterConfig  ForestWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")
-    FVoxelBiomeRenderConfig PeaksRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")
-    FVoxelBiomeWaterConfig  PeaksWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Cliffs")
-    FVoxelBiomeRenderConfig CliffsRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Cliffs")
-    FVoxelBiomeWaterConfig  CliffsWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Mesa")
-    FVoxelBiomeRenderConfig MesaRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Mesa")
-    FVoxelBiomeWaterConfig  MesaWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters")
-    FVoxelBiomeRenderConfig CratersRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters")
-    FVoxelBiomeWaterConfig  CratersWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")
-    FVoxelBiomeRenderConfig DesertRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")
-    FVoxelBiomeWaterConfig  DesertWater;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands")
-    FVoxelBiomeRenderConfig SkylandsRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands")
-    FVoxelBiomeWaterConfig  SkylandsWater;
+    // ── Per-biome ─────────────────────────────────────────────────────────────
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")  FVoxelBiomeRenderConfig ForestRender;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")  FVoxelBiomeWaterConfig  ForestWater;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")   FVoxelBiomeRenderConfig PeaksRender;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")   FVoxelBiomeWaterConfig  PeaksWater;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Cliffs")  FVoxelBiomeRenderConfig CliffsRender;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Cliffs")  FVoxelBiomeWaterConfig  CliffsWater;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Mesa")    FVoxelBiomeRenderConfig MesaRender;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Mesa")    FVoxelBiomeWaterConfig  MesaWater;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters") FVoxelBiomeRenderConfig CratersRender;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters") FVoxelBiomeWaterConfig  CratersWater;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")  FVoxelBiomeRenderConfig DesertRender;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")  FVoxelBiomeWaterConfig  DesertWater;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands") FVoxelBiomeRenderConfig SkylandsRender;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands") FVoxelBiomeWaterConfig  SkylandsWater;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel")
     class UVoxelWaterComponent* WaterComponent = nullptr;
 
-    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy")
-    UStaticMesh* TreeMesh     = nullptr;
-    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy")
-    UStaticMesh* GrassMesh    = nullptr;
-    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy",
-              meta=(ClampMin="0.0", ClampMax="1.0"))
-    float FoliageDensity      = 0.05f;
-    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy",
-              meta=(ClampMin="0.0", ClampMax="1.0"))
-    float MaxFoliageSlope     = 0.8f;
+    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") UStaticMesh* TreeMesh  = nullptr;
+    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") UStaticMesh* GrassMesh = nullptr;
+    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy", meta=(ClampMin="0.0", ClampMax="1.0")) float FoliageDensity = 0.05f;
+    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy", meta=(ClampMin="0.0", ClampMax="1.0")) float MaxFoliageSlope = 0.8f;
 
-    UPROPERTY(VisibleAnywhere, Category="Voxel")
-    class USceneComponent* Root;
+    UPROPERTY(VisibleAnywhere, Category="Voxel") class USceneComponent* Root;
 
 private:
     FVoxelDataMap DataMap;
@@ -301,12 +221,7 @@ private:
 
     TArray<FIntVector> GenerationQueue;
     int32              QueueHead = 0;
-
-    // FIX #31: TAtomic<int32> — OnGenerationComplete lambdas decrement this
-    // from game-thread AsyncTask callbacks; DrainGenerationQueue reads it on
-    // the same game-thread tick frame, so no actual memory ordering issue on
-    // x86, but TAtomic documents intent and prevents TSan warnings.
-    TAtomic<int32> ActiveGenerations{0};
+    TAtomic<int32>     ActiveGenerations{0};
 
     FVector LastStreamedPos = FVector::ZeroVector;
     float   StreamingTimer  = 0.f;
@@ -347,11 +262,8 @@ private:
 public:
     void GenerateWorldDeferred();
 
-    UFUNCTION(BlueprintPure, Category="Voxel")
-    bool  IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
-
-    UFUNCTION(BlueprintPure, Category="Voxel")
-    float GetGenerationProgress() const;
+    UFUNCTION(BlueprintPure, Category="Voxel") bool  IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
+    UFUNCTION(BlueprintPure, Category="Voxel") float GetGenerationProgress()    const;
 
 private:
     void SpawnChunk        (const FIntVector& Coord, bool bSyncCollision = false);

@@ -1,0 +1,2 @@
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
+    float SafeSpawnHeightOffset = 200.f;
