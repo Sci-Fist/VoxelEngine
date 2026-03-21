@@ -45,14 +45,6 @@ AVoxelChunk::AVoxelChunk()
 	ProceduralMesh->SetCanEverAffectNavigation(true);
 	ProceduralMesh->SetVisibility(false);
 
-	BackfaceMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("BackfaceMesh"));
-	if (BackfaceMesh)
-	{
-		BackfaceMesh->SetupAttachment(RootComponent);
-		BackfaceMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		BackfaceMesh->bUseComplexAsSimpleCollision = false;
-		BackfaceMesh->SetCastShadow(true);
-	}
 
 	WaterMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("WaterMesh"));
 	WaterMesh->SetupAttachment(RootComponent);
@@ -232,14 +224,9 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
 
 	// ── Mesh upload ───────────────────────────────────────────────────────
-	if (BackfaceMesh) BackfaceMesh->ClearAllMeshSections();
+	// Backface upload removed to fix Z-fighting
 	UploadSection(0, Out.FlatMesh,      FlatMat,  TEXT("Flat"),       nullptr);
 	UploadSection(1, Out.SlopeMesh,     SlopeMat, TEXT("Slope"),      nullptr);
-	if (BackfaceMesh)
-	{
-		UploadSection(0, Out.BackMesh,      FlatMat,  TEXT("BackFlat"),  BackfaceMesh);
-		UploadSection(1, Out.SlopeBackMesh, SlopeMat, TEXT("BackSlope"), BackfaceMesh);
-	}
 
 	// ── Per-biome foliage ─────────────────────────────────────────────────
 	const TArray<TArray<FTransform>>& PFT = CompletedTask->GetPerFoliageTransforms();
@@ -338,7 +325,6 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	// ── Finalise ──────────────────────────────────────────────────────────
 	ProceduralMesh->SetVisibility(true);
 	ProceduralMesh->UpdateBounds();
-	if (BackfaceMesh) BackfaceMesh->UpdateBounds();
 	SetActorHiddenInGame(false);
 	SetActorEnableCollision(true);
 

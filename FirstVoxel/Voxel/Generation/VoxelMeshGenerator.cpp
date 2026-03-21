@@ -279,10 +279,10 @@ void FVoxelMeshGenerator::GenerateMesh(
         if ((GeoNormal | OutwardNormal) < 0.f) GeoNormal = -GeoNormal;
 
         const bool bIsFlat = FMath::Abs(GeoNormal.Z) >= Config.SlopeThreshold;
-        FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh   : OutMesh.SlopeMesh;
-        FVoxelMeshData& BackDest = bIsFlat ? OutMesh.BackMesh    : OutMesh.SlopeBackMesh;
-        TArray<int32>&  Map      = bIsFlat ? FlatMap             : SlopeMap;
-        TArray<int32>&  BMap     = bIsFlat ? BackMap             : SlopeBackMap;
+        FVoxelMeshData& Dest     = bIsFlat ? OutMesh.BackMesh    : OutMesh.SlopeBackMesh;
+        FVoxelMeshData& BackDest = bIsFlat ? OutMesh.FlatMesh   : OutMesh.SlopeMesh;
+        TArray<int32>&  Map      = bIsFlat ? BackMap             : SlopeBackMap;
+        TArray<int32>&  BMap     = bIsFlat ? FlatMap             : SlopeMap;
         const FColor&   VC       = GetQuadColor(ColX, ColY);
 
         // Splitting the quad along the shortest diagonal prevents

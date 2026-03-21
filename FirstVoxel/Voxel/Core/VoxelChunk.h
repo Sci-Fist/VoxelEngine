@@ -324,8 +324,7 @@ private:
 	float TransitionProgress { 0.0f };
 
 	/** Visual-only mesh component for backfaces (no collision) */
-	UPROPERTY(VisibleAnywhere)
-	class UProceduralMeshComponent* BackfaceMesh;
+
 
 	/** Time when transition started for timing-based blending. */
 	float TransitionStartTime { 0.0f };
