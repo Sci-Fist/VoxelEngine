@@ -124,10 +124,11 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
 
     float H;
 
+    static constexpr float InnerWallStart = 0.78f; // Narrower floor, steeper wall
+
     if (S.NormDist < FloorEnd)
     {
         // Zone 1: flat floor — rises 12% toward wall for natural bowl look
-        // Use power-4 so it's almost flat in the center, bends near wall
         const float FloorT = S.NormDist / FloorEnd;
         const float Rise   = FMath::Pow(FloorT, 4.f) * FMath::Abs(S.EffectiveDepth) * 0.12f;
         H = FloorH + Rise;
@@ -135,9 +136,8 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
     else if (S.NormDist < WallEnd)
     {
         // Zone 2: steep inner wall — SmoothStep so slope at both ends = 0
-        // Connects smoothly with floor at top and rim at top
-        const float WallT = FMath::SmoothStep(FloorEnd, WallEnd, S.NormDist);
-        H = FMath::Lerp(WallBaseH, RimH, WallT);
+        const float SmoothT = FMath::SmoothStep(FloorEnd, WallEnd, S.NormDist);
+        H = FMath::Lerp(WallBaseH, RimH, SmoothT);
     }
     else if (S.NormDist < RimPeak)
     {
@@ -203,9 +203,8 @@ static void ApplyMeteorUplift(float& H, const FCraterSetup& S, const FCraterBiom
     if (S.NormDist >= CRC.UpliftRadiusFraction) return;
 
     const float tUp = 1.f - S.NormDist / CRC.UpliftRadiusFraction;
-    // Uplift rises from the flat floor, capped at ~40% of rim height so it
-    // stays below the crater walls and doesn't poke above the rim.
-    const float MaxUplift = S.RimHeight * 0.40f;
+    // Uplift rises from the floor rebound; cap is fraction of full Depth
+    const float MaxUplift = FMath::Abs(S.EffectiveDepth) * 0.45f; 
     const float UpliftH   = FMath::Min(
         FMath::Pow(tUp, CRC.UpliftShapeExponent) * FMath::Abs(S.EffectiveDepth) * CRC.UpliftHeightFraction,
         MaxUplift);

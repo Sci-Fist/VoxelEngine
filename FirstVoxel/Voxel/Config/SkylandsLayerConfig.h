@@ -22,14 +22,14 @@ struct FSkylandsLayerConfig
     GENERATED_BODY()
 
     // ── Altitude ──────────────────────────────────────────────────────────────
-    // TUNED: raised so islands don't spawn at terrain level
+    // TUNED: raised so islands don't spawn at terrain level, keeping inside 160m load bound
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Minimum sky-gap between terrain surface and island bottom (cm). 24000 = 240m minimum."))
-    float MinAltitudeAboveTerrain = 24000.f;
+        meta=(ToolTip="Minimum sky-gap between terrain surface and island bottom (cm). 12000 = 120m minimum."))
+    float MinAltitudeAboveTerrain = 12000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Average altitude over mid-height terrain (cm). 35000 = 350m base height."))
-    float BaseAltitudeAboveTerrain = 35000.f;
+        meta=(ToolTip="Average altitude over mid-height terrain (cm). 18000 = 180m base height."))
+    float BaseAltitudeAboveTerrain = 18000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
     float HeightAltitudeBonus = 20000.f;
@@ -41,8 +41,9 @@ struct FSkylandsLayerConfig
     float LowTerrainAltitudeBoost = 3000.f;
 
     // ── Probability ───────────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability")
-    float BaseProbability = 0.08f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
+        meta=(ToolTip="Base probability over flat ground (0-1). Raised for denser coverage over plains."))
+    float BaseProbability = 0.35f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability")
     float HeightProbabilityBonus = 0.65f;
@@ -96,8 +97,9 @@ struct FSkylandsLayerConfig
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Absolute Noise Bounds")
     float ThresholdAtMaxProbability = -0.18f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Absolute Noise Bounds")
-    float ThresholdAtMinProbability = 0.25f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Absolute Noise Bounds",
+        meta=(ToolTip="Noise density threshold cutoff. Lowered to -0.10 to prevent transparent island voxel cores."))
+    float ThresholdAtMinProbability = -0.10f;
 
     // ── Domain warping ────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Domain Warp") bool  bEnableDomainWarping = true;
@@ -110,14 +112,17 @@ struct FSkylandsLayerConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Hanging Roots") float RootFrequency        = 0.0018f;
 
     // ── Reference calibration ─────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="References") float MaxTerrainReference = 25000.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="References",
+        meta=(ToolTip="Max height reference for scaling maps. Lowered to match flat world defaults."))
+    float MaxTerrainReference = 1000.f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="References") float RoughnessReference  = 0.8f;
 
     // TUNED: was 0.25 → 0.40 for more substantial shards
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
-        meta=(ClampMin="0.01", ClampMax="0.5",
-              ToolTip="Minimum shard size as fraction of BaseIslandSize. 0.40 = 40% = ~1600cm radius over flat plains."))
-    float ShardMinScale = 0.40f;
+        meta=(ClampMin="0.01", ClampMax="0.9",
+              ToolTip="Minimum shard size fraction. Raised to 0.60 to prevent flatline size scaling."))
+    float ShardMinScale = 0.60f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
         meta=(ClampMin="0.1", ClampMax="0.9"))

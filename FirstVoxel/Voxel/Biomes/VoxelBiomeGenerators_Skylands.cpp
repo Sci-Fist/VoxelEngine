@@ -119,11 +119,13 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         IS = FMath::Clamp(IS*((1.f-NR)+NR*SF*2.f), 150.f, GridSize*0.48f);
         if (Dist > IS) continue;
 
-        // Base altitude
+        // Base altitude - Fixed absolute height to fit inside chunk loading ranges
         const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
         const float CuH = FMath::Pow(FMath::Max(0.f,HN), 2.5f);
         const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
-        float SkyAlt = CH + AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
+        
+        // Use absolute coordinate instead of CH + offset
+        float SkyAlt = AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
 
         // Size/altitude coupling
         {
@@ -131,10 +133,10 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             IS = FMath::Clamp(IS*FMath::Lerp(FMath::Clamp(AG/FMath::Max(1.f,SC.MinAltitudeAboveTerrain),0.4f,3.f),1.f,CST),150.f,GridSize*0.48f);
             const float HA = AltBase * FMath::Lerp(0.3f,1.f,CST);
             if (CST < 0.3f)
-                SkyAlt = CH + HA*FMath::Lerp(0.2f,0.7f,CST) + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
+                SkyAlt = HA*FMath::Lerp(0.2f,0.7f,CST) + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
             else
-                SkyAlt = CH + HA + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
-            // Noise perturbation — clamped range so it can't pull altitude below minimum
+                SkyAlt = HA + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
+            
             const float NoiseRange = FMath::Lerp(5000.f, 1500.f, CST);
             SkyAlt += BG_Noise(cnX2*0.006f, cnY2*0.006f, 500.f) * NoiseRange;
         }
@@ -143,11 +145,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float ET  = FMath::Lerp(FMath::Lerp(0.12f,0.25f,HA2), SC.ThicknessRatio, CST);
         float HT = FMath::Min(IS*ET, IS*FMath::Lerp(0.75f, SC.MaxThicknessRatio, CST));
 
-        // FIX GROUNDED: enforce MinAltitudeAboveTerrain as a hard floor.
-        // Old: FMath::Max(SkyAlt, CH + HT + 200) → island bottom at CH+200cm
-        //      (2m above terrain) → merged with terrain via FMath::Max(SkyD,SurfD).
-        // New: SkyAlt - HT >= CH + MinAltitudeAboveTerrain (8000cm = 80m gap).
-        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain + HT);
+        // Removed the CH + SC.MinAltitudeAboveTerrain override that was ballooning altitude above mountains.
+        SkyAlt = FMath::Max(SkyAlt, SC.MinAltitudeAboveTerrain + HT);
 
         float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST)
                   + FMath::Lerp(0.20f, 0.f, CST);
