@@ -285,6 +285,14 @@ void AVoxelWorld::Tick(float DeltaTime)
                     CMC->UpdateFloorFromAdjustment(); 
                     CMC->bJustTeleported = false; 
                 }
+
+                if (AFirstVoxelCharacter* FVCh = Cast<AFirstVoxelCharacter>(Ch))
+                {
+                    if (FVCh->bIsFirstPerson)
+                    {
+                        FVCh->ToggleCameraMode();
+                    }
+                }
             }
         }
     }

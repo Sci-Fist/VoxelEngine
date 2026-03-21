@@ -405,14 +405,14 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     
     auto AddToSet = [&](const FIntVector& C) { SpawnSet.Add(C); };
 
-    // 1. Surrounding 3x3x3 area of player spawn
-    for (int32 x=-1; x<=1; x++) for (int32 y2=-1; y2<=1; y2++) for (int32 z2=-1; z2<=1; z2++)
+    // 1. Surrounding concentric 5x5x5 area of player spawn
+    for (int32 x=-2; x<=2; x++) for (int32 y2=-2; y2<=2; y2++) for (int32 z2=-2; z2<=2; z2++)
         AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
 
     // 2. Add ground layer strictly beneath player if they spawn in the sky
     if (FMath::Abs(SpawnCoord.Z - GroundCoord.Z) > 1)
     {
-        for (int32 x=-1; x<=1; x++) for (int32 y2=-1; y2<=1; y2++)
+        for (int32 x=-2; x<=2; x++) for (int32 y2=-2; y2<=2; y2++)
         {
             AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
             AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z + 1));
