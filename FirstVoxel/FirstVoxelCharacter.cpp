@@ -112,11 +112,7 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	if (!LookAction)        LookAction        = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Look.IA_Look"));
 	if (!MouseLookAction)   MouseLookAction   = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_MouseLook.IA_MouseLook"));
 	if (!MappingContext)    MappingContext     = LoadObject<UInputMappingContext>(nullptr, TEXT("/Game/Input/IMC_Default.IMC_Default"));
-	if (!ToggleFlyAction)   ToggleFlyAction   = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Fly.IA_Fly"));
-	if (!FlyDownAction)     FlyDownAction     = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_FlyDown.IA_FlyDown"));
-	if (!MapAction)         MapAction         = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Map.IA_Map"));
-	if (!PauseAction)       PauseAction       = LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_Pause.IA_Pause"));
-	if (!ToggleCameraAction)ToggleCameraAction= LoadObject<UInputAction>(nullptr, TEXT("/Game/Input/Actions/IA_ToggleCamera.IA_ToggleCamera"));
+
 
 	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
@@ -139,11 +135,7 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		}
 		if (DigAction)         EIC->BindAction(DigAction,   ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Dig);
 		if (BuildAction)       EIC->BindAction(BuildAction, ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::Build);
-		if (ToggleFlyAction)   EIC->BindAction(ToggleFlyAction,    ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleFly);
-		if (MapAction)         EIC->BindAction(MapAction,          ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleMap);
-		if (PauseAction)       EIC->BindAction(PauseAction,        ETriggerEvent::Started, this, &AFirstVoxelCharacter::TogglePauseMenu);
-		if (FlyDownAction)     EIC->BindAction(FlyDownAction,      ETriggerEvent::Triggered, this, &AFirstVoxelCharacter::FlyDown);
-		if (ToggleCameraAction)EIC->BindAction(ToggleCameraAction, ETriggerEvent::Started, this, &AFirstVoxelCharacter::ToggleCameraMode);
+
 	}
 
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp,   IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
@@ -158,11 +150,16 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	PlayerInputComponent->BindKey(EKeys::Four,  IE_Pressed, this, &AFirstVoxelCharacter::SelectToolFlatten);
 	PlayerInputComponent->BindKey(EKeys::F,     IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
 	PlayerInputComponent->BindKey(EKeys::M,     IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
-	PlayerInputComponent->BindKey(EKeys::R,                    IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left, IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top,   IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
-	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left,  IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
+	PlayerInputComponent->BindKey(EKeys::P,     IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
+	PlayerInputComponent->BindKey(EKeys::V,     IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
+	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &AFirstVoxelCharacter::FlyDown);
+	
+	PlayerInputComponent->BindKey(EKeys::R,                            IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Left,         IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Right,        IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Right,     IE_Pressed, this, &AFirstVoxelCharacter::ToggleFly);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Top,       IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left,      IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_Special_Right,    IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_RightShoulder,    IE_Pressed, this, &AFirstVoxelCharacter::IncreaseRadius);
 	PlayerInputComponent->BindKey(EKeys::Gamepad_LeftShoulder,     IE_Pressed, this, &AFirstVoxelCharacter::DecreaseRadius);
@@ -452,7 +449,7 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 
 	if (CurrentTool == EVoxelToolMode::Dig)
 	{
-		if (CurrentTime - DigLastActionTime > 0.05f)
+		if (CurrentTime - DigLastActionTime > 0.20f)
 		{
 			FVector EditCenter = ImpactPoint - Hit.ImpactNormal * InteractionRadius * 0.5f;
 			UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: Dig at %s radius %f"), *EditCenter.ToString(), InteractionRadius);
@@ -462,7 +459,7 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 	}
 	else if (CurrentTool == EVoxelToolMode::Build)
 	{
-		if (CurrentTime - BuildLastActionTime > 0.05f)
+		if (CurrentTime - BuildLastActionTime > 0.20f)
 		{
 			FVector EditCenter = ImpactPoint + Hit.ImpactNormal * InteractionRadius * 0.5f;
 			UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: Build at %s radius %f"), *EditCenter.ToString(), InteractionRadius);

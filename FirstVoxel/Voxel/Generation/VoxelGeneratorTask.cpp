@@ -243,7 +243,9 @@ void FVoxelGeneratorTask::BuildDensityField()
                     float D=-2.f;
                     if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx])
                     { const float Ov=DenseEditVals[Idx]; D=(Ov<0.f)?FMath::Min(D,Ov):FMath::Max(D,Ov); }
-                    Densities[Idx]=D; AirCount.IncrementExchange();
+                    Densities[Idx]=D; 
+                    if (D > 0.f) SolidCount.IncrementExchange();
+                    else         AirCount.IncrementExchange();
                 }
                 return;
             }
@@ -258,7 +260,9 @@ void FVoxelGeneratorTask::BuildDensityField()
                 float D=2.f;
                 if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx])
                 { const float Ov=DenseEditVals[Idx]; D=(Ov<0.f)?FMath::Min(D,Ov):FMath::Max(D,Ov); }
-                Densities[Idx]=D; SolidCount.IncrementExchange();
+                Densities[Idx]=D;
+                if (D > 0.f) SolidCount.IncrementExchange();
+                else         AirCount.IncrementExchange();
             }
             return;
         }

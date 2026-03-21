@@ -394,21 +394,37 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
     const FIntVector SpawnCoord  = WorldToChunkCoord(FVector(Pos.X,Pos.Y,TargetZ));
     const FIntVector GroundCoord = WorldToChunkCoord(FVector(Pos.X,Pos.Y,Surface));
-    const int32 SkyChunkZ = SpawnCoord.Z;
-    const int32 MinZ = FMath::Min(SpawnCoord.Z,GroundCoord.Z)-1;
-    const int32 MaxZ = FMath::Max(SpawnCoord.Z,GroundCoord.Z)+1;
+    // Only lock the loading screen on the immediate spawn area + ground floor.
+    // This prevents generating 150+ empty air chunks if spawning on a skyland.
+    TSet<FIntVector> SpawnSet;
+    
+    auto AddToSet = [&](const FIntVector& C) { SpawnSet.Add(C); };
 
-    TArray<FIntVector> SpawnCoords;
-    for (int32 x=-1;x<=1;x++) for (int32 y2=-1;y2<=1;y2++) for (int32 z2=MinZ;z2<=MaxZ;z2++)
-    { FIntVector C=SpawnCoord; C.X+=x; C.Y+=y2; C.Z=z2; SpawnCoords.Add(C); }
+    // 1. Surrounding 3x3x3 area of player spawn
+    for (int32 x=-1; x<=1; x++) for (int32 y2=-1; y2<=1; y2++) for (int32 z2=-1; z2<=1; z2++)
+        AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
 
-    SpawnCoords.Sort([SpawnCoord,this](const FIntVector& A, const FIntVector& B)
+    // 2. Add ground layer strictly beneath player if they spawn in the sky
+    if (FMath::Abs(SpawnCoord.Z - GroundCoord.Z) > 1)
     {
-        const bool bBA=(A.X==SpawnCoord.X&&A.Y==SpawnCoord.Y&&A.Z<SpawnCoord.Z);
-        const bool bBB=(B.X==SpawnCoord.X&&B.Y==SpawnCoord.Y&&B.Z<SpawnCoord.Z);
-        if (bBA&&!bBB) return true; if (!bBA&&bBB) return false;
-        return (FMath::Abs(A.X-SpawnCoord.X)+FMath::Abs(A.Y-SpawnCoord.Y)+FMath::Abs(A.Z-SpawnCoord.Z))
-             < (FMath::Abs(B.X-SpawnCoord.X)+FMath::Abs(B.Y-SpawnCoord.Y)+FMath::Abs(B.Z-SpawnCoord.Z));
+        for (int32 x=-1; x<=1; x++) for (int32 y2=-1; y2<=1; y2++)
+        {
+            AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
+            AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z + 1));
+            AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z - 1));
+        }
+    }
+
+    // Sort to prioritize chunk directly under feet
+    TArray<FIntVector> SpawnCoords = SpawnSet.Array();
+    SpawnCoords.Sort([SpawnCoord](const FIntVector& A, const FIntVector& B)
+    {
+        const bool bBA = (A.X==SpawnCoord.X && A.Y==SpawnCoord.Y && A.Z <= SpawnCoord.Z);
+        const bool bBB = (B.X==SpawnCoord.X && B.Y==SpawnCoord.Y && B.Z <= SpawnCoord.Z);
+        if (bBA && !bBB) return true; 
+        if (!bBA && bBB) return false;
+        return (FMath::Abs(A.X-SpawnCoord.X) + FMath::Abs(A.Y-SpawnCoord.Y) + FMath::Abs(A.Z-SpawnCoord.Z))
+             < (FMath::Abs(B.X-SpawnCoord.X) + FMath::Abs(B.Y-SpawnCoord.Y) + FMath::Abs(B.Z-SpawnCoord.Z));
     });
 
     for (const FIntVector& C : SpawnCoords)
@@ -417,26 +433,10 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
         if (!LoadedChunks.Contains(C)) 
         {
             // FIX World Gen Lag: Only cook collision synchronously for chunks strictly beneath the spawn point
-            bool bSync = (C.X == SpawnCoord.X && C.Y == SpawnCoord.Y && C.Z <= SpawnCoord.Z);
+            bool bSync = (C.X == SpawnCoord.X && C.Y == SpawnCoord.Y && C.Z <= SpawnCoord.Z && C.Z >= SpawnCoord.Z - 2);
             SpawnChunk(C, bSync); 
         }
     }
-
-    auto EnsureBelow = [&](FIntVector C)
-    { 
-        if (!LoadedChunks.Contains(C)) SpawnChunk(C, true); 
-        InitialSpawnCoords.Add(C); 
-    };
-    EnsureBelow(SpawnCoord+FIntVector(0,0,-1));
-    EnsureBelow(SpawnCoord+FIntVector(0,0,-2));
-
-    if (bSky && SkyChunkZ != SpawnCoord.Z)
-        for (int32 x=-1;x<=1;x++) for (int32 y2=-1;y2<=1;y2++)
-        {
-            auto Add=[&](FIntVector C){ if(!LoadedChunks.Contains(C)){SpawnChunk(C);InitialSpawnCoords.Add(C);} };
-            Add(FIntVector(SpawnCoord.X+x,SpawnCoord.Y+y2,SkyChunkZ));
-            if (SkyChunkZ>0) Add(FIntVector(SpawnCoord.X+x,SpawnCoord.Y+y2,SkyChunkZ-1));
-        }
 
     UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Waiting for %d spawn chunks."),InitialSpawnCoords.Num());
 }

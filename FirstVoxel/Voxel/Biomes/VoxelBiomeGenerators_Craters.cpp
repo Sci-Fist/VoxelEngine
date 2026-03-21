@@ -59,37 +59,62 @@ static FCraterSetup ComputeCraterSetup(float X, float Y, const FVoxelGenerationC
     return S;
 }
 
-// ── Central bowl + rim ────────────────────────────────────────────────────────
 static float ComputeCentralCraterHeight(const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    const float RimStart=0.65f, RimEnd=0.92f;
-    float H = S.LocalPlains + S.EffectiveDepth;
+    const float BowlEnd = 0.82f;
+    const float PeakDist = 0.96f;
+    
+    // Deeper base depth for the massive meteor feel
+    const float FloorZ = S.LocalPlains + S.EffectiveDepth;
 
-    if (S.NormDist < RimStart)
+    float H = S.LocalPlains;
+
+    if (S.NormDist < BowlEnd)
     {
-        const float BowlShape = FMath::Pow(1.f-(S.NormDist/RimStart), 0.6f);
-        H = FMath::Lerp(S.LocalPlains+S.EffectiveDepth*0.3f, S.LocalPlains+S.EffectiveDepth, BowlShape);
+        // Inside the bowl. Deep floor curving up very gradually to the bottom of the steep wall.
+        const float t = S.NormDist / BowlEnd; // 0 to 1
+        // x^6 gives a very flat, wide floor that suddenly kicks up at the walls
+        const float BowlVal = FMath::Pow(t, 6.0f);
+        H = FMath::Lerp(FloorZ, S.LocalPlains - FMath::Abs(S.EffectiveDepth)*0.2f, BowlVal);
+        
         float FloorAmp = 150.f;
-        if (CRC.CraterStyle==ECraterStyle::Meteor && CRC.bEnableImpactMelt)
+        if (CRC.CraterStyle == ECraterStyle::Meteor && CRC.bEnableImpactMelt)
         {
-            const float MeltFade = FMath::SmoothStep(CRC.MeltSheetRadiusFraction*0.8f, CRC.MeltSheetRadiusFraction, S.NormDist/RimStart);
+            const float MeltFade = FMath::SmoothStep(CRC.MeltSheetRadiusFraction*0.8f, CRC.MeltSheetRadiusFraction, S.NormDist/BowlEnd);
             FloorAmp = FMath::Lerp(CRC.MeltFloorNoiseAmplitude, 150.f, MeltFade);
         }
-        H += BG_Noise(S.nX*0.003f, S.nY*0.003f, 0.f) * FloorAmp * (1.f-BowlShape*0.5f);
+        H += BG_Noise(S.nX*0.003f, S.nY*0.003f, 0.f) * FloorAmp * (1.f - BowlVal*0.7f);
     }
-    else if (S.NormDist < RimEnd)
+    else if (S.NormDist < PeakDist)
     {
-        const float RimT = (S.NormDist-RimStart)/(RimEnd-RimStart);
-        const float RimPeak = S.LocalPlains + S.RandomRimHeight*1.5f;
-        H = FMath::Lerp(S.LocalPlains+S.EffectiveDepth, RimPeak, FMath::Pow(RimT,0.5f));
-        H += FMath::Sin(RimT*3.14159f*0.5f)*200.f*(1.f-RimT*0.6f);
+        // Inner rim wall. Rises steeply, curving "inward" (concave up).
+        const float RimT = (S.NormDist - BowlEnd) / (PeakDist - BowlEnd); // 0 to 1
+        
+        // High, thin rim with x^2 or x^3 to make the slope continuously increase until vertical peak
+        const float CurveUp = FMath::Pow(RimT, 2.8f); 
+        
+        // Make the Rim Peak much taller for the meteor style
+        const float RimPeak = S.LocalPlains + S.RandomRimHeight * 2.8f; 
+        const float BaseWallHeight = S.LocalPlains - FMath::Abs(S.EffectiveDepth)*0.2f;
+        
+        H = FMath::Lerp(BaseWallHeight, RimPeak, CurveUp);
+        
+        // Jagged inward slabs sticking out of the cliff
+        const float SlabNoise = FMath::Abs(BG_Noise(S.nX*0.015f, S.nY*0.015f, 0.f));
+        H += SlabNoise * 1800.f * CurveUp; // Big inward-pointing slabs at the rim peak
     }
     else
     {
-        const float DropT = FMath::SmoothStep(RimEnd, RimEnd+CRC.RimPeakLength, S.NormDist);
-        const float RimPeak = S.LocalPlains + S.RandomRimHeight*1.5f;
-        H = FMath::Lerp(RimPeak, S.LocalPlains+S.RandomRimHeight*0.4f, DropT);
+        // Outer crater wall. Ejecta blanket slope. Drops back from the tall peak.
+        const float OuterEnd = PeakDist + CRC.RimPeakLength * 1.5f;
+        const float DropT = FMath::SmoothStep(PeakDist, OuterEnd, S.NormDist);
+        
+        const float RimPeak = S.LocalPlains + S.RandomRimHeight * 2.8f;
+        const float RestH = S.LocalPlains + S.RandomRimHeight * 0.3f;
+        
+        H = FMath::Lerp(RimPeak, RestH, FMath::Pow(DropT, 0.7f)); // Convex outer slope (gentler drop-off)
     }
+    
     return H;
 }
 
@@ -106,86 +131,66 @@ static void ApplyMeteorUplift(float& H, const FCraterSetup& S, const FCraterBiom
 // ── Rim details ───────────────────────────────────────────────────────────────
 static void ApplyRimDetails(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    const float RimStart=0.65f, RimEnd=0.92f;
-    const float EdgeCurve = FMath::Sin(BG_Noise(S.nX*0.003f,S.nY*0.003f,0.f)*3.14159f)*500.f;
+    const float RimStart = 0.82f, RimEnd = 0.96f;
+    const float EdgeCurve = FMath::Sin(BG_Noise(S.nX*0.003f, S.nY*0.003f, 0.f)*3.14159f)*1000.f;
     float EdgeFade = 0.f;
 
-    if (S.NormDist>=RimStart && S.NormDist<=RimEnd)
+    if (S.NormDist >= RimStart && S.NormDist <= RimEnd)
     {
-        const float RimT=(S.NormDist-RimStart)/(RimEnd-RimStart);
-        EdgeFade=RimT;
-        H += BG_Noise(S.nX*0.002f,S.nY*0.002f,0.f)*CRC.RimNoiseAmplitude*0.8f
-           * FMath::SmoothStep(0.f,0.1f,RimT)*FMath::Exp(-RimT*10.f);
-        for (int32 i=0;i<2;++i)
-        {
-            const float CT=(i==0)?0.275f:0.615f, FW=(i==0)?0.075f:0.065f;
-            if (FMath::Abs(RimT-CT)<FW*2.f)
-            {
-                const float LF=FMath::SmoothStep(CT-FW,CT,RimT)*FMath::SmoothStep(CT+FW,CT,RimT);
-                H=FMath::Lerp(H,S.LocalPlains+S.RandomRimHeight*CT,LF*0.85f);
-            }
-        }
-        const float BN=BG_Noise(S.nX*0.004f,S.nY*0.004f,500.f);
-        if (FMath::Sin(S.Ang*12.f)>0.3f&&BN>0.1f)
-            H+=800.f*FMath::SmoothStep(0.3f,0.7f,FMath::Sin(S.Ang*12.f))*FMath::Sin(RimT*3.14159f);
-        const float RibN=BG_Noise(S.nX*0.012f,S.nY*0.012f,300.f);
-        if (RibN>0.4f) H+=200.f*FMath::SmoothStep(0.4f,0.7f,RibN)*FMath::Sin(RimT*3.14159f*4.f);
+        // Inner towering wall
+        const float RimT = (S.NormDist - RimStart)/(RimEnd - RimStart);
+        EdgeFade = RimT;
+        // Big jagged noise
+        H += BG_Noise(S.nX*0.002f, S.nY*0.002f, 0.f) * CRC.RimNoiseAmplitude * 1.5f * FMath::Pow(RimT, 2.f);
+        
+        // Caved-in / ribbed appearance
+        const float RibN = BG_Noise(S.nX*0.015f, S.nY*0.015f, 300.f);
+        if (RibN > 0.3f) H -= 400.f * FMath::SmoothStep(0.3f, 0.8f, RibN) * FMath::Sin(RimT*3.14159f);
     }
-    else if (S.NormDist>RimEnd && S.NormDist<RimEnd+0.05f)
-        EdgeFade=1.f-(S.NormDist-RimEnd)/0.05f;
+    else if (S.NormDist > RimEnd && S.NormDist < RimEnd + 0.1f)
+    {
+        EdgeFade = 1.f - (S.NormDist - RimEnd) / 0.1f;
+    }
 
-    H += EdgeCurve*FMath::SmoothStep(0.f,1.f,EdgeFade);
+    H += EdgeCurve * FMath::SmoothStep(0.f, 1.f, EdgeFade);
 
-    const float RockMin=0.65f*0.75f, RockMax=0.65f*1.25f;
-    if (S.NormDist>=RockMin && S.NormDist<=RockMax)
+    const float RockMin = RimStart * 0.9f, RockMax = RimEnd * 1.1f;
+    if (S.NormDist >= RockMin && S.NormDist <= RockMax)
     {
-        const float t=(S.NormDist-RockMin)/(RockMax-RockMin);
-        const float RF=FMath::SmoothStep(0.f,0.4f,t)*FMath::SmoothStep(1.f,0.6f,t);
-        const float RN=BG_Noise(S.nX*0.006f,S.nY*0.006f,0.f);
-        if (RN>0.1f) H+=(RN-0.1f)*800.f*RF;
+        const float t = (S.NormDist - RockMin) / (RockMax - RockMin);
+        const float RF = FMath::SmoothStep(0.f, 0.5f, t) * FMath::SmoothStep(1.f, 0.5f, t);
+        const float RN = BG_Noise(S.nX*0.01f, S.nY*0.01f, 0.f);
+        if (RN > 0.15f) H += (RN - 0.15f) * 1500.f * RF; // Rocky bulges
     }
-    if (S.NormDist>=RimEnd && S.NormDist<=RimEnd+CRC.RimPeakLength)
+    if (S.NormDist >= RimEnd && S.NormDist <= RimEnd + CRC.RimPeakLength)
     {
-        const float t=(S.NormDist-RimEnd)/CRC.RimPeakLength;
-        const float SF=FMath::SmoothStep(0.f,0.1f,t)*FMath::SmoothStep(1.f,0.9f,t);
-        const float TN=BG_Noise(S.nX*0.012f,S.nY*0.012f,0.f);
-        const float Dir=(TN>0.3f)?1.f:((TN<-0.3f)?-1.f:0.f);
-        if (Dir!=0.f) H+=Dir*FMath::Abs(FMath::Sin(t*3.14159f*4.f))*6000.f*SF;
-    }
-    if (S.NormDist>=RimEnd+0.02f && S.NormDist<=RimEnd+0.07f)
-    {
-        const float t=(S.NormDist-(RimEnd+0.02f))/0.05f;
-        const float Fade=FMath::SmoothStep(0.f,0.2f,t)*FMath::SmoothStep(1.f,0.8f,t);
-        const float PN=BG_Noise(S.nX*0.006f,S.nY*0.006f,0.f);
-        if (PN>0.2f) H+=(PN-0.2f)*600.f*Fade;
+        const float t = (S.NormDist - RimEnd) / CRC.RimPeakLength;
+        const float SF = FMath::SmoothStep(0.f, 0.1f, t) * FMath::SmoothStep(1.f, 0.9f, t);
+        const float TN = BG_Noise(S.nX*0.012f, S.nY*0.012f, 0.f);
+        const float Dir = (TN > 0.3f)? 1.f : ((TN < -0.3f)? -1.f : 0.f);
+        if (Dir != 0.f) H += Dir * FMath::Abs(FMath::Sin(t*3.14159f*4.f)) * 4000.f * SF; // Ejecta gouges
     }
 }
 
 // ── Ejecta blanket ────────────────────────────────────────────────────────────
 static void ApplyEjectaBlanket(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    const float RimEnd=0.92f;
-    if (S.NormDist>RimEnd && S.NormDist<=RimEnd+CRC.EjectaBlanketWidth)
+    const float RimEnd = 0.96f;
+    if (S.NormDist > RimEnd && S.NormDist <= RimEnd + CRC.EjectaBlanketWidth)
     {
-        const float Dist=S.NormDist-RimEnd;
-        const float Fade=FMath::Pow(1.f-Dist/CRC.EjectaBlanketWidth,CRC.EjectaFadeExponent);
-        H+=CRC.EjectaThickness*FMath::Abs(S.EffectiveDepth)*Fade*0.5f*FMath::SmoothStep(0.f,0.02f,Dist);
-        const float BN=BG_Noise(S.nX*CRC.EjectaBlockFrequency,S.nY*CRC.EjectaBlockFrequency,0.f);
-        if (BN>0.8f) H+=(BN-0.8f)*CRC.EjectaBlockAmplitude*FMath::SmoothStep(CRC.EjectaBlanketWidth*0.8f,CRC.EjectaBlanketWidth*0.72f,Dist);
-        const float SN=BG_Noise(S.nX*CRC.OverturnedStrataFrequency,S.nY*CRC.OverturnedStrataFrequency,0.f);
-        if (SN>0.7f) H+=(SN-0.7f)*CRC.OverturnedStrataAmplitude*FMath::Sin(Dist*10.f)*0.5f*FMath::SmoothStep(CRC.EjectaBlanketWidth*0.6f,CRC.EjectaBlanketWidth*0.55f,Dist);
+        const float Dist = S.NormDist - RimEnd;
+        const float Fade = FMath::Pow(1.f - Dist/CRC.EjectaBlanketWidth, CRC.EjectaFadeExponent);
+        H += CRC.EjectaThickness * FMath::Abs(S.EffectiveDepth) * Fade * 0.5f * FMath::SmoothStep(0.f, 0.05f, Dist);
+        const float BN = BG_Noise(S.nX*CRC.EjectaBlockFrequency, S.nY*CRC.EjectaBlockFrequency, 0.f);
+        if (BN > 0.8f) H += (BN - 0.8f) * CRC.EjectaBlockAmplitude * FMath::SmoothStep(CRC.EjectaBlanketWidth*0.8f, CRC.EjectaBlanketWidth*0.72f, Dist);
+        const float SN = BG_Noise(S.nX*CRC.OverturnedStrataFrequency, S.nY*CRC.OverturnedStrataFrequency, 0.f);
+        if (SN > 0.7f) H += (SN - 0.7f) * CRC.OverturnedStrataAmplitude * FMath::Sin(Dist*10.f) * 0.5f * FMath::SmoothStep(CRC.EjectaBlanketWidth*0.6f, CRC.EjectaBlanketWidth*0.55f, Dist);
     }
-    if (S.NormDist>RimEnd&&S.NormDist<RimEnd+0.10f)
+    if (S.NormDist > RimEnd && S.NormDist < RimEnd + 0.15f)
     {
-        const float t=(S.NormDist-RimEnd)/0.10f;
-        H+=BG_Noise(S.nX*0.0015f,S.nY*0.0015f,0.f)*CRC.RimNoiseAmplitude*0.4f
-          *FMath::SmoothStep(0.f,0.2f,t)*FMath::SmoothStep(1.f,0.8f,t)*FMath::Exp(-(S.NormDist-RimEnd)*6.f);
-    }
-    if (S.NormDist>RimEnd&&S.NormDist<RimEnd+0.15f)
-    {
-        const float t=(S.NormDist-RimEnd)/0.15f;
-        H+=BG_Noise(S.nX*0.0012f,S.nY*0.0012f,0.f)*CRC.RimNoiseAmplitude
-          *FMath::SmoothStep(0.f,0.2f,t)*FMath::SmoothStep(1.f,0.8f,t)*FMath::Exp(-(S.NormDist-RimEnd)*4.f);
+        const float t = (S.NormDist - RimEnd) / 0.15f;
+        H += BG_Noise(S.nX*0.0015f, S.nY*0.0015f, 0.f) * CRC.RimNoiseAmplitude * 0.6f
+          * FMath::SmoothStep(0.f, 0.2f, t) * FMath::SmoothStep(1.f, 0.8f, t) * FMath::Exp(-(S.NormDist - RimEnd)*8.f);
     }
 }
 
@@ -193,7 +198,7 @@ static void ApplyEjectaBlanket(float& H, const FCraterSetup& S, const FCraterBio
 static void ApplyEjectaRays(float& Total, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
     if (CRC.CraterStyle!=ECraterStyle::Meteor || !CRC.bEnableEjectaRays) return;
-    const float RayStart=0.92f, RayEnd=CRC.EjectaRayExtent;
+    const float RayStart=0.96f, RayEnd=CRC.EjectaRayExtent;
     if (S.NormDist<=RayStart || S.NormDist>=RayEnd) return;
     const float RadialFade=1.f-(S.NormDist-RayStart)/(RayEnd-RayStart);
     const float RayRot=BG_Noise(S.nX*0.00002f,S.nY*0.00002f,777.f)*3.14159f;
