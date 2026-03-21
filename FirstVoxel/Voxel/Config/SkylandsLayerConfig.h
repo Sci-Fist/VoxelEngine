@@ -22,15 +22,14 @@ struct FSkylandsLayerConfig
     GENERATED_BODY()
 
     // ── Altitude ──────────────────────────────────────────────────────────────
-    // TUNED: was 200 → 8000 so islands don't spawn at terrain level
+    // TUNED: raised so islands don't spawn at terrain level
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Minimum sky-gap between terrain surface and island bottom (cm). 8000 = 80m minimum."))
-    float MinAltitudeAboveTerrain = 8000.f;
+        meta=(ToolTip="Minimum sky-gap between terrain surface and island bottom (cm). 24000 = 240m minimum."))
+    float MinAltitudeAboveTerrain = 24000.f;
 
-    // TUNED: was 5000 → 15000 for clearly floating islands
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Average altitude over mid-height terrain (cm). 15000 = 150m base height."))
-    float BaseAltitudeAboveTerrain = 15000.f;
+        meta=(ToolTip="Average altitude over mid-height terrain (cm). 35000 = 350m base height."))
+    float BaseAltitudeAboveTerrain = 35000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
     float HeightAltitudeBonus = 20000.f;
