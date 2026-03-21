@@ -685,6 +685,7 @@ struct FVoxelGenerationConfig
     FVoxelBiomeWaterConfig CliffsWater;
     FVoxelBiomeWaterConfig MesaWater;
     FVoxelBiomeWaterConfig CratersWater;
+    FVoxelBiomeWaterConfig OceanWater;
     FVoxelBiomeWaterConfig SkylandsWater;
 
     // ---- Per-biome rendering (populated at runtime by AVoxelWorld) ----
@@ -697,6 +698,7 @@ struct FVoxelGenerationConfig
     FVoxelBiomeRenderConfig CliffsRender;
     FVoxelBiomeRenderConfig MesaRender;
     FVoxelBiomeRenderConfig CratersRender;
+    FVoxelBiomeRenderConfig OceanRender;
 
     // Skylands is not a surface biome (no EVoxelBiome entry) so it lives here
     // as a first-class render config, separate from GetBiomeRender().
@@ -713,6 +715,7 @@ struct FVoxelGenerationConfig
         case EVoxelBiome::Mesa:    return MesaRender;
         case EVoxelBiome::Craters: return CratersRender;
         case EVoxelBiome::Desert:  return DesertRender;
+        case EVoxelBiome::Ocean:   return OceanRender;
         default:                   return ForestRender;   // EVoxelBiome::Forest
         }
     }
@@ -727,6 +730,7 @@ struct FVoxelGenerationConfig
         case EVoxelBiome::Mesa:    return MesaWater;
         case EVoxelBiome::Craters: return CratersWater;
         case EVoxelBiome::Desert:  return DesertWater;
+        case EVoxelBiome::Ocean:   return OceanWater;
         default:                   return ForestWater;   // EVoxelBiome::Forest
         }
     }

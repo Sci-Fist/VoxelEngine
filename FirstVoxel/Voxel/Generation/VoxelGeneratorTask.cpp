@@ -235,6 +235,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         Ctx.NeutralSurfaceHeight = NeutralH;  // passed through to CavePass and SkylandPass
         Ctx.BiomeWeights         = Weights;
         Ctx.MaxWorldZ            = MaxWZ;
+        Ctx.CachedSeedOffset     = Config.GetSeedOffset();
 
         if (bEnSurface) SurfacePass.PrepareColumn(WX, WY, Config, Ctx);
         // CavePass.PrepareColumn sets NeutralSurfaceHeight via GetNeutralSurfaceHeightStatic

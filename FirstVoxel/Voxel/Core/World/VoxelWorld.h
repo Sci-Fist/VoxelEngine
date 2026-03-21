@@ -140,6 +140,7 @@ public:
             Out.MesaRender     = MesaRender;
             Out.CratersRender  = CratersRender;
             Out.DesertRender   = DesertRender;
+            Out.OceanRender    = OceanRender;
             Out.SkylandsRender = SkylandsRender;
             Out.ForestWater    = ForestWater;
             Out.PeaksWater     = PeaksWater;
@@ -147,6 +148,7 @@ public:
             Out.MesaWater      = MesaWater;
             Out.CratersWater   = CratersWater;
             Out.DesertWater    = DesertWater;
+            Out.OceanWater     = OceanWater;
             Out.SkylandsWater  = SkylandsWater;
         }
         Out.Seed = GenerationConfig.Seed;
@@ -226,6 +228,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters") FVoxelBiomeWaterConfig  CratersWater;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")  FVoxelBiomeRenderConfig DesertRender;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")  FVoxelBiomeWaterConfig  DesertWater;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Ocean")   FVoxelBiomeRenderConfig OceanRender;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Ocean")   FVoxelBiomeWaterConfig  OceanWater;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands") FVoxelBiomeRenderConfig SkylandsRender;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands") FVoxelBiomeWaterConfig  SkylandsWater;
 

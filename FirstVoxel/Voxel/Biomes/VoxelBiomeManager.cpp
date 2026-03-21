@@ -182,7 +182,7 @@ float FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
 float FVoxelBiomeManager::GetBaseSurfaceDensity(float Z, float SurfaceHeight,
                                                   const FVoxelGenerationConfig& Config)
 {
-    if (SurfaceHeight < Z - 1000.f) return -1.f;
+    if (SurfaceHeight < Z - 4000.f) return -1.f;
     return (SurfaceHeight - Z) / Config.SurfaceGradientScale;
 }
 

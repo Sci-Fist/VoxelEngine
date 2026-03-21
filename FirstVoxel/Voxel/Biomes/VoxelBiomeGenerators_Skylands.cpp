@@ -182,7 +182,7 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     if (!Cache.bHasSkyland) return -2.f;
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
     const FVector Off = Config.GetSeedOffset();
-    const float WX = Cache.WX_base, WY = Cache.WY_base, WZ = Z+Off.Z;
+    const float WX = X+Off.X, WY = Y+Off.Y, WZ = Z+Off.Z;
     float MaxD = -2.f;
 
     for (const FSkylandIslandData& Isl : Cache.Islands)

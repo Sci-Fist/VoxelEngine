@@ -66,7 +66,7 @@ float FVoxelDensityGenerator::GetDensityFull(
     const float X = WorldPos.X, Y = WorldPos.Y, Z = WorldPos.Z;
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
 
-    if (SurfaceHeight < Z - 1000.f) return -1.f;
+    if (SurfaceHeight < Z - 4000.f) return -1.f;
 
     const FVector SeedOff = Config.GetSeedOffset();
 

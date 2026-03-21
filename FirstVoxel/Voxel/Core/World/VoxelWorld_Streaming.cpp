@@ -51,11 +51,11 @@ void AVoxelWorld::UpdateChunkStreaming()
     if (FVector::DistSquared(PlayerPos, LastSkyAltPos) > SkyAltSnapDist * SkyAltSnapDist)
     {
         LastSkyAltPos = PlayerPos;
-        const FVoxelBiomeManager::FWeightsAndHeight Wh =
-            FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(PlayerPos.X, PlayerPos.Y, Config);
-        const float SH = Wh.SurfaceHeight;
+        const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(PlayerPos.X, PlayerPos.Y, Config);
+        const float NeutralSH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(PlayerPos.X, PlayerPos.Y, Config);
+        const float SH = NeutralSH;
         const float HN = FMath::Clamp(SH / SC.MaxTerrainReference, 0.f, 1.f);
-        const float RN = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
+        const float RN = FMath::Clamp(W.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
         const float TS = FMath::Clamp(HN*1.5f + RN*0.8f, 0.f, 1.f);
         CachedCurvedH = FMath::Pow(HN, 2.5f);
         CachedCurvedR = FMath::Pow(RN, 2.0f);
