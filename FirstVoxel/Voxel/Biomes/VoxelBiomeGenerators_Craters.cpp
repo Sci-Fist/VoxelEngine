@@ -83,7 +83,7 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
     // Flatten the high-frequency local terrain inside the bowl so rims aren't swallowed by spikes
     float FlattenBlend = 1.0f;
     if (S.NormDist < 1.0f) FlattenBlend = 0.0f; // Completely flat inside rim
-    else if (S.NormDist < 1.35f) FlattenBlend = FMath::SmoothStep(1.0f, 1.35f, S.NormDist);
+    else if (S.NormDist < 1.80f) FlattenBlend = FMath::SmoothStep(1.0f, 1.80f, S.NormDist);
     
     S.BasePlains = FMath::Lerp(CenterH, BaseHeight, FlattenBlend);
 
@@ -370,7 +370,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
     float CraterH = BaseHeight;
 
     // ── 1. Bowl profile ───────────────────────────────────────────────────────
-    if (S.NormDist < 1.35f)
+    if (S.NormDist < 1.80f)
     {
         CraterH = ComputeBowlProfile(S, CRC);
         ApplyFloorTexture(CraterH, S, CRC);
@@ -393,7 +393,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
     // ── 5. Blend crater into surrounding terrain ──────────────────────────────
     // Dominance: 1 inside the crater/rim, fades to 0 in the ejecta zone
     const float FadeStart = 0.97f;
-    const float FadeEnd   = 1.35f;
+    const float FadeEnd   = 1.80f;
     const float Dominance = FMath::SmoothStep(FadeEnd, FadeStart, S.NormDist);
 
     return FMath::Lerp(BaseHeight, CraterH, Dominance);
