@@ -122,7 +122,7 @@ float FVoxelDensityGenerator::GetDensityFull(
             SkyD = FVoxelBiomeGenerators::GetSkylandDensity(X,Y,Z,SurfaceHeight,Weights,Config,StepSize);
     }
 
-    const float HeightCutoff = SurfaceHeight + SC.MinAltitudeAboveTerrain;
+    const float HeightCutoff = NeutralSurfaceHeight + SC.MinAltitudeAboveTerrain;
     if (Z < HeightCutoff)
     {
         const float t = FMath::Clamp((HeightCutoff-Z)/400.f, 0.f,1.f);
@@ -294,7 +294,7 @@ float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos,
                 Context.SurfaceHeight, Context.BiomeWeights, Config, 1);
     }
 
-    const float HC = Context.SurfaceHeight + SC.MinAltitudeAboveTerrain;
+    const float HC = Context.NeutralSurfaceHeight + SC.MinAltitudeAboveTerrain;
     if (WorldPos.Z < HC)
     {
         const float t = FMath::Clamp((HC-WorldPos.Z)/400.f, 0.f,1.f);

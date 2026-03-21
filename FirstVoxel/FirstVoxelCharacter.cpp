@@ -463,17 +463,20 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 	}
 	else if (CurrentTool == EVoxelToolMode::Smooth)
 	{
-		World->SmoothVoxelTerrain(ImpactPoint, InteractionRadius);
+		// Simulate smooth brush by slightly carving and replacing
+		const FVector SoftPos = ImpactPoint - Hit.ImpactNormal * InteractionRadius * 0.15f;
+		World->SetVoxelSphere(SoftPos, InteractionRadius,        -0.15f, false);
+		World->SetVoxelSphere(SoftPos, InteractionRadius * 0.6f,  0.10f, true);
+		DigLastActionTime = CurrentTime;
 	}
 	else if (CurrentTool == EVoxelToolMode::Flatten)
 	{
-		{
-			const FVector Origin = ImpactPoint;
-			const float   R      = InteractionRadius;
-			World->SetVoxelSphere(Origin - FVector(0,0,R),  R,  1.f, false);
-			World->SetVoxelSphere(Origin + FVector(0,0,R),  R, -1.f, true);
-			DigLastActionTime = CurrentTime;
-		}
+		const FVector Origin = ImpactPoint;
+		const float   R      = InteractionRadius;
+		// Flatten by adding beneath and carving above
+		World->SetVoxelSphere(Origin - FVector(0,0,R),  R,  1.0f, false);
+		World->SetVoxelSphere(Origin + FVector(0,0,R),  R, -1.0f, true);
+		DigLastActionTime = CurrentTime;
 	}
 }
 

@@ -227,8 +227,13 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
         Chunk->GetProceduralMesh()->bUseAsyncCooking = !bSyncCollision;
     }
     Chunk->SetOwner(this);
-    Chunk->SetActorLabel(FString::Printf(TEXT("Chunk_%d_%d_%d"), Coord.X, Coord.Y, Coord.Z));
-    Chunk->SetFolderPath(FName(*FString::Printf(TEXT("g_VoxelChunks/Z%d"), Coord.Z)));
+#if WITH_EDITOR
+    if (!GetWorld()->IsGameWorld()) // only label in editor viewport previews, NOT in PIE streaming
+    {
+        Chunk->SetActorLabel(FString::Printf(TEXT("Chunk_%d_%d_%d"), Coord.X, Coord.Y, Coord.Z));
+        Chunk->SetFolderPath(FName(*FString::Printf(TEXT("g_VoxelChunks/Z%d"), Coord.Z)));
+    }
+#endif
     Chunk->ChunkCoord = Coord;
     Chunk->SetActorLocation(ChunkCoordToWorld(Coord));
 
@@ -290,8 +295,8 @@ void AVoxelWorld::DestroyChunk(const FIntVector& Coord)
 void AVoxelWorld::DrainGenerationQueue()
 {
     if (!GetWorld()) return;
-    // FIX World Gen Lag: Reduced per-frame spawn limits. Instantiating arrays is heavy.
-    const int32 Limit = !GetWorld()->IsGameWorld() ? 2 : (bWaitingForInitialSpawn ? 4 : 2);
+    // Raised limits: Spawning is faster now without Editor labeling bottlenecks.
+    const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : (bWaitingForInitialSpawn ? 8 : 4);
     int32 N = 0;
     while (N < Limit && QueueHead < GenerationQueue.Num())
     {
@@ -432,8 +437,8 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
         InitialSpawnCoords.Add(C); 
         if (!LoadedChunks.Contains(C)) 
         {
-            // FIX World Gen Lag: Only cook collision synchronously for chunks strictly beneath the spawn point
-            bool bSync = (C.X == SpawnCoord.X && C.Y == SpawnCoord.Y && C.Z <= SpawnCoord.Z && C.Z >= SpawnCoord.Z - 2);
+            // FIX World Gen Lag: Only cook collision synchronously for chunks strictly beneath the actual Ground surface
+            bool bSync = (C.X == GroundCoord.X && C.Y == GroundCoord.Y && C.Z <= GroundCoord.Z && C.Z >= GroundCoord.Z - 2);
             SpawnChunk(C, bSync); 
         }
     }

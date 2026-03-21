@@ -85,8 +85,8 @@ void AVoxelWorld::UpdateChunkStreaming()
 
     TSet<FIntVector> Desired;
 
-    // 1. Ground area — per-column heightmap profiling
-    const int32 GridDim  = 2 * RenderDistanceXY + 1;
+    // 1. Ground area — per-column heightmap profiling up to the Distant radius
+    const int32 GridDim  = 2 * DistantRenderDistanceXY + 1;
     const int32 NumCols  = GridDim * GridDim;
 
     TArray<int32> GroundZCenters;
@@ -94,8 +94,8 @@ void AVoxelWorld::UpdateChunkStreaming()
 
     ParallelFor(NumCols, [&](int32 Index)
     {
-        const int32 x = -RenderDistanceXY + (Index % GridDim);
-        const int32 y = -RenderDistanceXY + (Index / GridDim);
+        const int32 x = -DistantRenderDistanceXY + (Index % GridDim);
+        const int32 y = -DistantRenderDistanceXY + (Index / GridDim);
         const float ColX = (PlayerCoord.X + x + 0.5f) * ChunkWorldSize;
         const float ColY = (PlayerCoord.Y + y + 0.5f) * ChunkWorldSize;
 
@@ -106,8 +106,8 @@ void AVoxelWorld::UpdateChunkStreaming()
 
     for (int32 Index = 0; Index < NumCols; ++Index)
     {
-        const int32 x = -RenderDistanceXY + (Index % GridDim);
-        const int32 y = -RenderDistanceXY + (Index / GridDim);
+        const int32 x = -DistantRenderDistanceXY + (Index % GridDim);
+        const int32 y = -DistantRenderDistanceXY + (Index / GridDim);
         const int32 GroundZCenter = GroundZCenters[Index];
 
         for (int32 z = -RenderDistanceZ; z <= RenderDistanceZ; ++z)
@@ -188,6 +188,14 @@ void AVoxelWorld::UpdateChunkStreaming()
             (ChunkSize * VoxelSize * DetailSafeguardRange);
         if (DistSq < SafeRangeDistSq) TargetLOD = 0;
 
+        // Far-distance horizon clamp (Method A)
+        const int32 dx = FMath::Abs(It.Key.X - PlayerCoord.X);
+        const int32 dy = FMath::Abs(It.Key.Y - PlayerCoord.Y);
+        if (dx > RenderDistanceXY || dy > RenderDistanceXY)
+        {
+            TargetLOD = DistantLOD;
+        }
+
         DesiredLODs.Add(It.Key, TargetLOD);
     }
 
@@ -260,7 +268,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         const int32 FinalLOD = *FinalLODPtr;
         if (FinalLOD != Chunk->LOD)
         {
-            UE_LOG(LogVoxelWorld, Log,
+            UE_LOG(LogVoxelWorld, Verbose,
                 TEXT("VoxelWorld: Chunk (%d,%d,%d) LOD %d -> %d"),
                 Coord.X, Coord.Y, Coord.Z, Chunk->LOD, FinalLOD);
 

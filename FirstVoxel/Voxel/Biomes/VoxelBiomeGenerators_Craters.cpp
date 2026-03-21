@@ -135,21 +135,27 @@ static void ApplyRimDetails(float& H, const FCraterSetup& S, const FCraterBiomeC
     const float EdgeCurve = FMath::Sin(BG_Noise(S.nX*0.003f, S.nY*0.003f, 0.f)*3.14159f)*1000.f;
     float EdgeFade = 0.f;
 
+    const float SlopeEnd = RimEnd + 0.10f;
+    float DetailFade = 0.f;
+
     if (S.NormDist >= RimStart && S.NormDist <= RimEnd)
     {
-        // Inner towering wall
         const float RimT = (S.NormDist - RimStart)/(RimEnd - RimStart);
+        DetailFade = FMath::Pow(RimT, 2.f);
         EdgeFade = RimT;
-        // Big jagged noise
-        H += BG_Noise(S.nX*0.002f, S.nY*0.002f, 0.f) * CRC.RimNoiseAmplitude * 1.5f * FMath::Pow(RimT, 2.f);
-        
-        // Caved-in / ribbed appearance
+
         const float RibN = BG_Noise(S.nX*0.015f, S.nY*0.015f, 300.f);
         if (RibN > 0.3f) H -= 400.f * FMath::SmoothStep(0.3f, 0.8f, RibN) * FMath::Sin(RimT*3.14159f);
     }
-    else if (S.NormDist > RimEnd && S.NormDist < RimEnd + 0.1f)
+    else if (S.NormDist > RimEnd && S.NormDist <= SlopeEnd)
     {
-        EdgeFade = 1.f - (S.NormDist - RimEnd) / 0.1f;
+        DetailFade = 1.f - (S.NormDist - RimEnd)/0.10f;
+        EdgeFade = DetailFade;
+    }
+
+    if (DetailFade > 0.f)
+    {
+        H += BG_Noise(S.nX*0.002f, S.nY*0.002f, 0.f) * CRC.RimNoiseAmplitude * 1.5f * DetailFade;
     }
 
     H += EdgeCurve * FMath::SmoothStep(0.f, 1.f, EdgeFade);
@@ -167,7 +173,10 @@ static void ApplyRimDetails(float& H, const FCraterSetup& S, const FCraterBiomeC
         const float t = (S.NormDist - RimEnd) / CRC.RimPeakLength;
         const float SF = FMath::SmoothStep(0.f, 0.1f, t) * FMath::SmoothStep(1.f, 0.9f, t);
         const float TN = BG_Noise(S.nX*0.012f, S.nY*0.012f, 0.f);
-        const float Dir = (TN > 0.3f)? 1.f : ((TN < -0.3f)? -1.f : 0.f);
+        float Dir = 0.f;
+        if (TN > 0.0f) Dir = FMath::SmoothStep(0.20f, 0.40f, TN);
+        else           Dir = -FMath::SmoothStep(0.20f, 0.40f, -TN);
+
         if (Dir != 0.f) H += Dir * FMath::Abs(FMath::Sin(t*3.14159f*4.f)) * 4000.f * SF; // Ejecta gouges
     }
 }
@@ -198,6 +207,7 @@ static void ApplyEjectaBlanket(float& H, const FCraterSetup& S, const FCraterBio
 static void ApplyEjectaRays(float& Total, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
     if (CRC.CraterStyle!=ECraterStyle::Meteor || !CRC.bEnableEjectaRays) return;
+    if (CRC.EjectaRayCount <= 0) return; // FIX Infinite Loop guard
     const float RayStart=0.96f, RayEnd=CRC.EjectaRayExtent;
     if (S.NormDist<=RayStart || S.NormDist>=RayEnd) return;
     const float RadialFade=1.f-(S.NormDist-RayStart)/(RayEnd-RayStart);

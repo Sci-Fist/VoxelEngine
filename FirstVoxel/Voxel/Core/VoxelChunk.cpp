@@ -226,7 +226,7 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	}
 
 	FString CS = FString::Printf(TEXT("%d_%d_%d"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
-	UE_LOG(LogVoxelWorld, Log,
+	UE_LOG(LogVoxelWorld, Verbose,
 		TEXT("VoxelChunk: ApplyMesh (%d,%d,%d) LOD=%d Flat=%d Slope=%d"),
 		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
 		LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
@@ -361,7 +361,7 @@ void AVoxelChunk::UploadSection(int32 Idx, const FVoxelMeshData& Data,
 	UProceduralMeshComponent* M = Target ? Target : ProceduralMesh;
 	if (!IsValid(M)) return;
 	if (Data.Vertices.Num() == 0) { M->ClearMeshSection(Idx); return; } // FIX-3
-	const bool bCol = (M == ProceduralMesh);
+	const bool bCol = (M == ProceduralMesh) && (LOD < 3);
 	M->CreateMeshSection(Idx, Data.Vertices, Data.Triangles, Data.Normals,
 	                     Data.UVs, Data.VertexColors, Data.Tangents, bCol);
 	if (Mat) M->SetMaterial(Idx, Mat);

@@ -61,6 +61,12 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 SkylandsRenderDistanceXY = 8;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming", meta=(ClampMin="0"))
+    int32 DistantRenderDistanceXY = 24;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming", meta=(ClampMin="2", ClampMax="4"))
+    int32 DistantLOD = 3;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 RenderDistanceZ = 2;
@@ -159,7 +165,7 @@ public:
     float CraterSpawnMinWeight = 0.25f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
-    float SafeSpawnHeightOffset = 8000.f;
+    float SafeSpawnHeightOffset = 25000.f;
 
     UFUNCTION(CallInEditor, Category="Voxel")
     void GenerateWorld();

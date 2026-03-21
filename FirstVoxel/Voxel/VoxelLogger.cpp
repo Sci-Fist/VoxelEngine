@@ -76,5 +76,5 @@ void UVoxelLogger::LogVoxelEvent(FString Message)
         TEXT("[%s] %s\n"), *FDateTime::Now().GetTimeOfDay().ToString(), *Message);
     const FTCHARToUTF8 Conv(*Entry);
     FileHandle->Write(reinterpret_cast<const uint8*>(Conv.Get()), Conv.Length());
-    FileHandle->Flush(false); // FIX #15: flush so crash doesn't lose entries
+    // FileHandle->Flush(false); // REMOVED FOR PERFORMANCE: slows down background mesh threads
 }
