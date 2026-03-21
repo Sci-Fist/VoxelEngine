@@ -311,10 +311,9 @@ void AFirstVoxelCharacter::Tick(float DeltaTime)
 		PC->GetInputMouseDelta(MouseX, MouseY);
 		if (FMath::Abs(MouseX) > 0.001f || FMath::Abs(MouseY) > 0.001f)
 		{
-			// FIX #24: same sign convention as the Enhanced Input Look callback
-			// Both paths now call DoLook(Yaw, Pitch) where Pitch is the raw delta
-			// without manual negation here — DoLook handles the add direction.
-			DoLook(MouseX, MouseY);
+			// unified pitch convention: Pitch Positive = Look Up.
+			// Pass -MouseY because raw GetInputMouseDelta Y is positive for down.
+			DoLook(MouseX, -MouseY);
 		}
 	}
 	bLookedThisFrame = false;
@@ -352,7 +351,7 @@ void AFirstVoxelCharacter::DoLook(float Yaw, float Pitch)
 {
 	if (!GetController()) return;
 	AddControllerYawInput(Yaw);
-	AddControllerPitchInput(Pitch);
+	AddControllerPitchInput(Pitch); // Positive = Look Up convention (native UE pitch)
 }
 
 void AFirstVoxelCharacter::DoJumpStart() { Jump(); }

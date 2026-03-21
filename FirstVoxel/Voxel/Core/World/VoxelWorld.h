@@ -125,10 +125,7 @@ public:
             Out.SkylandsWater  = SkylandsWater;
         }
         Out.Seed = GenerationConfig.Seed;
-        // FIX #41: bSpawnInNaturalCrater replaces the old bForceCraterSpawn name.
-        // The field bForceCraterAtOrigin in FCraterBiomeConfig is now purely the
-        // coordinate handshake mechanism — the biome weight boost has been removed.
-        Out.Craters.bForceCraterAtOrigin = bSpawnInNaturalCrater;
+
         return Out;
     }
 
@@ -143,9 +140,7 @@ public:
     // When true, GenerateWorldDeferred() calls FindCraterSpawnLocation() to place
     // the player inside the nearest natural noise-crater. No artificial crater is created.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",
-        meta=(ToolTip="When true, the player always spawns inside a natural crater found by noise. "
-                       "No artificial crater is created — the spawn system simply searches for an "
-                       "existing crater biome peak and centers the world on it."))
+        meta=(ToolTip="When true, the player always spawns inside a natural crater found by noise. No artificial crater is created — the spawn system simply searches for an existing crater biome peak and centers the world on it."))
     bool bSpawnInNaturalCrater = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",

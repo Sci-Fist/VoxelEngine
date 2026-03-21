@@ -76,4 +76,6 @@ private:
 	 */
 	static IFileHandle* FileHandle;
 	static bool bLogInitFailed;
+
+	static void InitLoggerInternal();
 };

@@ -1,12 +1,14 @@
 // VoxelDensityGenerator.cpp
 //
-// FIX #14 — FVoxelSkylandPass::EvaluateVoxel called Config.GetSeedOffset() per voxel
-//            to undo the WX_base/WY_base offset already baked into the cache.
-//            GetSeedOffset() runs 3 LCG multiplications each call.
-//            Fix: store the raw X, Y (without offset) directly in the cache
-//            as WX_raw/WY_raw, or simply compute X = WX_base - Off.X.
-//            The per-voxel Config.GetSeedOffset() call is now cached once
-//            per PrepareColumn call instead.
+// FIX #14 (COMPLETE) — GetSeedOffset() is now called ONCE per PrepareColumn
+//   and stored in Context.CachedSeedOffset. All EvaluateVoxel implementations
+//   read from Context instead of re-calling GetSeedOffset() per voxel.
+//   Previous state: one call per EvaluateVoxel (was 3 before our session).
+//   Final state: zero calls per voxel after this fix.
+//
+// FIX #19 — Same underlying fix. The original issue noted O(N³) GetSeedOffset
+//   calls. With CachedSeedOffset in PrepareColumn this is now O(N²) — one per
+//   XY column, zero per Z slice.
 
 #include "Generation/VoxelDensityGenerator.h"
 #include "FirstVoxel.h"
@@ -54,7 +56,7 @@ float FVoxelDensityGenerator::GetDensityFull(
 
     if (SurfaceHeight < Z - 1000.f) return -1.f;
 
-    // FIX #14: compute seed offset once for this call — not per sub-function call
+    // FIX #14: compute seed offset once for this full evaluation
     const FVector SeedOff = Config.GetSeedOffset();
 
     // ── Layer 1: Surface ─────────────────────────────────────────────────────
@@ -62,13 +64,14 @@ float FVoxelDensityGenerator::GetDensityFull(
 
     if (Config.Performance.bEnableOverhangs)
     {
-        const FOverhangConfig& OC   = Config.Overhangs;
-        const float Dist             = FMath::Abs(Z - SurfaceHeight);
-        const float SteepW           = Weights.Cliffs + Weights.Peaks;
+        const FOverhangConfig& OC = Config.Overhangs;
+        const float Dist           = FMath::Abs(Z - SurfaceHeight);
+        const float SteepW         = Weights.Cliffs + Weights.Peaks;
         if (Z > Config.SeaLevel && Dist < OC.MaxDistFromSurface && SteepW > 0.05f)
         {
             const float Near = FMath::Clamp(1.f - Dist/OC.MaxDistFromSurface, 0.f, 1.f);
-            const float Ov   = FMath::PerlinNoise3D(FVector(
+            // FIX #14: use SeedOff computed once above, not GetSeedOffset() again
+            const float Ov = FMath::PerlinNoise3D(FVector(
                 (X+SeedOff.X)*OC.NoiseFrequency,
                 (Y+SeedOff.Y)*OC.NoiseFrequency,
                 (Z+SeedOff.Z)*OC.NoiseFrequency*1.8f));
@@ -80,18 +83,18 @@ float FVoxelDensityGenerator::GetDensityFull(
     if (SurfD > 0.05f)
     {
         const FCaveTunnelsConfig& CVC = Config.CaveTunnels;
-        const float DepthBelow        = FMath::Max(0.f, SurfaceHeight - Z);
-        const float EffMinDepth        = FMath::Max(CVC.MinDepthBelowSurface, 600.f);
+        const float DepthBelow         = FMath::Max(0.f, SurfaceHeight - Z);
+        const float EffMinDepth         = FMath::Max(CVC.MinDepthBelowSurface, 600.f);
         if (DepthBelow > EffMinDepth)
         {
-            const float SurfFade    = FMath::Clamp((DepthBelow-CVC.MinDepthBelowSurface)/CVC.SurfaceFadeDepth, 0.f,1.f);
-            const float BedrockJag  = FMath::PerlinNoise3D(FVector(X*CVC.BedrockJagFrequency, Y*CVC.BedrockJagFrequency, 0.f))*CVC.BedrockJagAmplitude;
-            const float BedrockFade = FMath::Clamp((Z-(CVC.BedrockDepth+BedrockJag))/1000.f, 0.f,1.f);
-            const float CaveFade    = SurfFade * BedrockFade;
-            if (CaveFade > 0.f)
+            const float SF  = FMath::Clamp((DepthBelow-CVC.MinDepthBelowSurface)/CVC.SurfaceFadeDepth, 0.f,1.f);
+            const float BJ  = FMath::PerlinNoise3D(FVector(X*CVC.BedrockJagFrequency,Y*CVC.BedrockJagFrequency,0.f))*CVC.BedrockJagAmplitude;
+            const float BF  = FMath::Clamp((Z-(CVC.BedrockDepth+BJ))/1000.f, 0.f,1.f);
+            const float CF  = SF*BF;
+            if (CF > 0.f)
             {
-                // FIX #14: pass pre-computed SeedOff to SampleCaveNoise
-                const float Tunnel = SampleCaveNoise(WorldPos, SeedOff, Config) * CaveFade;
+                // FIX #14: pass pre-computed SeedOff
+                const float Tunnel = SampleCaveNoise(WorldPos, SeedOff, Config) * CF;
                 SurfD -= FMath::Min(Tunnel, 0.85f);
             }
         }
@@ -106,7 +109,11 @@ float FVoxelDensityGenerator::GetDensityFull(
     float SkyD = -2.f;
     if (SkylandCache)
     {
-        SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(*SkylandCache, X, Y, Z, Config, StepSize);
+        // FIX #14: cache.WX_base = X + Off.X, so X_orig = WX_base - Off.X
+        // We already have SeedOff computed above
+        const float X_orig = SkylandCache->WX_base - SeedOff.X;
+        const float Y_orig = SkylandCache->WY_base - SeedOff.Y;
+        SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(*SkylandCache, X_orig, Y_orig, Z, Config, StepSize);
     }
     else
     {
@@ -132,22 +139,15 @@ float FVoxelDensityGenerator::SampleCaveNoise(
     const FVector& WorldPos, const FVector& SeedOff, const FVoxelGenerationConfig& Config)
 {
     const FCaveTunnelsConfig& CVC = Config.CaveTunnels;
-    const FVector P  = WorldPos + SeedOff;
-    const float   cs = CVC.Scale;
-
-    const float C1 = FMath::Abs(FMath::PerlinNoise3D(FVector(P.X*cs,       P.Y*cs,       P.Z*cs)));
-    const float C2 = FMath::Abs(FMath::PerlinNoise3D(FVector(P.X*cs*0.7f,  P.Y*cs*0.7f,  P.Z*cs*1.3f+5.f)));
+    const FVector P = WorldPos + SeedOff;
+    const float cs = CVC.Scale;
+    const float C1 = FMath::Abs(FMath::PerlinNoise3D(FVector(P.X*cs,      P.Y*cs,      P.Z*cs)));
+    const float C2 = FMath::Abs(FMath::PerlinNoise3D(FVector(P.X*cs*0.7f, P.Y*cs*0.7f, P.Z*cs*1.3f+5.f)));
     const float CV = C1 + C2;
-
     const float Wobble = FMath::PerlinNoise3D(FVector(
         P.X*CVC.WobbleFrequency, P.Y*CVC.WobbleFrequency, P.Z*CVC.WobbleFrequency)) * CVC.WobbleAmplitude;
     const float Thresh = CVC.Threshold + Wobble;
-
-    if (CV < Thresh)
-    {
-        const float t = 1.f - CV/Thresh;
-        return t * CVC.Strength;
-    }
+    if (CV < Thresh) { const float t = 1.f - CV/Thresh; return t * CVC.Strength; }
     return 0.f;
 }
 
@@ -155,11 +155,14 @@ float FVoxelDensityGenerator::SampleCaveNoise(
 //  Concrete Pipeline Stages
 // =============================================================================
 
+// ── FVoxelSurfacePass ─────────────────────────────────────────────────────────
 void FVoxelSurfacePass::PrepareColumn(float WorldX, float WorldY,
                                        const FVoxelGenerationConfig& Config,
                                        FColumnContext& OutContext) const
 {
     OutContext.BedrockHeight = Config.CaveTunnels.BedrockDepth;
+    // FIX #14: cache seed offset once per column — used by EvaluateVoxel
+    OutContext.CachedSeedOffset = Config.GetSeedOffset();
 }
 
 float FVoxelSurfacePass::EvaluateVoxel(const FVector& WorldPos,
@@ -176,11 +179,10 @@ float FVoxelSurfacePass::EvaluateVoxel(const FVector& WorldPos,
         const float SteepW         = Context.BiomeWeights.Cliffs + Context.BiomeWeights.Peaks;
         if (WorldPos.Z > Config.SeaLevel && Dist < OC.MaxDistFromSurface && SteepW > 0.05f)
         {
-            // FIX #14: compute seed offset once in PrepareColumn ideally, but here
-            // we compute it once per voxel (cheaper than before — was 3 calls per voxel)
-            const FVector Off  = Config.GetSeedOffset();
-            const float   Near = FMath::Clamp(1.f - Dist/OC.MaxDistFromSurface, 0.f,1.f);
-            const float   Ov   = FMath::PerlinNoise3D(FVector(
+            // FIX #14: use cached offset from PrepareColumn — no per-voxel GetSeedOffset()
+            const FVector& Off = Context.CachedSeedOffset;
+            const float Near   = FMath::Clamp(1.f - Dist/OC.MaxDistFromSurface, 0.f, 1.f);
+            const float Ov     = FMath::PerlinNoise3D(FVector(
                 (WorldPos.X+Off.X)*OC.NoiseFrequency,
                 (WorldPos.Y+Off.Y)*OC.NoiseFrequency,
                 (WorldPos.Z+Off.Z)*OC.NoiseFrequency*1.8f));
@@ -190,6 +192,7 @@ float FVoxelSurfacePass::EvaluateVoxel(const FVector& WorldPos,
     return D;
 }
 
+// ── FVoxelCavePass ────────────────────────────────────────────────────────────
 void FVoxelCavePass::PrepareColumn(float WorldX, float WorldY,
                                     const FVoxelGenerationConfig& Config,
                                     FColumnContext& OutContext) const
@@ -198,6 +201,10 @@ void FVoxelCavePass::PrepareColumn(float WorldX, float WorldY,
     NW.SetWeight(EVoxelBiome::Craters, 0.f);
     NW.Normalize();
     OutContext.NeutralSurfaceHeight = FVoxelBiomeManager::GetSurfaceHeightStatic(WorldX, WorldY, NW, Config);
+    // CachedSeedOffset already set by FVoxelSurfacePass::PrepareColumn which runs first.
+    // If CavePass runs standalone, cache it here as a fallback.
+    if (OutContext.CachedSeedOffset == FVector::ZeroVector)
+        OutContext.CachedSeedOffset = Config.GetSeedOffset();
 }
 
 float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos,
@@ -209,17 +216,18 @@ float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos,
     if (D > 0.05f)
     {
         const FCaveTunnelsConfig& CVC = Config.CaveTunnels;
-        const float DepthBelow        = FMath::Max(0.f, Context.SurfaceHeight - WorldPos.Z);
-        const float EffMinDepth        = FMath::Max(CVC.MinDepthBelowSurface, 600.f);
+        const float DepthBelow         = FMath::Max(0.f, Context.SurfaceHeight - WorldPos.Z);
+        const float EffMinDepth         = FMath::Max(CVC.MinDepthBelowSurface, 600.f);
         if (DepthBelow > EffMinDepth)
         {
-            const float SF  = FMath::Clamp((DepthBelow-CVC.MinDepthBelowSurface)/CVC.SurfaceFadeDepth, 0.f,1.f);
-            const float BJ  = FMath::PerlinNoise3D(FVector(WorldPos.X*CVC.BedrockJagFrequency, WorldPos.Y*CVC.BedrockJagFrequency, 0.f))*CVC.BedrockJagAmplitude;
-            const float BF  = FMath::Clamp((WorldPos.Z-(CVC.BedrockDepth+BJ))/1000.f, 0.f,1.f);
-            const float CF  = SF*BF;
+            const float SF = FMath::Clamp((DepthBelow-CVC.MinDepthBelowSurface)/CVC.SurfaceFadeDepth, 0.f,1.f);
+            const float BJ = FMath::PerlinNoise3D(FVector(WorldPos.X*CVC.BedrockJagFrequency,WorldPos.Y*CVC.BedrockJagFrequency,0.f))*CVC.BedrockJagAmplitude;
+            const float BF = FMath::Clamp((WorldPos.Z-(CVC.BedrockDepth+BJ))/1000.f, 0.f,1.f);
+            const float CF = SF*BF;
             if (CF > 0.f)
             {
-                const float T = FVoxelDensityGenerator::SampleCaveNoise(WorldPos, Config.GetSeedOffset(), Config)*CF;
+                // FIX #14: use cached SeedOffset — no per-voxel GetSeedOffset()
+                const float T = FVoxelDensityGenerator::SampleCaveNoise(WorldPos, Context.CachedSeedOffset, Config)*CF;
                 D -= FMath::Min(T, 0.85f);
             }
         }
@@ -230,6 +238,7 @@ float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos,
     return D;
 }
 
+// ── FVoxelSkylandPass ─────────────────────────────────────────────────────────
 void FVoxelSkylandPass::PrepareColumn(float WorldX, float WorldY,
                                        const FVoxelGenerationConfig& Config,
                                        FColumnContext& OutContext) const
@@ -242,6 +251,10 @@ void FVoxelSkylandPass::PrepareColumn(float WorldX, float WorldY,
         OutContext.SkylandCache.bHasSkyland = false;
         return;
     }
+    // CachedSeedOffset already set by Surface/CavePass. Use it here too.
+    if (OutContext.CachedSeedOffset == FVector::ZeroVector)
+        OutContext.CachedSeedOffset = Config.GetSeedOffset();
+
     OutContext.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(
         WorldX, WorldY, OutContext.SurfaceHeight, OutContext.BiomeWeights, Config);
 }
@@ -256,9 +269,9 @@ float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos,
 
     if (Context.SkylandCache.bHasSkyland)
     {
-        // FIX #14: cache.WX_base = X + Off.X, so X_orig = WX_base - Off.X
-        // Compute offset once, not per-voxel from GetSeedOffset()
-        const FVector Off = Config.GetSeedOffset();
+        // FIX #14: use cached SeedOffset — no per-voxel GetSeedOffset()
+        // cache.WX_base = X + Off.X, so X_orig = WX_base - CachedSeedOffset.X
+        const FVector& Off = Context.CachedSeedOffset;
         const float X_orig = Context.SkylandCache.WX_base - Off.X;
         const float Y_orig = Context.SkylandCache.WY_base - Off.Y;
         SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(

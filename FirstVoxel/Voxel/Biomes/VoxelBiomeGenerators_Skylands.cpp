@@ -1,0 +1,251 @@
+// VoxelBiomeGenerators_Skylands.cpp
+//
+// Floating island density system.
+//
+// FIX N10 — J-curve probability fields are NOW implemented.
+//            Previously FSkylandsLayerConfig declared:
+//              ProbMidDipCenter, ProbMidDipWidth, ProbMidDipDepth,
+//              ProbHighAltitudeThreshold, RoughnessProbabilityBonus
+//            but GetSkylandColumnCache() never read them — spawn probability
+//            was a flat BaseProbability + HeightProbabilityBonus*CST with no
+//            J-curve shaping. This caused islands to appear uniformly over
+//            mid-altitude terrain instead of clustering over flat plains
+//            (shards) and dramatic peaks (islands) with a gap in between.
+//
+//            Implementation:
+//              effective_prob = BaseProbability
+//                             + HeightBonus * high_alt_factor(HeightNorm)
+//                             + RoughnessBonus * RoughnessNorm
+//                             - MidDip * gaussian(HeightNorm)
+//
+//            where gaussian suppresses probability at ProbMidDipCenter
+//            with width ProbMidDipWidth, creating the characteristic J-curve.
+
+#include "VoxelBiomeGenerators_Shared.h"
+#include "VoxelBiomeGenerators.h"
+#include "VoxelBiomeManager.h"
+#include "Voxel/Config/VoxelGenerationConfig.h"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal: J-curve probability for a given HeightNorm + RoughnessNorm.
+// FIX N10: reads the previously-unused J-curve config fields.
+// ─────────────────────────────────────────────────────────────────────────────
+static float ComputeIslandSpawnProbability(
+    float HeightNorm, float RoughnessNorm,
+    const FSkylandsLayerConfig& SC)
+{
+    // Base probability (even over flat/sea-level terrain)
+    float P = SC.BaseProbability;
+
+    // High-altitude bonus: only kicks in above ProbHighAltitudeThreshold
+    // (FIX N10: was applied linearly from 0 via HeightProbabilityBonus*CST)
+    const float HighAltFactor = FMath::SmoothStep(
+        SC.ProbHighAltitudeThreshold, 1.f, HeightNorm);
+    P += SC.HeightProbabilityBonus * HighAltFactor;
+
+    // Roughness bonus: steep terrain spawns more islands regardless of altitude
+    P += SC.RoughnessProbabilityBonus * RoughnessNorm;
+
+    // Mid-altitude Gaussian suppression (FIX N10: was never applied before)
+    // Carves a dip centred at ProbMidDipCenter so rolling hills get fewer islands.
+    const float MidDev = (HeightNorm - SC.ProbMidDipCenter) / FMath::Max(SC.ProbMidDipWidth, 0.01f);
+    const float MidDip = SC.ProbMidDipDepth * FMath::Exp(-0.5f * MidDev * MidDev);
+    P -= MidDip;
+
+    return FMath::Clamp(P, 0.f, 1.f);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GetSkylandDensity — convenience wrapper (builds cache then evaluates)
+// ─────────────────────────────────────────────────────────────────────────────
+float FVoxelBiomeGenerators::GetSkylandDensity(float X, float Y, float Z,
+    float SurfaceHeight, const FVoxelBiomeWeightMap& Weights,
+    const FVoxelGenerationConfig& Config, int32 StepSize)
+{
+    FSkylandColumnCache Cache = GetSkylandColumnCache(X, Y, SurfaceHeight, Weights, Config);
+    return GetSkylandDensityFromCache(Cache, X, Y, Z, Config, StepSize);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GetSkylandColumnCache — build per-column island metadata
+// ─────────────────────────────────────────────────────────────────────────────
+FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
+    float X, float Y, float SurfaceHeight,
+    const FVoxelBiomeWeightMap& Weights,
+    const FVoxelGenerationConfig& Config)
+{
+    FSkylandColumnCache Cache;
+    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+    const FVector Off = Config.GetSeedOffset();
+
+    // Terrain strength at this column
+    const float ColHN = FMath::Clamp(SurfaceHeight/SC.MaxTerrainReference, 0.f, 1.f);
+    const float ColRN = FMath::Clamp(Weights.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);
+    const float ColTS = FMath::Clamp(ColHN*1.5f + ColRN*0.8f, 0.f, 1.f);
+    const float ColST = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, ColTS);
+    const float GridSize = SC.BaseIslandSize * FMath::Lerp(1.f, 4.f, ColST);
+    if (GridSize <= 0.f) return Cache;
+
+    const int32 CellX = FMath::FloorToInt(X/GridSize);
+    const int32 CellY = FMath::FloorToInt(Y/GridSize);
+    Cache.bHasSkyland = false;
+
+    for (int32 dx=-1; dx<=1; ++dx)
+    for (int32 dy=-1; dy<=1; ++dy)
+    {
+        const int32 cX = CellX+dx, cY = CellY+dy;
+        const float nX2 = (float)cX*GridSize+Off.X;
+        const float nY2 = (float)cY*GridSize+Off.Y;
+
+        // Island centre (hash-jittered within cell)
+        const float HX = (BG_Noise(nX2*0.001f, nY2*0.001f, 0.f)+1.f)*0.5f;
+        const float HY = (BG_Noise(nX2*0.001f, nY2*0.001f, 100.f)+1.f)*0.5f;
+        const float CX2 = (cX+0.12f+HX*0.76f)*GridSize;
+        const float CY2 = (cY+0.12f+HY*0.76f)*GridSize;
+        const float Dist = FMath::Sqrt(FMath::Square(X-CX2)+FMath::Square(Y-CY2));
+
+        // Terrain at island cell centre
+        const FVoxelBiomeWeightMap CW = FVoxelBiomeManager::GetBiomeWeightsStatic(CX2, CY2, Config);
+        FVoxelBiomeWeightMap NW = CW; NW.SetWeight(EVoxelBiome::Craters, 0.f); NW.Normalize();
+        const float CH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX2, CY2, NW, Config);
+        const float HN = FMath::Clamp(CH/SC.MaxTerrainReference, 0.f, 1.f);
+        const float RN = FMath::Clamp(CW.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);
+        const float TS = FMath::Clamp(HN*1.5f+RN*0.8f, 0.f, 1.f);
+        const float CST = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TS);
+
+        // FIX N10: use J-curve probability instead of flat linear ramp
+        const float cnX2 = CX2+Off.X, cnY2 = CY2+Off.Y;
+        const float HP   = (BG_Noise(cnX2*0.002f, cnY2*0.002f, 200.f)+1.f)*0.5f;
+        const float SpawnProb = ComputeIslandSpawnProbability(HN, RN, SC);
+        if (HP > SpawnProb) continue;
+
+        // Island size
+        const float SMN = FMath::Max(0.20f, SC.ShardMinScale);
+        const float SF  = (BG_FBM(cnX2*0.00008f, cnY2*0.00008f, 50.f, 2, 2.f, 0.5f, 2)+1.f)*0.5f;
+        const float NR  = FMath::Lerp(0.5f, 0.25f, CST);
+        float IS = FMath::Lerp(SC.BaseIslandSize*SMN, SC.BaseIslandSize+SC.HeightSizeBonus, CST);
+        IS = FMath::Clamp(IS*((1.f-NR)+NR*SF*2.f), 150.f, GridSize*0.48f);
+        if (Dist > IS) continue;
+
+        // Altitude
+        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
+        const float CuH = FMath::Pow(FMath::Max(0.f,HN), 2.5f);
+        const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
+        float SkyAlt = CH + AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
+
+        // Size/altitude coupling
+        {
+            const float AG = FMath::Max(0.f, SkyAlt-CH);
+            IS = FMath::Clamp(IS*FMath::Lerp(FMath::Clamp(AG/FMath::Max(1.f,SC.MinAltitudeAboveTerrain),0.4f,3.f),1.f,CST),150.f,GridSize*0.48f);
+            const float HA = AltBase * FMath::Lerp(0.3f,1.f,CST);
+            if (CST < 0.3f)
+                SkyAlt = CH + HA*FMath::Lerp(0.2f,0.7f,CST) + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
+            else
+                SkyAlt = CH + HA + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
+            SkyAlt += BG_Noise(cnX2*0.006f, cnY2*0.006f, 500.f)*FMath::Lerp(5000.f,1500.f,CST);
+        }
+
+        const float HA2 = (BG_Noise(cnX2*0.005f, cnY2*0.005f, 300.f)+1.f)*0.5f;
+        const float ET  = FMath::Lerp(FMath::Lerp(0.12f,0.25f,HA2), SC.ThicknessRatio, CST);
+        float HT = FMath::Min(IS*ET, IS*FMath::Lerp(0.75f, SC.MaxThicknessRatio, CST));
+        SkyAlt = FMath::Max(SkyAlt, CH+HT+200.f);
+
+        float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST)
+                  + FMath::Lerp(0.20f, 0.f, CST);
+        if (CST > 0.5f) Thr -= FMath::Log2(FMath::Max(1.f, IS/SC.BaseIslandSize))*0.05f;
+
+        if (FMath::Square(1.f-Dist/IS) > 0.001f)
+        {
+            FSkylandIslandData Isl;
+            Isl.SkyAlt       = SkyAlt;
+            Isl.HalfThick    = HT;
+            Isl.Threshold    = Thr;
+            Isl.ShardT       = CST;
+            Isl.HeightNorm   = HN;
+            Isl.ShardFalloff = FMath::Pow(FMath::Max(0.f,TS), 2.2f);
+            Isl.IslandSize   = IS;
+            const float SR   = FMath::Max(1.f, IS/SC.BaseIslandSize);
+            Isl.Freq         = FMath::Max(FMath::Lerp(SC.ShapeFrequency*6.f, SC.ShapeFrequency/SR, CST), 0.00025f);
+            Cache.Islands.Add(Isl);
+            Cache.bHasSkyland = true;
+        }
+    }
+
+    Cache.WX_base = X+Off.X;
+    Cache.WY_base = Y+Off.Y;
+    return Cache;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GetSkylandDensityFromCache — per-voxel evaluation
+// ─────────────────────────────────────────────────────────────────────────────
+float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
+    const FSkylandColumnCache& Cache, float X, float Y, float Z,
+    const FVoxelGenerationConfig& Config, int32 StepSize)
+{
+    if (!Cache.bHasSkyland) return -2.f;
+    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+    const FVector Off = Config.GetSeedOffset();
+    const float WX = Cache.WX_base, WY = Cache.WY_base, WZ = Z+Off.Z;
+    float MaxD = -2.f;
+
+    for (const FSkylandIslandData& Isl : Cache.Islands)
+    {
+        const float Margin = Isl.HalfThick * 0.4f;
+        if (Z < Isl.SkyAlt-Isl.HalfThick-Margin || Z > Isl.SkyAlt+Isl.HalfThick+Margin) continue;
+
+        const float tC = FMath::Clamp((Z-Isl.SkyAlt)/(Isl.HalfThick+Margin+1.f), -1.f, 1.f);
+        float Falloff;
+        if (tC >= 0.f) { const float FZ=0.35f; Falloff=(tC<FZ)?1.f:FMath::SmoothStep(0.f,1.f,1.f-(tC-FZ)/(1.f-FZ)); }
+        else { Falloff = FMath::SmoothStep(0.f,1.f,1.f-FMath::Pow(-tC,0.85f)); }
+        Falloff = FMath::Lerp(FMath::SmoothStep(0.f,1.f,1.f-FMath::Pow(FMath::Abs(tC),0.6f)), Falloff, FMath::Max(0.40f,Isl.ShardT));
+        if (Isl.ShardT < 0.3f)
+        {
+            const float RF = FMath::SmoothStep(0.f,1.f,1.f-FMath::Pow(FMath::Abs(tC),FMath::Lerp(1.f,0.6f,Isl.ShardT)));
+            Falloff = FMath::Lerp(RF, Falloff, FMath::Lerp(0.8f,0.2f,Isl.ShardT));
+        }
+        if (Falloff < 0.001f)
+        {
+            MaxD = FMath::Max(MaxD, -1.8f-FMath::Max(0.f, BG_Noise(WX*0.002f,WY*0.002f,WZ*0.001f))
+                   * FMath::Lerp(0.10f, FMath::Lerp(0.50f,2.80f,Isl.HeightNorm), Isl.ShardT));
+            continue;
+        }
+
+        float QX=WX, QY=WY;
+        if (SC.bEnableDomainWarping)
+        {
+            const float WF = SC.DomainWarpFrequency;
+            QX += BG_Noise(QX*WF+10.f, QY*WF+20.f, 0.f)*SC.DomainWarpStrength;
+            QY += BG_Noise(QX*WF+50.f, QY*WF+10.f, 0.f)*SC.DomainWarpStrength;
+        }
+
+        float SD = 0.f;
+        const float ZFS = FMath::Lerp(0.50f, 0.05f, Isl.ShardT);
+        if (Config.Performance.bEnable3DSkylandNoise || Isl.ShardT < 0.5f)
+            SD = BG_Noise(QX*Isl.Freq*0.6f, QY*Isl.Freq*0.6f, WZ*Isl.Freq*ZFS)
+               * FMath::Lerp(0.55f, 0.25f, Isl.ShardT);
+
+        const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves,2), 1, Config.Performance.MaxNoiseOctaves);
+        const float SZ = (Isl.ShardT < 0.5f) ? WZ*Isl.Freq : 0.f;
+        const float Shape = BG_FBM(QX*Isl.Freq, QY*Isl.Freq, SZ, Oct2D, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves) + SD;
+
+        float RD = 0.f;
+        if (SC.bEnableHangingRoots && tC < -0.25f)
+        {
+            const float RZN = FMath::Clamp((-tC-0.25f)/0.75f, 0.f, 1.f);
+            RD = FMath::Max(0.f, BG_FBM(QX*SC.RootFrequency, QY*SC.RootFrequency, WZ*SC.RootFrequency,
+                           2, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves)) * (1.f-RZN) * 0.4f * Falloff;
+        }
+
+        float D = FMath::SmoothStep(Isl.Threshold, Isl.Threshold+0.4f, Shape)*Falloff*2.5f - (1.f-Falloff)*1.8f + RD;
+        const float BU = FMath::Max(0.f, BG_Noise(WX*0.002f,WY*0.002f,WZ*0.001f))
+                        * FMath::Lerp(0.10f, FMath::Lerp(0.50f,2.80f,Isl.HeightNorm), Isl.ShardT);
+        float PM = 1.f;
+        if (Isl.ShardT > 0.5f && tC > 0.f) PM = FMath::SmoothStep(0.15f,0.45f,1.f-tC);
+        D -= BU*PM;
+
+        MaxD = FMath::Max(MaxD, D);
+    }
+
+    return FMath::Clamp(MaxD, -2.f, 2.f);
+}

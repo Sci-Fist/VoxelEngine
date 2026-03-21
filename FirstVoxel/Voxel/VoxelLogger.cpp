@@ -21,7 +21,7 @@ bool             UVoxelLogger::bLogInitFailed = false;
 
 // ── Private lock-free init ────────────────────────────────────────────────
 // Called from inside the lock only. Never acquires LogLock.
-static void InitLoggerInternal()
+void UVoxelLogger::InitLoggerInternal()
 {
     if (UVoxelLogger::FileHandle)
     {

@@ -324,88 +324,74 @@ struct FCraterBiomeConfig
     float CentralCraterRadius = 12000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
-        meta=(ToolTip="Depth of the crater floor below the surrounding plains (NEGATIVE cm). "
-                       "-2500 = 25m deep."))
+        meta=(ToolTip="Depth of the crater floor below the surrounding plains (NEGATIVE cm). -2500 = 25m deep."))
     float CentralCraterDepth = -2500.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
         meta=(ClampMin="0.0",
-              ToolTip="Height of the crater rim above surrounding plains (cm). "
-                       "3000 = 30m rim walls."))
+              ToolTip="Height of the crater rim above surrounding plains (cm). 3000 = 30m rim walls."))
     float CentralCraterRimHeight = 3000.f;
 
     // ── Rim shape ───────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim",
         meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="Normalized length of the outer rim peak beyond RimEnd. "
-                       "0.15 = 15% of CentralCraterRadius."))
+              ToolTip="Normalized length of the outer rim peak beyond RimEnd. 0.15 = 15% of CentralCraterRadius."))
     float RimPeakLength = 0.15f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim",
         meta=(ClampMin="0.0",
-              ToolTip="Vertical noise amplitude on the rim crest (cm). "
-                       "Higher = jaggier rim peaks."))
+              ToolTip="Vertical noise amplitude on the rim crest (cm). Higher = jaggier rim peaks."))
     float RimNoiseAmplitude = 150.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim",
         meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="How much weathering reduces the rim height. "
-                       "0=fresh, 1=fully eroded. Only meaningful with ECraterStyle::Weathered."))
+              ToolTip="How much weathering reduces the rim height. 0=fresh, 1=fully eroded. Only meaningful with ECraterStyle::Weathered."))
     float RimErosion = 0.05f;
 
     // ── Meteor style — central uplift peak ─────────────────────────────────
     // These parameters are ignored for Weathered and Fresh styles.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
-        meta=(ToolTip="[Meteor only] Enable the central rebound uplift peak. "
-                       "Real meteor craters form a central dome from impact pressure rebound."))
+        meta=(ToolTip="[Meteor only] Enable the central rebound uplift peak. Real meteor craters form a central dome from impact pressure rebound."))
     bool bEnableCentralUplift = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
         meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="[Meteor only] Uplift height as fraction of |CentralCraterDepth|. "
-                       "0.35 = uplift rises 35% of the crater depth above the floor."))
+              ToolTip="[Meteor only] Uplift height as fraction of |CentralCraterDepth|. 0.35 = uplift rises 35% of the crater depth above the floor."))
     float UpliftHeightFraction = 0.35f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
         meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="[Meteor only] Uplift dome radius as fraction of CentralCraterRadius. "
-                       "0.20 = uplift occupies central 20% of the crater."))
+              ToolTip="[Meteor only] Uplift dome radius as fraction of CentralCraterRadius. 0.20 = uplift occupies central 20% of the crater."))
     float UpliftRadiusFraction = 0.20f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
         meta=(ClampMin="0.5", ClampMax="4.0",
-              ToolTip="[Meteor only] Shape exponent for the uplift dome profile. "
-                       "1.0 = cone, 2.0 = parabolic dome, 0.5 = pointed spire."))
+              ToolTip="[Meteor only] Shape exponent for the uplift dome profile. 1.0 = cone, 2.0 = parabolic dome, 0.5 = pointed spire."))
     float UpliftShapeExponent = 1.5f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
         meta=(ClampMin="0.0",
-              ToolTip="[Meteor only] Noise amplitude on the uplift surface (cm). "
-                       "Adds rocky texture to the rebound dome."))
+              ToolTip="[Meteor only] Noise amplitude on the uplift surface (cm). Adds rocky texture to the rebound dome."))
     float UpliftNoiseAmplitude = 200.f;
 
     // ── Meteor style — impact melt sheet ───────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt",
-        meta=(ToolTip="[Meteor only] Smooth glassy floor around the central uplift. "
-                       "Suppresses FBM noise on the crater floor for a realistic melt sheet."))
+        meta=(ToolTip="[Meteor only] Smooth glassy floor around the central uplift. Suppresses FBM noise on the crater floor for a realistic melt sheet."))
     bool bEnableImpactMelt = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt",
         meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="[Meteor only] Melt sheet radius as fraction of CentralCraterRadius. "
-                       "0.60 = melt covers inner 60% of the crater floor."))
+              ToolTip="[Meteor only] Melt sheet radius as fraction of CentralCraterRadius. 0.60 = melt covers inner 60% of the crater floor."))
     float MeltSheetRadiusFraction = 0.60f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt",
         meta=(ClampMin="0.0", ClampMax="200.0",
-              ToolTip="[Meteor only] Maximum floor noise amplitude inside the melt sheet (cm). "
-                       "Effectively zero for a glassy surface; 50-100 for partial melt."))
+              ToolTip="[Meteor only] Maximum floor noise amplitude inside the melt sheet (cm). Effectively zero for a glassy surface; 50-100 for partial melt."))
     float MeltFloorNoiseAmplitude = 30.f;
 
     // ── Meteor style — ejecta rays ──────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
-        meta=(ToolTip="[Meteor only] Enable directional ejecta rays (like Tycho crater). "
-                       "Rays are narrow raised ridges extending from the rim."))
+        meta=(ToolTip="[Meteor only] Enable directional ejecta rays (like Tycho crater). Rays are narrow raised ridges extending from the rim."))
     bool bEnableEjectaRays = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
@@ -415,27 +401,23 @@ struct FCraterBiomeConfig
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
         meta=(ClampMin="0.0", ClampMax="1.0",
-              ToolTip="[Meteor only] Angular half-width of each ray in radians. "
-                       "0.15 = roughly 9 degree half-width per ray."))
+              ToolTip="[Meteor only] Angular half-width of each ray in radians. 0.15 = roughly 9 degree half-width per ray."))
     float EjectaRayAngularWidth = 0.12f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
         meta=(ClampMin="0.0",
-              ToolTip="[Meteor only] Peak height of each ejecta ray at the rim (cm). "
-                       "Rays fade outward with the EjectaFadeExponent curve."))
+              ToolTip="[Meteor only] Peak height of each ejecta ray at the rim (cm). Rays fade outward with the EjectaFadeExponent curve."))
     float EjectaRayHeight = 800.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
         meta=(ClampMin="0.1", ClampMax="4.0",
-              ToolTip="[Meteor only] Outer extent of rays as fraction of CentralCraterRadius. "
-                       "2.5 = rays extend 2.5× the crater radius outward."))
+              ToolTip="[Meteor only] Outer extent of rays as fraction of CentralCraterRadius. 2.5 = rays extend 2.5× the crater radius outward."))
     float EjectaRayExtent = 2.5f;
 
     // ── Ejecta blanket (all styles) ─────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta",
         meta=(ClampMin="0.0", ClampMax="2.0",
-              ToolTip="Width of uniform ejecta blanket beyond the rim "
-                       "(fraction of CentralCraterRadius)."))
+              ToolTip="Width of uniform ejecta blanket beyond the rim (fraction of CentralCraterRadius)."))
     float EjectaBlanketWidth = 0.30f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta",
@@ -487,14 +469,12 @@ struct FCraterBiomeConfig
 
     // ── Noise distribution ──────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution",
-        meta=(ToolTip="Perlin noise frequency used by the biome weight system to place craters. "
-                       "Lower = rarer craters. 0.00008 ≈ one large crater zone per km."))
+        meta=(ToolTip="Perlin noise frequency used by the biome weight system to place craters. Lower = rarer craters. 0.00008 ≈ one large crater zone per km."))
     float Frequency = 0.00008f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution",
         meta=(ClampMin="-1.0", ClampMax="0.0",
-              ToolTip="Noise threshold below which a point is considered a crater. "
-                       "-0.2 = fairly common."))
+              ToolTip="Noise threshold below which a point is considered a crater. -0.2 = fairly common."))
     float ImpactThreshold = -0.2f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution")
@@ -505,8 +485,7 @@ struct FCraterBiomeConfig
     float BuildingNoiseFrequency = 0.0015f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Floor",
-        meta=(ToolTip="Max floor noise amplitude (cm) in the basin. Meteor style overrides "
-                       "this with MeltFloorNoiseAmplitude inside the melt sheet zone."))
+        meta=(ToolTip="Max floor noise amplitude (cm) in the basin. Meteor style overrides this with MeltFloorNoiseAmplitude inside the melt sheet zone."))
     float BuildingNoiseAmplitude = 350.f;
 
     // ── Coordinate handshake (do not remove or reinterpret) ─────────────────
@@ -516,8 +495,7 @@ struct FCraterBiomeConfig
     // the biome weight says the crater is and where the player will spawn.
     // Setting this to (0,0) will mis-align the bowl and the spawn position.
     UPROPERTY(VisibleAnywhere, Category="Crater|SpawnSystem",
-        meta=(ToolTip="Set automatically by the spawn system — do not edit manually. "
-                       "This is the world XY of the natural noise crater peak."))
+        meta=(ToolTip="Set automatically by the spawn system — do not edit manually. This is the world XY of the natural noise crater peak."))
     FVector2D ForcedCraterCenter = FVector2D(0.f, 0.f);
 };
 

@@ -1,0 +1,3 @@
+Python and PowerShell dev-fix scripts (normal_diagnose.py, replace_densities.ps1)
+were located here during development. They should be deleted or moved outside
+Source/ to avoid polluting UBT source scanning.

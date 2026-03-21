@@ -1,1 +1,0 @@
-Line 332: const int32 NewIdx = Dest.Vertices.Add(CellVertices[cellIndex]);

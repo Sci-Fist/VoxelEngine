@@ -1,31 +1,14 @@
 // VoxelChunk.cpp
 //
-// Core chunk implementation for the voxel engine.
-//
-// FIXES APPLIED IN THIS REVISION
-// ───────────────────────────────
 // FIX-1  ClearMesh() no longer resets bUseAsyncCooking to true.
-//        The constructor intentionally sets it to false to eliminate the
-//        collision-ready timing race. Resetting it on every pool recycle
-//        silently reinstated the race for every recycled chunk.
-//
-// FIX-2  ClearMesh() and CancelGeneration() now increment WaterGeneration.
-//        FVoxelWaterSimulator::Step() uses this counter to detect stale
-//        registrations if UnregisterChunk was not called before recycle.
-//
-// FIX-3  UploadSection() explicitly clears a section when Data is empty.
-//        Previously an early return left ghost geometry (invisible colliders)
-//        from the prior generation at that section index after a dirty rebuild.
-//
-// FIX-4  Material warning booleans are now instance members (bFlatMaterialWarned /
-//        bSlopeMaterialWarned) reset in ClearMesh(). Static locals persisted
-//        across PIE sessions so the warning never re-fired after a fix.
-//
-// FIX-5  BlendMeshes() removed — it was never called (UpdateMeshState() only
-//        called SetMeshVisibility). LOD transitions now keep the old mesh
-//        visible until the new generation completes, then swap cleanly.
-//        True alpha-blended LOD transitions require material-parameter lerping
-//        which should be implemented as a follow-up (see ARCHITECTURE notes).
+// FIX-2  ClearMesh() and CancelGeneration() increment WaterGeneration.
+// FIX-3  UploadSection() explicitly clears empty sections (no ghost collision).
+// FIX-4  Material warning booleans are instance members, reset in ClearMesh().
+// FIX-5  BlendMeshes() removed (was never called).
+// FIX-N2 WaterData.WaterCellCount now incremented when filling ocean WATER_SOURCE
+//        voxels in ApplyMesh(). Previously the counter stayed at 0, making
+//        HasAnyWater() always return false for voxel-ocean chunks even when
+//        hundreds of WATER_SOURCE cells had been written.
 
 #include "Core/VoxelChunk.h"
 #include "FirstVoxel.h"
@@ -48,23 +31,19 @@ DEFINE_LOG_CATEGORY(LogVoxelChunk);
 
 AVoxelChunk::AVoxelChunk()
 {
-	// Enable Tick so UpdateMeshState() can drive LOD transitions each frame.
 	PrimaryActorTick.bCanEverTick = true;
-	PrimaryActorTick.bStartWithTickEnabled = false; // Starts disabled to save CPU
-	PrimaryActorTick.TickGroup     = TG_PrePhysics;
+	PrimaryActorTick.bStartWithTickEnabled = false;
+	PrimaryActorTick.TickGroup = TG_PrePhysics;
 
 	ProceduralMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("ProceduralMesh"));
-	RootComponent = ProceduralMesh;
-
+	RootComponent  = ProceduralMesh;
 	ProceduralMesh->SetCollisionProfileName(TEXT("BlockAll"));
 	ProceduralMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	ProceduralMesh->bUseComplexAsSimpleCollision = true;
-
-	// FIX-1 (constructor side): bUseAsyncCooking is permanently false.
-	// This eliminates the timing race where IsCollisionReady() fires before
-	// PhysX baking completes on a background thread. ClearMesh() must NOT
-	// reset this to true — see FIX-1 comment in ClearMesh().
-	ProceduralMesh->bUseAsyncCooking = false;
+	ProceduralMesh->bUseAsyncCooking = false; // FIX-1: permanently false
+	ProceduralMesh->SetCastShadow(true);
+	ProceduralMesh->SetCanEverAffectNavigation(true);
+	ProceduralMesh->SetVisibility(false);
 
 	BackfaceMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("BackfaceMesh"));
 	if (BackfaceMesh)
@@ -75,200 +54,108 @@ AVoxelChunk::AVoxelChunk()
 		BackfaceMesh->SetCastShadow(true);
 	}
 
-	ProceduralMesh->SetCastShadow(true);
-	ProceduralMesh->SetCanEverAffectNavigation(true);
-
-	// Hide terrain mesh until geometry is ready to prevent invisible-mesh pop-in.
-	// SetVisibility(true) is called at the end of ApplyMesh() once all sections
-	// are uploaded.
-	ProceduralMesh->SetVisibility(false);
-
-	MeshState = EChunkMeshState::Empty;
-	TransitionProgress = 0.0f;
-	TransitionStartTime = 0.0f;
-
 	WaterMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("WaterMesh"));
 	WaterMesh->SetupAttachment(RootComponent);
 	WaterMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	WaterMesh->bUseComplexAsSimpleCollision = false;
 	WaterMesh->bUseAsyncCooking = false;
 	WaterMesh->SetCastShadow(false);
-	WaterMesh->SetVisibility(false); // Hidden until BuildWaterMeshInternal confirms actual water geometry
+	WaterMesh->SetVisibility(false);
 
-	TreeHISM = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("TreeHISM"));
+	TreeHISM  = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("TreeHISM"));
 	TreeHISM->SetupAttachment(RootComponent);
-
 	GrassHISM = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("GrassHISM"));
 	GrassHISM->SetupAttachment(RootComponent);
+
+	MeshState          = EChunkMeshState::Empty;
+	TransitionProgress = 0.f;
+	TransitionStartTime = 0.f;
 }
 
 void AVoxelChunk::BeginPlay()
 {
 	Super::BeginPlay();
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: BeginPlay (%d,%d,%d)"),
-		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: BeginPlay (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 	bMeshApplied = false;
-	bGenerating = false;
+	bGenerating  = false;
 }
 
 void AVoxelChunk::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-
-	// Handle pending LOD transitions when chunk becomes ready.
 	if (bPendingLODTransition && IsReady() && !IsGenerating())
 	{
 		TransitionToLOD(PendingLOD);
 		bPendingLODTransition = false;
 		PendingLOD = 0;
 	}
-
-	// Drive LOD transition progress each frame.
 	if (MeshState == EChunkMeshState::Transitioning)
-	{
 		UpdateMeshState();
-	}
 }
 
 void AVoxelChunk::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	CancelGeneration();
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: EndPlay (%d,%d,%d) - Reason: %d"),
-		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, (int32)EndPlayReason));
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: EndPlay (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 	Super::EndPlay(EndPlayReason);
 }
 
 void AVoxelChunk::CancelGeneration()
 {
 	if (!bGenerating) return;
-
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: CancelGeneration (%d,%d,%d)"),
-		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
-
-	if (CurrentTask.IsValid())
-	{
-		CurrentTask->Cancel();
-	}
-
-	// FIX-2: Increment WaterGeneration on cancellation so any simulator entry
-	// registered before this cancel is detected as stale in Step().
-	++WaterGeneration;
-
+	if (CurrentTask.IsValid()) CurrentTask->Cancel();
+	++WaterGeneration; // FIX-2
 	++GenerationId;
 	bGenerating = false;
-
-	// Notify the world so it can decrement ActiveGenerations.
 	if (OnGenerationComplete)
 	{
-		auto Callback = MoveTemp(OnGenerationComplete);
+		auto CB = MoveTemp(OnGenerationComplete);
 		OnGenerationComplete = nullptr;
-		Callback();
+		CB();
 	}
 }
 
 void AVoxelChunk::GenerateAsync()
 {
 	if (bGenerating) return;
-
-	bGenerating = true;
+	bGenerating  = true;
 	bMeshApplied = false;
 
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: GenerateAsync (%d,%d,%d)"),
-		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
+	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: GenerateAsync (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 
 	uint32 TaskId = ++GenerationId;
-	FVector Origin = GetActorLocation();
 
-	IVoxelDensityProvider* DensityProvider = DensityGenerator;
-	if (!DensityProvider)
-	{
-		static FVoxelDensityGenerator FallbackDensityGenerator;
-		DensityProvider = &FallbackDensityGenerator;
-	}
+	IVoxelDensityProvider* Provider = DensityGenerator;
+	if (!Provider) { static FVoxelDensityGenerator FBD; Provider = &FBD; }
 
-	if (DataMap)
-	{
-		const FVector Pos = GetActorLocation();
-		const float Size = ChunkSize * VoxelSize;
-		const FIntVector GlobalChunkCoord(
-			FMath::FloorToInt(Pos.X / Size),
-			FMath::FloorToInt(Pos.Y / Size),
-			FMath::FloorToInt(Pos.Z / Size));
-		// DataMap->GetChunkData(GlobalChunkCoord, LocalMap); // TODO: re-enable when DataMap round-trip is verified
-	}
-
-	if (!DenseChunk.IsValid())
-	{
-		DenseChunk = MakeShared<FVoxelDensityChunk>();
-	}
-
-	UE_LOG(LogVoxelWorld, Log, TEXT("VoxelChunk: GenerateAsync called for (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
+	if (!DenseChunk.IsValid()) DenseChunk = MakeShared<FVoxelDensityChunk>();
 
 	CurrentTask = MakeShared<FVoxelGeneratorTask>(
-		ChunkCoord,
-		Origin,
-		ChunkSize,
-		VoxelSize,
-		GetStepSize(),
-		GenerationConfig,
-		DensityProvider,
-		FoliageDensity,
-		MaxFoliageSlope,
-		DataMap
-	);
+		ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
+		GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap);
 
 	TSharedPtr<FVoxelGeneratorTask> LocalTask = CurrentTask;
-	TWeakObjectPtr<AVoxelChunk> SafeThis(this);
+	TWeakObjectPtr<AVoxelChunk>     SafeThis(this);
 
 	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [SafeThis, LocalTask, TaskId]()
 	{
 		if (!SafeThis.IsValid() || LocalTask->IsCancelled()) return;
-
 		LocalTask->Execute();
-
 		AsyncTask(ENamedThreads::GameThread, [SafeThis, LocalTask, TaskId]()
 		{
 			if (SafeThis.IsValid() && TaskId == SafeThis->GenerationId)
-			{
 				SafeThis->ApplyMesh(LocalTask);
-			}
 		});
 	});
 }
 
 void AVoxelChunk::GenerateSync()
 {
-	static FVoxelDensityGenerator GlobalDensityGeneratorSync;
-
-	if (DataMap)
-	{
-		const FVector Pos = GetActorLocation();
-		const float Size = ChunkSize * VoxelSize;
-		const FIntVector GlobalChunkCoord(
-			FMath::FloorToInt(Pos.X / Size),
-			FMath::FloorToInt(Pos.Y / Size),
-			FMath::FloorToInt(Pos.Z / Size));
-		// DataMap->GetChunkData(GlobalChunkCoord, LocalMap); // TODO: re-enable when DataMap round-trip is verified
-	}
-
-	if (!DenseChunk.IsValid())
-	{
-		DenseChunk = MakeShared<FVoxelDensityChunk>();
-	}
-
+	static FVoxelDensityGenerator GSync;
+	if (!DenseChunk.IsValid()) DenseChunk = MakeShared<FVoxelDensityChunk>();
 	CurrentTask = MakeShared<FVoxelGeneratorTask>(
-		ChunkCoord,
-		GetActorLocation(),
-		ChunkSize,
-		VoxelSize,
-		GetStepSize(),
-		GenerationConfig,
-		&GlobalDensityGeneratorSync,
-		FoliageDensity,
-		MaxFoliageSlope,
-		DataMap
-	);
-
+		ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
+		GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap);
 	CurrentTask->Execute();
 	ApplyMesh(CurrentTask);
 }
@@ -280,48 +167,34 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	const FVoxelMeshOutput& Out = CompletedTask->GetMeshOutput();
 	MeshOutput = Out;
 
-	if (!DenseChunk.IsValid())
-	{
-		DenseChunk = MakeShared<FVoxelDensityChunk>();
-	}
+	if (!DenseChunk.IsValid()) DenseChunk = MakeShared<FVoxelDensityChunk>();
 	DenseChunk->Densities = CompletedTask->GetDensities();
 
-	// ── Determine per-biome material overrides ────────────────────────────
+	// ── Material resolution ────────────────────────────────────────────────
 	const float HalfChunk = ChunkSize * VoxelSize * 0.5f;
 	const FVector ChunkCentre = GetActorLocation() + FVector(HalfChunk, HalfChunk, HalfChunk);
-	const FVoxelBiomeWeightMap CentreWeights =
-		FVoxelBiomeManager::GetBiomeWeightsStatic(ChunkCentre.X, ChunkCentre.Y, GenerationConfig);
-	const EVoxelBiome DominantBiome = CentreWeights.GetDominantBiome();
-	const FVoxelBiomeRenderConfig& BiomeRender = GenerationConfig.GetBiomeRender(DominantBiome);
+	const FVoxelBiomeWeightMap CW = FVoxelBiomeManager::GetBiomeWeightsStatic(ChunkCentre.X, ChunkCentre.Y, GenerationConfig);
+	const EVoxelBiome Dom = CW.GetDominantBiome();
+	const FVoxelBiomeRenderConfig& BR = GenerationConfig.GetBiomeRender(Dom);
 
 	UMaterialInterface* FlatMat  = MasterFlatMaterial;
 	UMaterialInterface* SlopeMat = MasterSlopeMaterial;
-
-	if (BiomeRender.bEnableMaterialOverride &&
-		CentreWeights.GetWeight(DominantBiome) >= BiomeRender.MaterialOverrideThreshold)
+	if (BR.bEnableMaterialOverride && CW.GetWeight(Dom) >= BR.MaterialOverrideThreshold)
 	{
-		if (BiomeRender.FlatMaterialOverride)  FlatMat  = BiomeRender.FlatMaterialOverride.Get();
-		if (BiomeRender.SlopeMaterialOverride) SlopeMat = BiomeRender.SlopeMaterialOverride.Get();
+		if (BR.FlatMaterialOverride)  FlatMat  = BR.FlatMaterialOverride.Get();
+		if (BR.SlopeMaterialOverride) SlopeMat = BR.SlopeMaterialOverride.Get();
 	}
-
 	if (!FlatMat)  FlatMat  = MasterFlatMaterial;
 	if (!SlopeMat) SlopeMat = MasterSlopeMaterial;
 
-	// FIX-4: Use instance member warning flags instead of static locals.
-	// Static locals persisted across PIE sessions so warnings never re-fired
-	// after fixing the material assignment. Instance members reset in ClearMesh()
-	// when the chunk is returned to the pool, so the warning fires again on
-	// the next PIE session if the problem still exists.
+	// FIX-4: per-instance warning flags
 	if (!FlatMat)
 	{
 		FlatMat = UMaterial::GetDefaultMaterial(MD_Surface);
 		if (!bFlatMaterialWarned)
 		{
 			bFlatMaterialWarned = true;
-			UE_LOG(LogVoxelChunk, Warning,
-				TEXT("VoxelChunk: MasterFlatMaterial is not assigned on AVoxelWorld. "
-				     "Assign a material in the Details panel under Voxel|Materials. "
-				     "Using engine default. (This message fires once per chunk pool recycle.)"));
+			UE_LOG(LogVoxelChunk, Warning, TEXT("VoxelChunk: MasterFlatMaterial unassigned — using default."));
 		}
 	}
 	if (!SlopeMat)
@@ -330,193 +203,124 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		if (!bSlopeMaterialWarned)
 		{
 			bSlopeMaterialWarned = true;
-			UE_LOG(LogVoxelChunk, Warning,
-				TEXT("VoxelChunk: MasterSlopeMaterial is not assigned on AVoxelWorld. "
-				     "Assign a material in the Details panel under Voxel|Materials. "
-				     "Using engine default. (This message fires once per chunk pool recycle.)"));
+			UE_LOG(LogVoxelChunk, Warning, TEXT("VoxelChunk: MasterSlopeMaterial unassigned — using default."));
 		}
 	}
 
-	// ── Generate biome-specific mesh names ────────────────────────────────
-	FString BiomeName;
-	switch (DominantBiome)
-	{
-		case EVoxelBiome::Forest:  BiomeName = TEXT("Forest"); break;
-		case EVoxelBiome::Desert:  BiomeName = TEXT("Desert"); break;
-		case EVoxelBiome::Peaks:   BiomeName = TEXT("Peaks");  break;
-		case EVoxelBiome::Cliffs:  BiomeName = TEXT("Cliffs"); break;
-		case EVoxelBiome::Mesa:    BiomeName = TEXT("Mesa");   break;
-		case EVoxelBiome::Craters: BiomeName = TEXT("Craters"); break;
-		default:                   BiomeName = TEXT("Mixed");  break;
-	}
-
-	FString ChunkCoordStr = FString::Printf(TEXT("%d_%d_%d"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
-	FString FlatMeshName  = FString::Printf(TEXT("FlatMesh_%s_%s"), *BiomeName, *ChunkCoordStr);
-
-	const FIntVector& TaskCoord = CompletedTask->GetChunkCoord();
+	FString CS = FString::Printf(TEXT("%d_%d_%d"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
 	UE_LOG(LogVoxelWorld, Log,
-		TEXT("VoxelChunk: ApplyMesh for Chunk (%d,%d,%d) [TaskCoord=(%d,%d,%d)] (LOD %d). Flat=%d verts, Slope=%d verts"),
+		TEXT("VoxelChunk: ApplyMesh (%d,%d,%d) LOD=%d Flat=%d Slope=%d"),
 		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
-		TaskCoord.X, TaskCoord.Y, TaskCoord.Z,
 		LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
 
-	// ── Upload terrain mesh sections ──────────────────────────────────────
-	// FIX-3 is applied inside UploadSection(): empty sections are explicitly
-	// cleared rather than skipped, preventing ghost geometry on dirty rebuilds.
+	// ── Mesh upload ───────────────────────────────────────────────────────
 	if (BackfaceMesh) BackfaceMesh->ClearAllMeshSections();
-
-	UploadSection(0, Out.FlatMesh,  FlatMat,  FlatMeshName);
-	UploadSection(1, Out.SlopeMesh, SlopeMat, FString::Printf(TEXT("SlopeMesh_%s"), *ChunkCoordStr));
-
+	UploadSection(0, Out.FlatMesh,      FlatMat,  TEXT("Flat"),       nullptr);
+	UploadSection(1, Out.SlopeMesh,     SlopeMat, TEXT("Slope"),      nullptr);
 	if (BackfaceMesh)
 	{
-		UploadSection(0, Out.BackMesh,      FlatMat,  FString::Printf(TEXT("BackMesh_Flat_%s"),  *ChunkCoordStr), BackfaceMesh);
-		UploadSection(1, Out.SlopeBackMesh, SlopeMat, FString::Printf(TEXT("BackMesh_Slope_%s"), *ChunkCoordStr), BackfaceMesh);
+		UploadSection(0, Out.BackMesh,      FlatMat,  TEXT("BackFlat"),  BackfaceMesh);
+		UploadSection(1, Out.SlopeBackMesh, SlopeMat, TEXT("BackSlope"), BackfaceMesh);
 	}
 
-	// ── Per-biome foliage system (Recycled / Pooled) ──────────────────────
-	const TArray<TArray<FTransform>>& PerFoliage   = CompletedTask->GetPerFoliageTransforms();
-	const TArray<UStaticMesh*>&       FoliageMeshes = CompletedTask->GetPerFoliageMeshes();
+	// ── Per-biome foliage ─────────────────────────────────────────────────
+	const TArray<TArray<FTransform>>& PFT = CompletedTask->GetPerFoliageTransforms();
+	const TArray<UStaticMesh*>&       PFM = CompletedTask->GetPerFoliageMeshes();
+	bool bPBF = false;
+	for (int32 s=0; s<PFT.Num(); ++s)
+		if (PFM.IsValidIndex(s) && PFM[s] && PFT[s].Num()>0) { bPBF=true; break; }
 
-	bool bHasPerBiomeFoliage = false;
-	for (int32 s = 0; s < PerFoliage.Num(); ++s)
+	if (bPBF)
 	{
-		if (FoliageMeshes.IsValidIndex(s) && FoliageMeshes[s] && PerFoliage[s].Num() > 0)
+		for (int32 Slot=0; Slot<PFT.Num(); ++Slot)
 		{
-			bHasPerBiomeFoliage = true;
-			break;
-		}
-	}
-
-	if (bHasPerBiomeFoliage)
-	{
-		for (int32 Slot = 0; Slot < PerFoliage.Num(); ++Slot)
-		{
-			UStaticMesh* SlotMesh = (Slot < FoliageMeshes.Num()) ? FoliageMeshes[Slot] : nullptr;
-			if (!SlotMesh || PerFoliage[Slot].Num() == 0) continue;
-
+			UStaticMesh* SM = (Slot<PFM.Num()) ? PFM[Slot] : nullptr;
+			if (!SM || PFT[Slot].Num()==0) continue;
 			UInstancedStaticMeshComponent* HISM = nullptr;
-
-			if (Slot < BiomeFoliageHISMs.Num())
-			{
-				HISM = BiomeFoliageHISMs[Slot];
-				if (HISM) HISM->ClearInstances();
-			}
+			if (Slot < BiomeFoliageHISMs.Num()) { HISM=BiomeFoliageHISMs[Slot]; if (HISM) HISM->ClearInstances(); }
 			else
 			{
-				const int32 NextIdx = BiomeFoliageHISMs.Num();
-				HISM = NewObject<UInstancedStaticMeshComponent>(this,
-					*FString::Printf(TEXT("BiomeFoliage_%d"), NextIdx));
+				HISM = NewObject<UInstancedStaticMeshComponent>(this, *FString::Printf(TEXT("BFoliage_%d"), BiomeFoliageHISMs.Num()));
 				HISM->SetupAttachment(RootComponent);
 				HISM->RegisterComponent();
 				BiomeFoliageHISMs.Add(HISM);
 			}
-
-			if (HISM)
-			{
-				HISM->SetMobility(EComponentMobility::Movable);
-				HISM->SetStaticMesh(SlotMesh);
-				HISM->SetCullDistances(0, 12000);
-				HISM->AddInstances(PerFoliage[Slot], false);
-			}
+			if (HISM) { HISM->SetMobility(EComponentMobility::Movable); HISM->SetStaticMesh(SM); HISM->SetCullDistances(0,12000); HISM->AddInstances(PFT[Slot],false); }
 		}
-
-		// Destroy excess components beyond current foliage slot count.
-		for (int32 i = PerFoliage.Num(); i < BiomeFoliageHISMs.Num(); ++i)
-		{
-			if (BiomeFoliageHISMs[i])
-			{
-				BiomeFoliageHISMs[i]->ClearInstances();
-				BiomeFoliageHISMs[i]->DestroyComponent();
-			}
-		}
-		BiomeFoliageHISMs.SetNum(PerFoliage.Num());
+		for (int32 i=PFT.Num(); i<BiomeFoliageHISMs.Num(); ++i)
+			if (BiomeFoliageHISMs[i]) { BiomeFoliageHISMs[i]->ClearInstances(); BiomeFoliageHISMs[i]->DestroyComponent(); }
+		BiomeFoliageHISMs.SetNum(PFT.Num());
 	}
 	else
 	{
-		// ── Legacy fallback: global tree/grass meshes ─────────────────────
 		if (IsValid(TreeHISM))  TreeHISM->ClearInstances();
 		if (IsValid(GrassHISM)) GrassHISM->ClearInstances();
-
-		const TArray<FTransform>& TreeTransforms  = CompletedTask->GetTreeTransforms();
-		const TArray<FTransform>& GrassTransforms = CompletedTask->GetGrassTransforms();
-
-		if (IsValid(TreeHISM) && TreeMesh)
-		{
-			TreeHISM->SetMobility(EComponentMobility::Movable);
-			TreeHISM->SetStaticMesh(TreeMesh);
-			TreeHISM->AddInstances(TreeTransforms, false);
-		}
-
-		if (IsValid(GrassHISM) && GrassMesh)
-		{
-			GrassHISM->SetMobility(EComponentMobility::Movable);
-			GrassHISM->SetStaticMesh(GrassMesh);
-			GrassHISM->AddInstances(GrassTransforms, false);
-		}
+		if (IsValid(TreeHISM)  && TreeMesh)  { TreeHISM->SetMobility(EComponentMobility::Movable);  TreeHISM->SetStaticMesh(TreeMesh);  TreeHISM->AddInstances(CompletedTask->GetTreeTransforms(),  false); }
+		if (IsValid(GrassHISM) && GrassMesh) { GrassHISM->SetMobility(EComponentMobility::Movable); GrassHISM->SetStaticMesh(GrassMesh); GrassHISM->AddInstances(CompletedTask->GetGrassTransforms(), false); }
 	}
 
-	// ── Populate water solid-cell map ─────────────────────────────────────
+	// ── Water data population ─────────────────────────────────────────────
 	{
 		WaterData.Init(ChunkSize);
-		const TArray<float>& Dens  = CompletedTask->GetDensities();
-		const int32 EffCS      = ChunkSize / GetStepSize();
-		const int32 S          = EffCS + 3;
-		const int32 StepSz     = GetStepSize();
+		const TArray<float>& Dens = CompletedTask->GetDensities();
+		const int32 EffCS  = ChunkSize / GetStepSize();
+		const int32 S      = EffCS + 3;
+		const int32 StepSz = GetStepSize();
 		const FVector ChunkOrigin = GetActorLocation();
 
+		// Build ocean biome weight cache (O(N²) not O(N³))
 		TArray<float, TInlineAllocator<32*32>> OceanWeights;
 		OceanWeights.SetNumZeroed(ChunkSize * ChunkSize);
-		for (int32 ly = 0; ly < ChunkSize; ++ly)
-		for (int32 lx = 0; lx < ChunkSize; ++lx)
+		for (int32 ly=0; ly<ChunkSize; ++ly)
+		for (int32 lx=0; lx<ChunkSize; ++lx)
 		{
 			const float ColX = ChunkOrigin.X + lx * VoxelSize;
 			const float ColY = ChunkOrigin.Y + ly * VoxelSize;
-			const FVoxelBiomeWeightMap Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(ColX, ColY, GenerationConfig);
-			OceanWeights[lx + ly * ChunkSize] = Weights.GetWeight(EVoxelBiome::Ocean);
+			const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(ColX, ColY, GenerationConfig);
+			OceanWeights[lx + ly * ChunkSize] = W.GetWeight(EVoxelBiome::Ocean);
 		}
 
-		for (int32 lz = 0; lz < ChunkSize; ++lz)
-		for (int32 ly = 0; ly < ChunkSize; ++ly)
-		for (int32 lx = 0; lx < ChunkSize; ++lx)
+		for (int32 lz=0; lz<ChunkSize; ++lz)
+		for (int32 ly=0; ly<ChunkSize; ++ly)
+		for (int32 lx=0; lx<ChunkSize; ++lx)
 		{
-			const int32 ex   = FMath::Clamp(lx / StepSz, 0, EffCS - 1);
-			const int32 ey   = FMath::Clamp(ly / StepSz, 0, EffCS - 1);
-			const int32 ez   = FMath::Clamp(lz / StepSz, 0, EffCS - 1);
-			const int32 DIdx = (ex + 1) + (ey + 1) * S + (ez + 1) * S * S;
-			const int32 WIdx = lx + ly * ChunkSize + lz * ChunkSize * ChunkSize;
-			if (Dens.IsValidIndex(DIdx))
-			{
-				const bool bSolid = (Dens[DIdx] > 0.f);
-				WaterData.SolidCells[WIdx] = bSolid;
+			const int32 ex   = FMath::Clamp(lx/StepSz, 0, EffCS-1);
+			const int32 ey   = FMath::Clamp(ly/StepSz, 0, EffCS-1);
+			const int32 ez   = FMath::Clamp(lz/StepSz, 0, EffCS-1);
+			const int32 DIdx = (ex+1) + (ey+1)*S + (ez+1)*S*S;
+			const int32 WIdx = lx + ly*ChunkSize + lz*ChunkSize*ChunkSize;
+			if (!Dens.IsValidIndex(DIdx)) continue;
 
-				if (GenerationConfig.Water.bUseVoxelOcean && !bSolid)
+			const bool bSolid = (Dens[DIdx] > 0.f);
+			WaterData.SolidCells[WIdx] = bSolid;
+
+			if (GenerationConfig.Water.bUseVoxelOcean && !bSolid)
+			{
+				const float WorldZ = ChunkOrigin.Z + lz * VoxelSize;
+				if (WorldZ <= GenerationConfig.SeaLevel)
 				{
-					const float WorldZ = ChunkOrigin.Z + lz * VoxelSize;
-					if (WorldZ <= GenerationConfig.SeaLevel)
+					const float OceanWeight = OceanWeights[lx + ly * ChunkSize];
+					if (OceanWeight > 0.49f)
 					{
-						const float OceanWeight = OceanWeights[lx + ly * ChunkSize];
-						if (OceanWeight > 0.49f)
-						{
-							WaterData.Cells[WIdx] = WATER_SOURCE;
-						}
+						WaterData.Cells[WIdx] = WATER_SOURCE;
+						// FIX-N2: maintain WaterCellCount so HasAnyWater() is O(1)
+						// Previously this counter was never incremented for ocean voxels,
+						// making HasAnyWater() always return false for ocean chunks.
+						WaterData.WaterCellCount++;
 					}
 				}
 			}
 		}
 	}
 
-	// ── Register water source positions ───────────────────────────────────
+	// ── Water source callback ─────────────────────────────────────────────
 	if (OnChunkWaterReady)
-	{
 		OnChunkWaterReady(CompletedTask->GetWaterSources());
-	}
 
-	// Reveal terrain mesh — geometry and materials are fully ready.
+	// ── Finalise ──────────────────────────────────────────────────────────
 	ProceduralMesh->SetVisibility(true);
 	ProceduralMesh->UpdateBounds();
 	if (BackfaceMesh) BackfaceMesh->UpdateBounds();
-
 	SetActorHiddenInGame(false);
 	SetActorEnableCollision(true);
 
@@ -524,59 +328,30 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	bGenerating  = false;
 	MeshState    = EChunkMeshState::Ready;
 
-	// Notify AVoxelWorld that this chunk finished so it can decrement ActiveGenerations.
 	if (OnGenerationComplete)
 	{
-		auto Callback = MoveTemp(OnGenerationComplete);
+		auto CB = MoveTemp(OnGenerationComplete);
 		OnGenerationComplete = nullptr;
-		Callback();
+		CB();
 	}
 }
 
-void AVoxelChunk::UploadSection(
-	int32 SectionIndex,
-	const FVoxelMeshData& Data,
-	UMaterialInterface* Mat,
-	const FString& SectionName,
-	UProceduralMeshComponent* TargetMesh)
+void AVoxelChunk::UploadSection(int32 Idx, const FVoxelMeshData& Data,
+                                UMaterialInterface* Mat, const FString&,
+                                UProceduralMeshComponent* Target)
 {
-	UProceduralMeshComponent* MeshToUse = TargetMesh ? TargetMesh : ProceduralMesh;
-	if (!IsValid(MeshToUse)) return;
-
-	// FIX-3: If the new geometry is empty, explicitly clear the section at
-	// this index rather than returning early. The previous early return left
-	// ghost geometry (invisible mesh sections with active collision) from a
-	// prior generation when a dirty rebuild produced fewer or empty sections.
-	if (Data.Vertices.Num() == 0)
-	{
-		MeshToUse->ClearMeshSection(SectionIndex);
-		return;
-	}
-
-	// Build collision only for the main terrain mesh, not backface or water.
-	const bool bBuildCollision = (MeshToUse == ProceduralMesh);
-
-	MeshToUse->CreateMeshSection(
-		SectionIndex,
-		Data.Vertices,
-		Data.Triangles,
-		Data.Normals,
-		Data.UVs,
-		Data.VertexColors,
-		Data.Tangents,
-		bBuildCollision);
-
-	if (Mat) MeshToUse->SetMaterial(SectionIndex, Mat);
+	UProceduralMeshComponent* M = Target ? Target : ProceduralMesh;
+	if (!IsValid(M)) return;
+	if (Data.Vertices.Num() == 0) { M->ClearMeshSection(Idx); return; } // FIX-3
+	const bool bCol = (M == ProceduralMesh);
+	M->CreateMeshSection(Idx, Data.Vertices, Data.Triangles, Data.Normals,
+	                     Data.UVs, Data.VertexColors, Data.Tangents, bCol);
+	if (Mat) M->SetMaterial(Idx, Mat);
 }
 
-void AVoxelChunk::DestroyAndRebuildMesh()
-{
-	GenerateAsync();
-}
+void AVoxelChunk::DestroyAndRebuildMesh() { GenerateAsync(); }
 
-// ---------------------------------------------------------------------------
-// Water Mesh
-// ---------------------------------------------------------------------------
+// ── Water mesh ────────────────────────────────────────────────────────────────
 void AVoxelChunk::RebuildWaterMesh()
 {
 	if (!IsValid(WaterMesh)) return;
@@ -587,157 +362,89 @@ void AVoxelChunk::RebuildWaterMesh()
 void AVoxelChunk::BuildWaterMeshInternal()
 {
 	WaterMesh->ClearAllMeshSections();
+	if (!WaterMaterial || !WaterData.HasAnyWater()) { WaterMesh->SetVisibility(false); return; }
 
-	if (!WaterMaterial)
+	TArray<FVector>   V; TArray<int32>     T;
+	TArray<FVector>   N; TArray<FVector2D> U;
+
+	const int32 CS = ChunkSize; const float VS = VoxelSize;
+
+	auto GetW = [&](int32 lx,int32 ly,int32 lz)->uint8
 	{
-		WaterMesh->SetVisibility(false);
-		return;
-	}
-
-	if (!WaterData.HasAnyWater())
-	{
-		WaterMesh->SetVisibility(false);
-		return;
-	}
-
-	TArray<FVector>   Vertices;
-	TArray<int32>     Triangles;
-	TArray<FVector>   Normals;
-	TArray<FVector2D> UVs;
-
-	const int32 CS = ChunkSize;
-	const float VS = VoxelSize;
-
-	auto GetW = [&](int32 lx, int32 ly, int32 lz) -> uint8
-	{
-		if (lx < 0 || lx >= CS || ly < 0 || ly >= CS || lz < 0 || lz >= CS)
-			return WATER_EMPTY;
-		return WaterData.Cells[lx + ly * CS + lz * CS * CS];
+		if (lx<0||lx>=CS||ly<0||ly>=CS||lz<0||lz>=CS) return WATER_EMPTY;
+		return WaterData.Cells[lx+ly*CS+lz*CS*CS];
 	};
-
-	auto IsSolidLocal = [&](int32 lx, int32 ly, int32 lz) -> bool
+	auto IsSolidLocal = [&](int32 lx,int32 ly,int32 lz)->bool
 	{
-		if (lx < 0 || lx >= CS || ly < 0 || ly >= CS || lz < 0 || lz >= CS)
-			return false;
-		const int32 i = lx + ly * CS + lz * CS * CS;
+		if (lx<0||lx>=CS||ly<0||ly>=CS||lz<0||lz>=CS) return false;
+		const int32 i=lx+ly*CS+lz*CS*CS;
 		return WaterData.SolidCells.IsValidIndex(i) && WaterData.SolidCells[i];
 	};
-
-	auto EmitQuad = [&](FVector V0, FVector V1, FVector V2, FVector V3, FVector Normal)
+	auto Quad=[&](FVector v0,FVector v1,FVector v2,FVector v3,FVector Norm)
 	{
-		const int32 Base = Vertices.Num();
-		Vertices.Add(V0); Vertices.Add(V1); Vertices.Add(V2); Vertices.Add(V3);
-		Normals.Add(Normal); Normals.Add(Normal); Normals.Add(Normal); Normals.Add(Normal);
-		UVs.Add({0,0}); UVs.Add({1,0}); UVs.Add({1,1}); UVs.Add({0,1});
-		Triangles.Add(Base+0); Triangles.Add(Base+1); Triangles.Add(Base+2);
-		Triangles.Add(Base+0); Triangles.Add(Base+2); Triangles.Add(Base+3);
+		const int32 B=V.Num();
+		V.Add(v0); V.Add(v1); V.Add(v2); V.Add(v3);
+		N.Add(Norm); N.Add(Norm); N.Add(Norm); N.Add(Norm);
+		U.Add({0,0}); U.Add({1,0}); U.Add({1,1}); U.Add({0,1});
+		T.Add(B); T.Add(B+1); T.Add(B+2);
+		T.Add(B); T.Add(B+2); T.Add(B+3);
 	};
 
-	for (int32 lz = 0; lz < CS; ++lz)
-	for (int32 ly = 0; ly < CS; ++ly)
-	for (int32 lx = 0; lx < CS; ++lx)
+	for (int32 lz=0;lz<CS;++lz)
+	for (int32 ly=0;ly<CS;++ly)
+	for (int32 lx=0;lx<CS;++lx)
 	{
-		uint8 Level = GetW(lx, ly, lz);
-		if (Level == WATER_EMPTY) continue;
-
-		const float WLevel  = (Level == WATER_SOURCE ? 1.f : (float)Level / (float)WATER_FULL);
-		const float x0 = lx * VS, y0 = ly * VS, z0 = lz * VS;
-		const float x1 = x0 + VS, y1 = y0 + VS;
-		const float zTop = z0 + VS * WLevel;
-
-		const bool bAboveEmpty = !IsSolidLocal(lx, ly, lz+1) && GetW(lx, ly, lz+1) == WATER_EMPTY;
-		if (bAboveEmpty)
-		{
-			EmitQuad(
-				FVector(x0, y0, zTop), FVector(x1, y0, zTop),
-				FVector(x1, y1, zTop), FVector(x0, y1, zTop),
-				FVector::UpVector);
-		}
+		uint8 Level=GetW(lx,ly,lz);
+		if (Level==WATER_EMPTY) continue;
+		const float WL=(Level==WATER_SOURCE?1.f:(float)Level/(float)WATER_FULL);
+		const float x0=lx*VS,y0=ly*VS,z0=lz*VS,x1=x0+VS,y1=y0+VS,zT=z0+VS*WL;
+		if (!IsSolidLocal(lx,ly,lz+1)&&GetW(lx,ly,lz+1)==WATER_EMPTY)
+			Quad({x0,y0,zT},{x1,y0,zT},{x1,y1,zT},{x0,y1,zT},FVector::UpVector);
 	}
 
-	if (Vertices.Num() == 0)
-	{
-		WaterMesh->SetVisibility(false);
-		return;
-	}
-
-	TArray<FColor>           EmptyColors;
-	TArray<FProcMeshTangent> EmptyTangents;
-	WaterMesh->CreateMeshSection(0, Vertices, Triangles, Normals, UVs, EmptyColors, EmptyTangents, false);
+	if (V.Num()==0) { WaterMesh->SetVisibility(false); return; }
+	TArray<FColor> EC; TArray<FProcMeshTangent> ET;
+	WaterMesh->CreateMeshSection(0, V, T, N, U, EC, ET, false);
 	if (WaterMaterial) WaterMesh->SetMaterial(0, WaterMaterial);
 	WaterMesh->SetVisibility(true);
-
-	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelWater: Chunk %s emitted %d procedural water vertices"),
-		*ChunkCoord.ToString(), Vertices.Num()));
 }
 
+// ── ClearMesh ─────────────────────────────────────────────────────────────────
 void AVoxelChunk::ClearMesh()
 {
 	++GenerationId;
-
 	ProceduralMesh->ClearAllMeshSections();
 	ProceduralMesh->SetVisibility(false);
-
-	// FIX-1: Do NOT reset bUseAsyncCooking here.
-	// The constructor sets it to false permanently to eliminate the collision-
-	// ready timing race (IsCollisionReady() firing before PhysX baking
-	// completes). Resetting it to true on pool recycle would silently reinstate
-	// the race for every chunk after its first use — the exact bug this was
-	// fixed to prevent.
-
+	// FIX-1: do NOT reset bUseAsyncCooking
 	WaterMesh->ClearAllMeshSections();
 	WaterMesh->SetVisibility(false);
-
-	// FIX-2: Increment WaterGeneration so FVoxelWaterSimulator::Step() can
-	// detect stale entries if UnregisterChunk was not called before recycle.
-	++WaterGeneration;
-	WaterData.Reset();
-
-	// Recycle per-biome foliage components — clear instances but keep the
-	// components alive so the pool avoids repeated allocation/deallocation.
-	for (UInstancedStaticMeshComponent* HISM : BiomeFoliageHISMs)
-	{
-		if (IsValid(HISM)) HISM->ClearInstances();
-	}
-
-	// FIX-4: Reset per-chunk material warning flags so they re-fire correctly
-	// on the next generation if the material assignment issue still exists.
-	bFlatMaterialWarned  = false;
+	++WaterGeneration; // FIX-2
+	WaterData.Reset(); // also resets WaterCellCount to 0
+	for (UInstancedStaticMeshComponent* H : BiomeFoliageHISMs)
+		if (IsValid(H)) H->ClearInstances();
+	bFlatMaterialWarned  = false; // FIX-4
 	bSlopeMaterialWarned = false;
-
 	bMeshApplied = false;
 	MeshState    = EChunkMeshState::Empty;
 }
 
 #if WITH_EDITOR
-void AVoxelChunk::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+void AVoxelChunk::PostEditChangeProperty(FPropertyChangedEvent& E)
 {
-	Super::PostEditChangeProperty(PropertyChangedEvent);
-	if (PropertyChangedEvent.Property)
-	{
-		GenerateSync();
-	}
+	Super::PostEditChangeProperty(E);
+	if (E.Property) GenerateSync();
 }
 #endif
 
-// ---------------------------------------------------------------------------
-// LOD Transition
-// ---------------------------------------------------------------------------
-
+// ── LOD Transition ────────────────────────────────────────────────────────────
 void AVoxelChunk::TransitionToLOD(int32 NewLOD)
 {
-	if (NewLOD == LOD) return;
-	if (bGenerating) return;
-
-	// Keep the previous mesh visible during the transition so there is never
-	// a frame where neither the old nor the new mesh is visible (popping).
-	// The new mesh replaces it when ApplyMesh() completes and sets MeshState = Ready.
+	if (NewLOD==LOD || bGenerating) return;
 	PreviousMesh        = MeshOutput;
 	TargetLOD           = NewLOD;
 	MeshState           = EChunkMeshState::Transitioning;
-	TransitionProgress  = 0.0f;
+	TransitionProgress  = 0.f;
 	TransitionStartTime = GetWorld()->GetTimeSeconds();
-
 	LOD = NewLOD;
 	SetActorTickEnabled(true);
 	GenerateAsync();
@@ -745,62 +452,26 @@ void AVoxelChunk::TransitionToLOD(int32 NewLOD)
 
 void AVoxelChunk::UpdateMeshState()
 {
-	// FIX-5: BlendMeshes() has been removed — it was never called and its
-	// implementation was broken (it ignored the From parameter). LOD transitions
-	// now keep the old mesh visible via SetMeshVisibility(true) while the new
-	// generation runs in the background. ApplyMesh() sets MeshState = Ready when
-	// the new mesh is uploaded, ending the transition cleanly.
-	//
-	// True alpha-blend LOD transitions should be implemented via a material
-	// scalar parameter (LodBlend 0→1) lerped by a FTimerHandle in
-	// TransitionToLOD(), which does not require holding two full mesh copies.
-	// This is tracked as a future improvement.
-
 	if (MeshState == EChunkMeshState::Transitioning)
 	{
-		const float CurrentTime = GetWorld()->GetTimeSeconds();
-		const float Elapsed     = CurrentTime - TransitionStartTime;
-		TransitionProgress      = FMath::Clamp(Elapsed / TransitionDuration, 0.0f, 1.0f);
-
-		// Keep the mesh visible at all times during transition to prevent
-		// geometry popping at chunk boundaries.
+		const float T = GetWorld()->GetTimeSeconds();
+		TransitionProgress = FMath::Clamp((T-TransitionStartTime)/TransitionDuration, 0.f, 1.f);
 		SetMeshVisibility(true);
-
-		// The transition state ends when ApplyMesh() fires and sets
-		// MeshState = Ready. We disable Tick at that point.
-		// The progress timer here provides a timeout: if generation somehow
-		// takes longer than TransitionDuration, we don't keep ticking forever.
-		if (TransitionProgress >= 1.0f && MeshState == EChunkMeshState::Transitioning)
-		{
-			// Generation is still running; reset timer and keep waiting.
-			TransitionStartTime = CurrentTime;
-			TransitionProgress  = 0.0f;
-		}
+		if (TransitionProgress >= 1.f && MeshState == EChunkMeshState::Transitioning)
+		{ TransitionStartTime=T; TransitionProgress=0.f; }
 	}
-	else
-	{
-		// Transition resolved (ApplyMesh set Ready or generation was cancelled).
-		PreviousMesh.Reset();
-		SetActorTickEnabled(false);
-	}
+	else { PreviousMesh.Reset(); SetActorTickEnabled(false); }
 }
 
-void AVoxelChunk::SetMeshVisibility(bool bVisible)
+void AVoxelChunk::SetMeshVisibility(bool bV)
 {
 	if (ProceduralMesh)
 	{
-		const bool bHasGeometry =
-			(MeshState != EChunkMeshState::Empty) &&
-			(MeshState != EChunkMeshState::Error);
-		ProceduralMesh->SetVisibility(bVisible && bHasGeometry);
+		const bool bHasGeo = (MeshState!=EChunkMeshState::Empty)&&(MeshState!=EChunkMeshState::Error);
+		ProceduralMesh->SetVisibility(bV && bHasGeo);
 	}
-
-	if (WaterMesh)
-		WaterMesh->SetVisibility(bVisible);
-
-	for (UInstancedStaticMeshComponent* HISM : BiomeFoliageHISMs)
-		if (HISM) HISM->SetVisibility(bVisible);
-
-	if (TreeHISM)  TreeHISM->SetVisibility(bVisible);
-	if (GrassHISM) GrassHISM->SetVisibility(bVisible);
+	if (WaterMesh) WaterMesh->SetVisibility(bV);
+	for (UInstancedStaticMeshComponent* H : BiomeFoliageHISMs) if (H) H->SetVisibility(bV);
+	if (TreeHISM)  TreeHISM->SetVisibility(bV);
+	if (GrassHISM) GrassHISM->SetVisibility(bV);
 }

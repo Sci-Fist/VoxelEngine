@@ -1,10 +1,13 @@
 // =============================================================================
 // IVoxelGenerationStage.h
 //
-// FIX #13 — Removed FColumnContext::Blackboard (TMap<FName,float>).
-//           It was constructed and destructed for every XY column
-//           (~1225/chunk) but nothing in the codebase ever wrote to or
-//           read from it.  Removing it saves ~128B heap overhead per column.
+// FIX #13 — FColumnContext::Blackboard (TMap<FName,float>) removed.
+//           Was constructed/destructed for every XY column but never used.
+//
+// FIX #14 (COMPLETE) — Added FVector CachedSeedOffset to FColumnContext.
+//           PrepareColumn now caches Config.GetSeedOffset() once per column.
+//           EvaluateVoxel reads it from Context instead of calling GetSeedOffset()
+//           per voxel (saves 3 LCG multiplications × N³ voxels per chunk).
 // =============================================================================
 #pragma once
 
@@ -24,7 +27,13 @@ struct FColumnContext
 
     FVoxelBiomeWeightMap BiomeWeights;
     FSkylandColumnCache  SkylandCache;
-    // Blackboard removed (#13) — was never used, added ~128B heap per column
+
+    // FIX #14: SeedOffset cached once per PrepareColumn call.
+    // Previously EvaluateVoxel called Config.GetSeedOffset() per voxel,
+    // which runs 3 LCG multiplications each time.
+    // PrepareColumn (called once per XY column) caches the result here;
+    // all EvaluateVoxel calls for that column reuse it at zero extra cost.
+    FVector CachedSeedOffset = FVector::ZeroVector;
 };
 
 // ---------------------------------------------------------------------------
@@ -35,12 +44,12 @@ class IVoxelGenerationStage
 public:
     virtual ~IVoxelGenerationStage() = default;
 
-    /** O(N²) — called once per XY column. Populate OutContext. */
+    /** O(N²) — called once per XY column. Populate OutContext including CachedSeedOffset. */
     virtual void PrepareColumn(float WorldX, float WorldY,
                                const struct FVoxelGenerationConfig& Config,
                                FColumnContext& OutContext) const = 0;
 
-    /** O(N³) — called per voxel. Returns updated density. */
+    /** O(N³) — called per voxel. Read SeedOffset from Context.CachedSeedOffset. */
     virtual float EvaluateVoxel(const FVector& WorldPos,
                                 const FColumnContext& Context,
                                 const struct FVoxelGenerationConfig& Config,

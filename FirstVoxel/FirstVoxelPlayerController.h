@@ -1,4 +1,7 @@
 // FirstVoxelPlayerController.h
+//
+// FIX N8  — RaycastAccum throttles PlayerTick physics trace to ~12 Hz.
+// FIX N11 — CachedVoxelWorld caches FindVoxelWorld() result; no per-call scan.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -18,21 +21,19 @@ class FIRSTVOXEL_API AFirstVoxelPlayerController : public APlayerController
 public:
     AFirstVoxelPlayerController();
 
-    /** Tries to modify voxel terrain at the player's crosshair. */
+    /** Modify voxel terrain at the player's crosshair hit point. */
     void ModifyVoxelTerrain(float InRadius, float InDensity);
 
-    /** Lazily finds the first AVoxelWorld in the level. */
+    /**
+     * Returns the first AVoxelWorld in the level.
+     * FIX N11: result cached in CachedVoxelWorld; O(1) after first call.
+     */
     AVoxelWorld* FindVoxelWorld() const;
 
-    /**
-     * Toggle the world map on/off.
-     * Called by AFirstVoxelCharacter when M is pressed.
-     * Automatically finds the nearest AVoxelWorld in the level.
-     */
+    /** Toggle the world map on/off. */
     UFUNCTION(BlueprintCallable, Category="Voxel|Map")
     void ToggleMap();
 
-    /** Programmatically open / close without toggling. */
     UFUNCTION(BlueprintCallable, Category="Voxel|Map")
     void OpenMap();
 
@@ -44,31 +45,19 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void SetupInputComponent() override;
     virtual void PlayerTick(float DeltaTime) override;
 
-    // ---- UI assets ----
-
-    /** Crosshair widget class (assign in BP subclass). */
     UPROPERTY(EditDefaultsOnly, Category="UI")
     TSubclassOf<UUserWidget> CrosshairWidgetClass;
 
-    /**
-     * Map widget class.
-     * Defaults to UVoxelMapWidget (pure C++, no Blueprint needed).
-     * Override with a Blueprint subclass (WBP_VoxelMap) to customise the layout.
-     * 
-     * Note: Combat and Side-Scrolling variants have their own specialized player
-     * controllers (CombatPlayerController and SideScrollingPlayerController) that
-     * are currently unused but preserved for future development.
-     */
     UPROPERTY(EditDefaultsOnly, Category="UI|Map",
-        meta=(ToolTip="Widget class for the world map. Defaults to UVoxelMapWidget. Assign a Blueprint subclass to override layout."))
+        meta=(ToolTip="Widget class for the world map. Defaults to UVoxelMapWidget."))
     TSubclassOf<UVoxelMapWidget> MapWidgetClass;
 
-    /** Input mapping context (assign in BP subclass or leave nullptr for no-context mode). */
     UPROPERTY(EditDefaultsOnly, Category="Input")
-    UInputMappingContext* MappingContext;
+    UInputMappingContext* MappingContext = nullptr;
 
 private:
     UPROPERTY()
@@ -76,7 +65,14 @@ private:
 
     void EnsureMapWidget();
 
-    // [Expert Optimization] Cache line traces to prevent duplicate Raycasts per frame
+    /** FIX N11: cached world reference — avoids TActorIterator scan per call. */
+    UPROPERTY(Transient)
+    TObjectPtr<AVoxelWorld> CachedVoxelWorld = nullptr;
+
+    /** Last successful aim trace result. */
     FHitResult LastAimHit;
     bool bHasAimHit = false;
+
+    /** FIX N8: accumulator for 12 Hz trace throttle. */
+    float RaycastAccum = 0.f;
 };
