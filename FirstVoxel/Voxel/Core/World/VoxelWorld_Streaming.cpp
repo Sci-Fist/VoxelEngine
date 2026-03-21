@@ -164,11 +164,12 @@ void AVoxelWorld::UpdateChunkStreaming()
         const float DistSq = FVector::DistSquared(PlayerPos, ChunkPos);
 
         // Hysteresis bands prevent LOD flip-flopping at distance thresholds.
-        static constexpr float HysteresisFactor = 1.10f;
-        const float L1ISq = LOD1Distance * LOD1Distance;
-        const float L1OSq = LOD1Distance * LOD1Distance * HysteresisFactor * HysteresisFactor;
-        const float L2ISq = LOD2Distance * LOD2Distance;
-        const float L2OSq = LOD2Distance * LOD2Distance * HysteresisFactor * HysteresisFactor;
+        static constexpr float HysteresisOut = 1.10f;
+        static constexpr float HysteresisIn  = 0.90f;
+        const float L1ISq = LOD1Distance * LOD1Distance * HysteresisIn * HysteresisIn;
+        const float L1OSq = LOD1Distance * LOD1Distance * HysteresisOut * HysteresisOut;
+        const float L2ISq = LOD2Distance * LOD2Distance * HysteresisIn * HysteresisIn;
+        const float L2OSq = LOD2Distance * LOD2Distance * HysteresisOut * HysteresisOut;
 
         int32 TargetLOD = Chunk->LOD;
         if (Chunk->LOD < 2 && DistSq > L2OSq) TargetLOD = 2;

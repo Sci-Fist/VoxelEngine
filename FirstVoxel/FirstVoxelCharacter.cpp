@@ -459,28 +459,14 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 	}
 	else if (CurrentTool == EVoxelToolMode::Build)
 	{
-		if (CurrentTime - BuildLastActionTime > 0.20f)
-		{
-			FVector EditCenter = ImpactPoint + Hit.ImpactNormal * InteractionRadius * 0.5f;
-			UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: Build at %s radius %f"), *EditCenter.ToString(), InteractionRadius);
-			World->SetVoxelSphere(EditCenter, InteractionRadius, 1.f, true);
-			BuildLastActionTime = CurrentTime;
-		}
+		World->SetVoxelSphere(ImpactPoint + Hit.Normal * (InteractionRadius * 0.5f), InteractionRadius, 1.0f);
 	}
 	else if (CurrentTool == EVoxelToolMode::Smooth)
 	{
-		if (CurrentTime - DigLastActionTime > 0.08f)
-		{
-			const FVector SoftPos = ImpactPoint - Hit.ImpactNormal * InteractionRadius * 0.15f;
-			// FIX #22: outer sphere now also triggers chunk rebuild
-			World->SetVoxelSphere(SoftPos, InteractionRadius,        -0.15f, true);
-			World->SetVoxelSphere(SoftPos, InteractionRadius * 0.6f,  0.10f, true);
-			DigLastActionTime = CurrentTime;
-		}
+		World->SmoothVoxelTerrain(ImpactPoint, InteractionRadius);
 	}
 	else if (CurrentTool == EVoxelToolMode::Flatten)
 	{
-		if (CurrentTime - DigLastActionTime > 0.08f)
 		{
 			const FVector Origin = ImpactPoint;
 			const float   R      = InteractionRadius;

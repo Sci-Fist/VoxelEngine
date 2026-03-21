@@ -244,9 +244,12 @@ void FVoxelMeshGenerator::GenerateMesh(
                              const FVector& FaceNorm, const FColor& VC)
     {
         if (!FaceNorm.IsNormalized()) return;
-        const float AreaSq = FVector::CrossProduct(
-            CellVertices[i1]-CellVertices[i0], CellVertices[i2]-CellVertices[i0]).SizeSquared();
-        if (AreaSq < 0.01f) return;
+        
+        // Remove aggressive area culling (was `if (AreaSq < 0.01f) return;`)
+        // Degenerate/microscopic triangles should still be emitted to preserve 
+        // the watertight property of the mesh, preventing visible holes when 
+        // quad vertices are collapsed together by aggressive SurfaceNets snapping.
+
 
         auto AppendV = [&](int32 ci) -> int32 {
             if (Map[ci] != -1) return Map[ci];
@@ -282,19 +285,45 @@ void FVoxelMeshGenerator::GenerateMesh(
         TArray<int32>&  BMap     = bIsFlat ? BackMap             : SlopeBackMap;
         const FColor&   VC       = GetQuadColor(ColX, ColY);
 
+        // Splitting the quad along the shortest diagonal prevents
+        // nasty inverted "bowtie" creasing artifacts on extremely steep slopes.
+        const float d02 = FVector::DistSquared(CellVertices[i0], CellVertices[i2]);
+        const float d13 = FVector::DistSquared(CellVertices[i1], CellVertices[i3]);
+        const bool bFlip = d13 < d02;
+
         if (!bD0Solid)
         {
-            EmitTriangle(Dest, Map, i2, i1, i0,  OutwardNormal, VC);
-            EmitTriangle(Dest, Map, i3, i2, i0,  OutwardNormal, VC);
-            EmitTriangle(BackDest, BMap, i0, i1, i2, -OutwardNormal, VC);
-            EmitTriangle(BackDest, BMap, i0, i2, i3, -OutwardNormal, VC);
+            if (bFlip) 
+            {
+                EmitTriangle(Dest, Map, i1, i0, i3,  OutwardNormal, VC);
+                EmitTriangle(Dest, Map, i2, i1, i3,  OutwardNormal, VC);
+                EmitTriangle(BackDest, BMap, i0, i1, i3, -OutwardNormal, VC);
+                EmitTriangle(BackDest, BMap, i1, i2, i3, -OutwardNormal, VC);
+            } 
+            else 
+            {
+                EmitTriangle(Dest, Map, i2, i1, i0,  OutwardNormal, VC);
+                EmitTriangle(Dest, Map, i3, i2, i0,  OutwardNormal, VC);
+                EmitTriangle(BackDest, BMap, i0, i1, i2, -OutwardNormal, VC);
+                EmitTriangle(BackDest, BMap, i0, i2, i3, -OutwardNormal, VC);
+            }
         }
         else
         {
-            EmitTriangle(Dest, Map, i0, i1, i2,  OutwardNormal, VC);
-            EmitTriangle(Dest, Map, i0, i2, i3,  OutwardNormal, VC);
-            EmitTriangle(BackDest, BMap, i2, i1, i0, -OutwardNormal, VC);
-            EmitTriangle(BackDest, BMap, i3, i2, i0, -OutwardNormal, VC);
+            if (bFlip) 
+            {
+                EmitTriangle(Dest, Map, i0, i1, i3,  OutwardNormal, VC);
+                EmitTriangle(Dest, Map, i1, i2, i3,  OutwardNormal, VC);
+                EmitTriangle(BackDest, BMap, i1, i0, i3, -OutwardNormal, VC);
+                EmitTriangle(BackDest, BMap, i2, i1, i3, -OutwardNormal, VC);
+            } 
+            else 
+            {
+                EmitTriangle(Dest, Map, i0, i1, i2,  OutwardNormal, VC);
+                EmitTriangle(Dest, Map, i0, i2, i3,  OutwardNormal, VC);
+                EmitTriangle(BackDest, BMap, i2, i1, i0, -OutwardNormal, VC);
+                EmitTriangle(BackDest, BMap, i3, i2, i0, -OutwardNormal, VC);
+            }
         }
     };
 

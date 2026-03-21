@@ -85,9 +85,9 @@ void AVoxelChunk::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	if (bPendingLODTransition && IsReady() && !IsGenerating())
 	{
-		TransitionToLOD(PendingLOD);
+		TransitionToLOD(PendingLOD.Load());
 		bPendingLODTransition = false;
-		PendingLOD = 0;
+		PendingLOD.Store(0);
 	}
 	if (MeshState == EChunkMeshState::Transitioning)
 		UpdateMeshState();
@@ -103,7 +103,15 @@ void AVoxelChunk::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void AVoxelChunk::CancelGeneration()
 {
 	if (!bGenerating) return;
-	if (CurrentTask.IsValid()) CurrentTask->Cancel();
+	
+	TSharedPtr<FVoxelGeneratorTask> TaskToCancel;
+	{
+		FScopeLock Lock(&TaskLock);
+		TaskToCancel = CurrentTask;
+		CurrentTask.Reset();
+	}
+	
+	if (TaskToCancel.IsValid()) TaskToCancel->Cancel();
 	++WaterGeneration; // FIX-2
 	++GenerationId;
 	bGenerating = false;
@@ -130,11 +138,14 @@ void AVoxelChunk::GenerateAsync()
 
 	if (!DenseChunk.IsValid()) DenseChunk = MakeShared<FVoxelDensityChunk>();
 
-	CurrentTask = MakeShared<FVoxelGeneratorTask>(
-		ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
-		GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap);
-
-	TSharedPtr<FVoxelGeneratorTask> LocalTask = CurrentTask;
+	TSharedPtr<FVoxelGeneratorTask> LocalTask;
+	{
+		FScopeLock Lock(&TaskLock);
+		CurrentTask = MakeShared<FVoxelGeneratorTask>(
+			ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
+			GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap);
+		LocalTask = CurrentTask;
+	}
 	TWeakObjectPtr<AVoxelChunk>     SafeThis(this);
 
 	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [SafeThis, LocalTask, TaskId]()
@@ -153,11 +164,16 @@ void AVoxelChunk::GenerateSync()
 {
 	static FVoxelDensityGenerator GSync;
 	if (!DenseChunk.IsValid()) DenseChunk = MakeShared<FVoxelDensityChunk>();
-	CurrentTask = MakeShared<FVoxelGeneratorTask>(
-		ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
-		GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap);
-	CurrentTask->Execute();
-	ApplyMesh(CurrentTask);
+	TSharedPtr<FVoxelGeneratorTask> LocalTask;
+	{
+		FScopeLock Lock(&TaskLock);
+		CurrentTask = MakeShared<FVoxelGeneratorTask>(
+			ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
+			GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap);
+		LocalTask = CurrentTask;
+	}
+	LocalTask->Execute();
+	ApplyMesh(LocalTask);
 }
 
 void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
@@ -423,7 +439,14 @@ void AVoxelChunk::ClearMesh()
 	++WaterGeneration; // FIX-2
 	WaterData.Reset(); // also resets WaterCellCount to 0
 	for (UInstancedStaticMeshComponent* H : BiomeFoliageHISMs)
-		if (IsValid(H)) H->ClearInstances();
+	{
+		if (IsValid(H)) 
+		{ 
+			H->ClearInstances(); 
+			H->DestroyComponent(); 
+		}
+	}
+	BiomeFoliageHISMs.Empty();
 	bFlatMaterialWarned  = false; // FIX-4
 	bSlopeMaterialWarned = false;
 	bMeshApplied = false;

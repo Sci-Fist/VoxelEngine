@@ -239,17 +239,17 @@ public:
 	struct FVoxelDensityGenerator* DensityGenerator = nullptr;
 
 	/** Set to true when player edits have invalidated this chunk's mesh; rebuilt on the next Tick. */
-	bool bMeshDirty = false;
+	FThreadSafeBool bMeshDirty { false };
 
 	/** Water material — assigned by AVoxelWorld from GenerationConfig.Water.OceanMaterial. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
 	UMaterialInterface* WaterMaterial = nullptr;
 
 	/** Pending LOD transition flag — set when chunk is not ready for immediate LOD change. */
-	bool bPendingLODTransition = false;
+	FThreadSafeBool bPendingLODTransition { false };
 
 	/** Target LOD for pending transition. */
-	int32 PendingLOD = 0;
+	TAtomic<int32> PendingLOD { 0 };
 
 	/** Smoothly transition to a new LOD level. */
 	UFUNCTION(BlueprintCallable, Category = "Voxel|LOD")
@@ -295,6 +295,9 @@ private:
 	/** Dynamically grown HISM pool — one component per active per-biome foliage entry. */
 	UPROPERTY()
 	TArray<UInstancedStaticMeshComponent*> BiomeFoliageHISMs;
+
+	/** Mutex to guard CurrentTask access across threads (though typically GameThread only) */
+	FCriticalSection TaskLock;
 
 	/** The running background task. Kept alive so we can cancel it on demand. */
 	TSharedPtr<FVoxelGeneratorTask> CurrentTask;
