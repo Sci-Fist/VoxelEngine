@@ -134,12 +134,12 @@ struct FCraterBiomeConfig
     float CentralCraterRadius = 40000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
-        meta=(ToolTip="Bowl floor depth below terrain surface (negative cm). -5000 = 50m deep for striking profile."))
-    float CentralCraterDepth = -5000.f;
+        meta=(ToolTip="Bowl floor depth below terrain surface (negative cm). Raised to -12000 for deep floors."))
+    float CentralCraterDepth = -12000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
-        meta=(ClampMin="0.0", ToolTip="Rim height above terrain (cm). 3000 = 30m rim for pronounced horizon."))
-    float CentralCraterRimHeight = 3000.f;
+        meta=(ClampMin="0.0", ToolTip="Rim height above terrain (cm). Raised to 5000 for tall ridgelines."))
+    float CentralCraterRimHeight = 5000.f;
 
     // ── Rim ──────────────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim", meta=(ClampMin="0.0", ClampMax="1.0"))
@@ -153,8 +153,9 @@ struct FCraterBiomeConfig
     float RimErosion = 0.05f;
 
     // ── Central uplift ────────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift")
-    bool bEnableCentralUplift = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
+        meta=(ToolTip="Turned off by default so center remains a hollow flat basin bowl."))
+    bool bEnableCentralUplift = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
         meta=(ClampMin="0.0", ClampMax="1.0"))
