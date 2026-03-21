@@ -219,12 +219,24 @@ void AVoxelWorld::Tick(float DeltaTime)
 
         if (!bAllReady)
         {
-            FVector HoverPos = SpawnPlayer->GetActorLocation();
-            HoverPos.Z = TargetCoordsZ;
-            SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
             if (ACharacter* Ch = Cast<ACharacter>(SpawnPlayer))
+            {
                 if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
-                { CMC->SetMovementMode(MOVE_None); CMC->bJustTeleported = true; }
+                {
+                    if (CMC->MovementMode != MOVE_None)
+                    {
+                        CMC->SetMovementMode(MOVE_None);
+                        CMC->bJustTeleported = true;
+                    }
+                }
+            }
+
+            FVector HoverPos = SpawnPlayer->GetActorLocation();
+            if (FMath::Abs(HoverPos.Z - TargetCoordsZ) > 1.0f)
+            {
+                HoverPos.Z = TargetCoordsZ;
+                SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
+            }
         }
         else
         {

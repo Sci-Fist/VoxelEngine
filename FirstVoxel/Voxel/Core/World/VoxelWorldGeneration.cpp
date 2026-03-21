@@ -231,6 +231,26 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
     Chunk->SetFolderPath(FName(*FString::Printf(TEXT("g_VoxelChunks/Z%d"), Coord.Z)));
     Chunk->ChunkCoord = Coord;
     Chunk->SetActorLocation(ChunkCoordToWorld(Coord));
+
+    // FIX Distant Chunk Lag: Compute initial LOD BEFORE generating, instead of generating at LOD 0 and later downgrading.
+    if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
+    {
+        const FVector PlayerPos = Player->GetActorLocation();
+        const FVector ChunkPos = ChunkCoordToWorld(Coord) + FVector(ChunkSize * VoxelSize * 0.5f);
+        const float DistSq = FVector::DistSquared(PlayerPos, ChunkPos);
+
+        int32 TargetLOD = 0;
+        if (DistSq > LOD2Distance * LOD2Distance) TargetLOD = 2;
+        else if (DistSq > LOD1Distance * LOD1Distance) TargetLOD = 1;
+
+        if (bWaitingForInitialSpawn && InitialSpawnCoords.Contains(Coord))
+            TargetLOD = 0;
+        else if (DistSq < (ChunkSize * VoxelSize * 3.2f) * (ChunkSize * VoxelSize * 3.2f))
+            TargetLOD = 0; // Safeguard
+
+        Chunk->LOD = TargetLOD;
+    }
+
     ConfigureChunk(Chunk);
     LoadedChunks.Add(Coord, Chunk);
 
@@ -270,7 +290,8 @@ void AVoxelWorld::DestroyChunk(const FIntVector& Coord)
 void AVoxelWorld::DrainGenerationQueue()
 {
     if (!GetWorld()) return;
-    const int32 Limit = !GetWorld()->IsGameWorld() ? 2 : (bWaitingForInitialSpawn ? 24 : 6);
+    // FIX World Gen Lag: Reduced per-frame spawn limits. Instantiating arrays is heavy.
+    const int32 Limit = !GetWorld()->IsGameWorld() ? 2 : (bWaitingForInitialSpawn ? 4 : 2);
     int32 N = 0;
     while (N < Limit && QueueHead < GenerationQueue.Num())
     {
@@ -391,9 +412,21 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     });
 
     for (const FIntVector& C : SpawnCoords)
-    { InitialSpawnCoords.Add(C); if (!LoadedChunks.Contains(C)) SpawnChunk(C,true); }
+    { 
+        InitialSpawnCoords.Add(C); 
+        if (!LoadedChunks.Contains(C)) 
+        {
+            // FIX World Gen Lag: Only cook collision synchronously for chunks strictly beneath the spawn point
+            bool bSync = (C.X == SpawnCoord.X && C.Y == SpawnCoord.Y && C.Z <= SpawnCoord.Z);
+            SpawnChunk(C, bSync); 
+        }
+    }
 
-    auto EnsureBelow = [&](FIntVector C){ if (!LoadedChunks.Contains(C)) SpawnChunk(C,true); InitialSpawnCoords.Add(C); };
+    auto EnsureBelow = [&](FIntVector C)
+    { 
+        if (!LoadedChunks.Contains(C)) SpawnChunk(C, true); 
+        InitialSpawnCoords.Add(C); 
+    };
     EnsureBelow(SpawnCoord+FIntVector(0,0,-1));
     EnsureBelow(SpawnCoord+FIntVector(0,0,-2));
 

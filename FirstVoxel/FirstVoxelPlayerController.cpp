@@ -71,7 +71,19 @@ void AFirstVoxelPlayerController::SetupInputComponent()
 // ── Map widget ────────────────────────────────────────────────────────────────
 void AFirstVoxelPlayerController::EnsureMapWidget()
 {
-    if (MapWidgetInstance && MapWidgetInstance->IsValidLowLevel()) return;
+    if (MapWidgetInstance && MapWidgetInstance->IsValidLowLevel())
+    {
+        if (MapWidgetInstance->IsInViewport())
+        {
+            return;
+        }
+        else
+        {
+            // It was removed (e.g., framework reset), discard it
+            MapWidgetInstance = nullptr;
+        }
+    }
+
     UClass* Cls = MapWidgetClass
         ? static_cast<UClass*>(MapWidgetClass)
         : UVoxelMapWidget::StaticClass();
