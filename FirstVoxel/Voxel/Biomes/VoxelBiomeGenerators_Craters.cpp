@@ -50,6 +50,11 @@
 
 namespace
 {
+static constexpr float FloorEnd = 0.74f;
+static constexpr float WallEnd  = 0.88f;
+static constexpr float RimPeak  = 0.93f;
+static constexpr float RimEnd   = 1.00f;
+
 // ── Setup (anchor fixed, multiplier stack removed) ────────────────────────────
 struct FCraterSetup
 {
@@ -82,8 +87,8 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
     
     // Flatten the high-frequency local terrain inside the bowl so rims aren't swallowed by spikes
     float FlattenBlend = 1.0f;
-    if (S.NormDist < 1.0f) FlattenBlend = 0.0f; // Completely flat inside rim
-    else if (S.NormDist < 1.80f) FlattenBlend = FMath::SmoothStep(1.0f, 1.80f, S.NormDist);
+    if (S.NormDist < FloorEnd) FlattenBlend = 0.0f; // Completely flat inside rim
+    else if (S.NormDist < RimEnd) FlattenBlend = FMath::SmoothStep(FloorEnd, RimEnd, S.NormDist);
     
     S.BasePlains = FMath::Lerp(CenterH, BaseHeight, FlattenBlend);
 
@@ -111,10 +116,7 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
 // ─────────────────────────────────────────────────────────────────────────────
 static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    static constexpr float FloorEnd = 0.74f;
-    static constexpr float WallEnd  = 0.88f;
-    static constexpr float RimPeak  = 0.93f;
-    static constexpr float RimEnd   = 1.00f;
+
 
     const float FloorH  = S.BasePlains + S.EffectiveDepth;         // deepest point
     const float WallBaseH = FloorH + FMath::Abs(S.EffectiveDepth) * 0.12f; // wall base is slightly higher than floor
@@ -165,18 +167,18 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
 // Does NOT produce the old 6000-cm spires or 800-cm bumps.
 static void ApplyRimRoughness(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    static constexpr float WallEnd  = 0.88f;
-    static constexpr float RimPeak  = 0.93f;
-    static constexpr float RimOuter = 1.00f;
+    // static constexpr float WallEnd  = 0.88f;
+    // static constexpr float RimPeak  = 0.93f;
+    // static constexpr float RimOuter = 1.00f;
 
-    if (S.NormDist < WallEnd || S.NormDist > RimOuter + 0.05f) return;
+    if (S.NormDist < WallEnd || S.NormDist > RimEnd + 0.05f) return;
 
     // Fade envelope: zero at wall base, peak at rim crest, zero at rim outer
     float RimFade;
     if (S.NormDist < RimPeak)
         RimFade = FMath::SmoothStep(WallEnd, RimPeak, S.NormDist);
     else
-        RimFade = FMath::SmoothStep(RimOuter + 0.05f, RimPeak, S.NormDist);
+        RimFade = FMath::SmoothStep(RimEnd + 0.05f, RimPeak, S.NormDist);
 
     // Low-frequency angular bumps (realistic rim irregularity)
     const float AngBump = BG_Noise(S.nX * 0.003f, S.nY * 0.003f, 0.f);
@@ -214,7 +216,7 @@ static void ApplyMeteorUplift(float& H, const FCraterSetup& S, const FCraterBiom
 // Applied on top of the flat floor zone for surface detail.
 static void ApplyFloorTexture(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    static constexpr float FloorEnd = 0.74f;
+
     if (S.NormDist >= FloorEnd) return;
 
     float NoiseAmp = CRC.BuildingNoiseAmplitude;

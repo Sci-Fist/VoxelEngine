@@ -78,7 +78,9 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         // Take the MAXIMUM of both Neutral (pre-crater) and Full (post-crater) height.
         // This guarantees the island floats safely above mountain peaks and crater rims
         // that exist under its footprint, without dipping into crater bowls.
-        const float SampleR = FMath::Max(1500.f, SC.BaseIslandSize * 0.75f);
+        const float MaxIS = SC.BaseIslandSize + SC.HeightSizeBonus;
+        const float SampleR = FMath::Max(1500.f, MaxIS);
+        const float SampleD = SampleR * 0.7071f;
         auto GetMaxH = [&](float sX, float sY)
         {
             const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(sX, sY, Config);
@@ -96,6 +98,10 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         CH = FMath::Max(CH, GetMaxH(CX2 - SampleR, CY2));
         CH = FMath::Max(CH, GetMaxH(CX2, CY2 + SampleR));
         CH = FMath::Max(CH, GetMaxH(CX2, CY2 - SampleR));
+        CH = FMath::Max(CH, GetMaxH(CX2 + SampleD, CY2 + SampleD));
+        CH = FMath::Max(CH, GetMaxH(CX2 - SampleD, CY2 - SampleD));
+        CH = FMath::Max(CH, GetMaxH(CX2 + SampleD, CY2 - SampleD));
+        CH = FMath::Max(CH, GetMaxH(CX2 - SampleD, CY2 + SampleD));
         const float HN = FMath::Clamp(CH/SC.MaxTerrainReference, 0.f, 1.f);
         const float RN = FMath::Clamp(CW.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);
         const float TS = FMath::Clamp(HN*1.5f+RN*0.8f, 0.f, 1.f);
