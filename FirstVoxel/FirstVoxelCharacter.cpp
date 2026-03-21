@@ -441,7 +441,11 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 	Params.AddIgnoredActor(this);
 	Params.bTraceComplex = true;
 
-	if (!GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, End, ECC_Visibility, Params)) return;
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, End, ECC_Visibility, Params))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: LineTrace failed! No collision hit."));
+		return;
+	}
 
 	const FVector ImpactPoint = Hit.ImpactPoint;
 	const float   CurrentTime = GetWorld()->GetTimeSeconds();
@@ -450,8 +454,9 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 	{
 		if (CurrentTime - DigLastActionTime > 0.05f)
 		{
-			World->SetVoxelSphere(ImpactPoint - Hit.ImpactNormal * InteractionRadius * 0.5f,
-			                      InteractionRadius, -1.f, true);
+			FVector EditCenter = ImpactPoint - Hit.ImpactNormal * InteractionRadius * 0.5f;
+			UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: Dig at %s radius %f"), *EditCenter.ToString(), InteractionRadius);
+			World->SetVoxelSphere(EditCenter, InteractionRadius, -1.f, true);
 			DigLastActionTime = CurrentTime;
 		}
 	}
@@ -459,8 +464,9 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 	{
 		if (CurrentTime - BuildLastActionTime > 0.05f)
 		{
-			World->SetVoxelSphere(ImpactPoint + Hit.ImpactNormal * InteractionRadius * 0.5f,
-			                      InteractionRadius, 1.f, true);
+			FVector EditCenter = ImpactPoint + Hit.ImpactNormal * InteractionRadius * 0.5f;
+			UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: Build at %s radius %f"), *EditCenter.ToString(), InteractionRadius);
+			World->SetVoxelSphere(EditCenter, InteractionRadius, 1.f, true);
 			BuildLastActionTime = CurrentTime;
 		}
 	}

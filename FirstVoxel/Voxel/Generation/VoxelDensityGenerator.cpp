@@ -142,8 +142,15 @@ float FVoxelDensityGenerator::SampleCaveNoise(
     const FVector P = WorldPos + SeedOff;
     const float cs = CVC.Scale;
     const float C1 = FMath::Abs(FMath::PerlinNoise3D(FVector(P.X*cs,      P.Y*cs,      P.Z*cs)));
+    
+    // EARLY OUT: Max possible threshold is Threshold + WobbleAmplitude
+    const float MaxThresh = CVC.Threshold + CVC.WobbleAmplitude;
+    if (C1 >= MaxThresh) return 0.f;
+
     const float C2 = FMath::Abs(FMath::PerlinNoise3D(FVector(P.X*cs*0.7f, P.Y*cs*0.7f, P.Z*cs*1.3f+5.f)));
     const float CV = C1 + C2;
+    if (CV >= MaxThresh) return 0.f;
+
     const float Wobble = FMath::PerlinNoise3D(FVector(
         P.X*CVC.WobbleFrequency, P.Y*CVC.WobbleFrequency, P.Z*CVC.WobbleFrequency)) * CVC.WobbleAmplitude;
     const float Thresh = CVC.Threshold + Wobble;

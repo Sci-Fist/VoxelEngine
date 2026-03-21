@@ -163,9 +163,12 @@ void FVoxelGeneratorTask::BuildDensityField()
             {
                 const int32 LIdx=Pair.Key;
                 const int32 lz=LIdx/(ChunkSize*ChunkSize), ly=(LIdx/ChunkSize)%ChunkSize, lx=LIdx%ChunkSize;
-                const float AX=(TCC.X*ChunkSize+lx)*VoxelSize;
-                const float AY=(TCC.Y*ChunkSize+ly)*VoxelSize;
-                const float AZ=(TCC.Z*ChunkSize+lz)*VoxelSize;
+                const float BaseX = WorldOrigin.X + (TCC.X - ChunkCoord.X) * ChunkSize * VoxelSize;
+                const float BaseY = WorldOrigin.Y + (TCC.Y - ChunkCoord.Y) * ChunkSize * VoxelSize;
+                const float BaseZ = WorldOrigin.Z + (TCC.Z - ChunkCoord.Z) * ChunkSize * VoxelSize;
+                const float AX = BaseX + lx * VoxelSize;
+                const float AY = BaseY + ly * VoxelSize;
+                const float AZ = BaseZ + lz * VoxelSize;
                 const int32 GX=FMath::RoundToInt((AX-WorldOrigin.X)/EffVoxSz+1.f);
                 const int32 GY=FMath::RoundToInt((AY-WorldOrigin.Y)/EffVoxSz+1.f);
                 const int32 GZ=FMath::RoundToInt((AZ-WorldOrigin.Z)/EffVoxSz+1.f);
