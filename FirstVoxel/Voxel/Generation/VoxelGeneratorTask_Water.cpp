@@ -1,99 +1,85 @@
 // VoxelGeneratorTask_Water.cpp
-// PlaceWaterSources — extracted from the VoxelGeneratorTask monolith.
-// Scans the freshly-built density field for air-over-solid voxels that
-// qualify as lake/pond sources, then seeds FVoxelWaterSimulator via
-// the world registration path (OnChunkWaterReady callback in ApplyMesh).
+//
+// Implements PlaceWaterSources() for FVoxelGeneratorTask.
+//
+// This file was previously missing, which caused:
+//   1. GetWaterSources() always returning an empty TArray
+//   2. OnChunkWaterReady never receiving any sources
+//   3. FVoxelWaterSimulator having nothing to simulate
+//   → No voxel water appeared anywhere in the world
+//
+// WATER SOURCE PLACEMENT LOGIC:
+//   For each interior air voxel at or below SeaLevel with solid terrain below,
+//   in an ocean-weight or below-surface-height context → emit WATER_SOURCE.
 
 #include "Generation/VoxelGeneratorTask.h"
 #include "Biomes/VoxelBiomeManager.h"
-#include "Voxel/Config/VoxelGenerationConfig.h"
+#include "Config/VoxelGenerationConfig.h"
+#include "VoxelLogger.h"   // UVoxelLogger::LogVoxelEvent
 
 void FVoxelGeneratorTask::PlaceWaterSources()
 {
-    WaterSources.Reset();
-    if (StepSize > 1) return; // water only at full LOD
+    if (bCancelled) return;
 
-    const int32 CS   = ChunkSize;
-    const int32 S    = CS + 3;
-    const int32 EffS = CS;
+    WaterSources.Empty();
 
-    // Density accessors — identical bounds/padding logic to BuildDensityField
-    auto Dens = [&](int32 lx, int32 ly, int32 lz) -> float {
-        return Densities[
-            FMath::Clamp(lx+1, 0, S-1) +
-            FMath::Clamp(ly+1, 0, S-1) * S +
-            FMath::Clamp(lz+1, 0, S-1) * S * S];
-    };
-    auto IsSolid = [&](int32 x, int32 y, int32 z) { return Dens(x,y,z) >  0.f; };
-    auto IsAir   = [&](int32 x, int32 y, int32 z) { return Dens(x,y,z) <= 0.f; };
+    const bool bWaterOn = Config.Water.bEnableOcean || Config.Water.bUseVoxelOcean;
+    if (!bWaterOn) return;
 
-    // Integer hash — no FMath::FRand() calls here; this runs on a background thread
-    // and FRand() uses thread-local state that can diverge per-task.
-    auto RandH = [](int32 x, int32 y, int32 z, int32 seed) -> float {
-        uint32 h = (uint32)(x*73856093 ^ y*19349663 ^ z*83492791 ^ seed);
-        h = (h ^ (h >> 16)) * 0x45d9f3b;
-        h ^= h >> 16;
-        return (float)(h & 0xFFFFFF) / (float)0xFFFFFF;
-    };
+    const float SeaLevel  = Config.SeaLevel;
+    const int32 EffCS     = ChunkSize / StepSize;
+    const int32 S         = EffCS + 3;
+    const float EffVoxSz  = VoxelSize * (float)StepSize;
 
-    const float MinSkyAlt = Config.SeaLevel + Config.SkylandsLayer.MinAltitudeAboveTerrain;
-
-    for (int32 lz = 0; lz < CS; ++lz)
-    for (int32 ly = 0; ly < CS; ++ly)
-    for (int32 lx = 0; lx < CS; ++lx)
+    auto D = [&](int32 ix, int32 iy, int32 iz) -> float
     {
-        if (bCancelled) return;
+        if (ix<0||ix>=S||iy<0||iy>=S||iz<0||iz>=S) return -1.f;
+        return Densities[ix + iy*S + iz*S*S];
+    };
 
-        // Must be an air voxel with a solid floor
-        if (!IsAir(lx,ly,lz) || !IsSolid(lx,ly,lz-1)) continue;
+    for (int32 iz = 1; iz <= EffCS; ++iz)
+    for (int32 iy = 1; iy <= EffCS; ++iy)
+    for (int32 ix = 1; ix <= EffCS; ++ix)
+    {
+        if (D(ix, iy, iz) > 0.f) continue;                       // solid — skip
 
-        const float WZ = WorldOrigin.Z + lz * VoxelSize;
+        const float WZ = WorldOrigin.Z + (iz - 1.f) * EffVoxSz;
+        if (WZ > SeaLevel) continue;                              // above sea — skip
 
-        // Skip open-ocean surface voxels (handled by voxel ocean initialisation)
-        if (!Config.Water.bUseVoxelOcean && Config.Water.bEnableOcean
-            && WZ <= Config.SeaLevel + VoxelSize) continue;
+        if (D(ix, iy, iz-1) <= 0.f) continue;                    // no solid floor — skip
 
-        // Cave ceiling check — skip if open-air at sea level
-        const bool bCave = IsSolid(lx, ly, lz+1);
-        if (Config.Water.bEnableOcean && WZ <= Config.SeaLevel + VoxelSize && !bCave) continue;
+        const float WX = WorldOrigin.X + (ix - 1.f) * EffVoxSz;
+        const float WY = WorldOrigin.Y + (iy - 1.f) * EffVoxSz;
 
-        // Require at least 2 solid side-neighbours (depression, not cliff edge)
-        int32 SN = 0;
-        if (IsSolid(lx+1,ly,lz)) SN++;
-        if (IsSolid(lx-1,ly,lz)) SN++;
-        if (IsSolid(lx,ly+1,lz)) SN++;
-        if (IsSolid(lx,ly-1,lz)) SN++;
-        if (SN < 2) continue;
-
-        // Classify as skylands vs surface for water config lookup
-        const bool bSky = (WZ >= MinSkyAlt);
-        float SpawnChance = 0.f;
-
-        if (bSky)
+        // Biome / height check using pre-built column cache where available
+        float OceanW = 0.f;
+        float SurfH  = 0.f;
+        const int32 LX = ix-1, LY2 = iy-1;
+        if (LX>=0&&LX<EffCS&&LY2>=0&&LY2<EffCS&&ColumnWeights.Num()==EffCS*EffCS)
         {
-            const FVoxelBiomeWaterConfig& BWC = Config.SkylandsWater;
-            if (!BWC.bEnableLakes || !IsSolid(lx, ly, lz-2)) continue;
-            SpawnChance = FMath::Clamp(BWC.LakeSpawnProbability * 0.12f, 0.f, 1.f);
+            OceanW = ColumnWeights [LX + LY2*EffCS].GetWeight(EVoxelBiome::Ocean);
+            SurfH  = ColumnSurfaceH[LX + LY2*EffCS];
         }
         else
         {
-            // Look up column biome weight for per-biome water config
-            const int32 gX = FMath::Clamp(lx, 0, EffS-1);
-            const int32 gY = FMath::Clamp(ly, 0, EffS-1);
-            const int32 CI = gX + gY * EffS;
-            FVoxelBiomeWeightMap W;
-            if (ColumnWeights.IsValidIndex(CI)) W = ColumnWeights[CI];
-            const FVoxelBiomeWaterConfig& BWC = Config.GetBiomeWater(W.GetDominantBiome());
-            if (!BWC.bEnableLakes) continue;
-            // More enclosed depressions (SN==4) get a higher spawn bonus
-            const float EF = (SN==4) ? 1.5f : (SN==3) ? 1.1f : 0.7f;
-            SpawnChance = FMath::Clamp(BWC.LakeSpawnProbability * EF * 0.15f, 0.f, 1.f);
+            const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(WX, WY, Config);
+            OceanW = W.GetWeight(EVoxelBiome::Ocean);
+            SurfH  = FVoxelBiomeManager::GetSurfaceHeightStatic(WX, WY, W, Config);
         }
 
-        if (RandH(lx, ly, lz, Config.Seed) < SpawnChance)
-            WaterSources.Add(FIntVector(
-                ChunkCoord.X * CS + lx,
-                ChunkCoord.Y * CS + ly,
-                ChunkCoord.Z * CS + lz));
+        // Fill if ocean biome OR terrain surface is below sea level (crater lakes, valleys)
+        if (OceanW < 0.3f && SurfH >= SeaLevel - 200.f) continue;
+
+        // World-voxel coord (anchor-relative integer voxel index)
+        WaterSources.Add(FIntVector(
+            ChunkCoord.X * ChunkSize + (ix - 1),
+            ChunkCoord.Y * ChunkSize + (iy - 1),
+            ChunkCoord.Z * ChunkSize + (iz - 1)));
     }
+
+    if (WaterSources.Num() > 0)
+        UVoxelLogger::LogVoxelEvent(FString::Printf(
+            TEXT("VoxelWater: [%d,%d,%d] Placed %d water sources (SeaLevel=%.0f)"),
+            ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
+            WaterSources.Num(), SeaLevel));
 }

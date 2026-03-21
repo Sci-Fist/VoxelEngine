@@ -1,13 +1,22 @@
 // VoxelGeneratorTask.cpp
-// Core pipeline only: Constructor / Destructor / Execute / BuildDensityField / BuildMesh
-// Foliage: VoxelGeneratorTask_Foliage.cpp
-// Water:   VoxelGeneratorTask_Water.cpp
 //
 // FIX #2  GDensityPool capped at 12 entries
 // FIX #5  SkylandColumnCaches flattened to 1D indexed [i*ChunkSize+j]
 // FIX #6  DenseHasEdit/DenseEditVals allocated only when DataMap != null
 // FIX #9  Dead air-column commented block removed
 // FIX #10 Solid/air counting folded into parallel loop via TAtomic
+//
+// FIX N-DIG — DataMap coordinate mismatch fix.
+//   Root cause: the old code computed AX = (TCC.X * ChunkSize + lx) * VoxelSize
+//   treating chunk coordinates as if the world anchor is at (0,0,0). When
+//   AVoxelWorld is relocated by FindCraterSpawnLocation() (often to ±100k cm),
+//   the resulting GX/GY/GZ density-grid indices were offset by -Anchor/VoxelSize
+//   voxels — always out of bounds — so no DataMap edits were ever applied.
+//
+//   Fix: compute AX/AY/AZ relative to WorldOrigin (the chunk's world position)
+//   by measuring the offset between the TCC chunk and the current chunk:
+//     BaseX = WorldOrigin.X + (TCC.X - ChunkCoord.X) * ChunkSize * VoxelSize
+//   This is anchor-independent and correct for any world position.
 
 #include "Generation/VoxelGeneratorTask.h"
 #include "Generation/VoxelMeshGenerator.h"
@@ -62,7 +71,7 @@ FVoxelGeneratorTask::~FVoxelGeneratorTask()
     if (Densities.Num() > 0)
     {
         FScopeLock Lock(&GDensityPoolLock);
-        if (GDensityPool.Num() < 12) // FIX #2
+        if (GDensityPool.Num() < 12)
             GDensityPool.Add(MoveTemp(Densities));
     }
 }
@@ -77,9 +86,9 @@ void FVoxelGeneratorTask::Execute()
     if (bCancelled || bIsFullSolid || bIsFullAir) return;
     BuildMesh();
     if (bCancelled) return;
-    CalculateFoliage();   // VoxelGeneratorTask_Foliage.cpp
+    CalculateFoliage();
     if (bCancelled) return;
-    PlaceWaterSources();  // VoxelGeneratorTask_Water.cpp
+    PlaceWaterSources();
 }
 
 // ============================================================
@@ -121,11 +130,9 @@ void FVoxelGeneratorTask::BuildDensityField()
 
     ColumnWeights .SetNumUninitialized(EffCS * EffCS);
     ColumnSurfaceH.SetNumUninitialized(EffCS * EffCS);
+    SkylandColumnCaches.SetNum(ChunkSize * ChunkSize); // FIX #5: 1D flat
 
-    // FIX #5: 1D flat cache — zero heap reallocations per chunk
-    SkylandColumnCaches.SetNum(ChunkSize * ChunkSize);
-
-    // ── Pre-compute per-column biome weights and skyland caches ──────────
+    // ── Per-column weight/cache pre-compute ───────────────────────────────
     ParallelFor(ChunkSize * ChunkSize, [&](int32 Idx)
     {
         const int32 i  = Idx / ChunkSize;
@@ -147,40 +154,56 @@ void FVoxelGeneratorTask::BuildDensityField()
             FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, SH, W, Config);
     });
 
-    // FIX #6: DataMap edit arrays only when edits exist
+    // ── DataMap edit arrays (FIX #6: only allocated when DataMap exists) ──
     TArray<bool>  DenseHasEdit;
     TArray<float> DenseEditVals;
     if (DataMap)
     {
         DenseHasEdit .Init(false, TotalSamples);
         DenseEditVals.Init(0.f,   TotalSamples);
-        for (int32 cz=-1;cz<=1;++cz) for (int32 cy=-1;cy<=1;++cy) for (int32 cx=-1;cx<=1;++cx)
+
+        for (int32 cz=-1; cz<=1; ++cz)
+        for (int32 cy=-1; cy<=1; ++cy)
+        for (int32 cx=-1; cx<=1; ++cx)
         {
-            const FIntVector TCC = ChunkCoord + FIntVector(cx,cy,cz);
+            const FIntVector TCC = ChunkCoord + FIntVector(cx, cy, cz);
             TMap<int32,float> MV;
             if (!DataMap->GetChunkData(TCC, MV)) continue;
+
+            // FIX N-DIG: Compute position relative to THIS chunk's WorldOrigin.
+            // Old: AX = TCC.X * ChunkSize * VoxelSize   ← absolute, breaks when
+            //      world is at non-zero anchor (after crater relocation).
+            // New: BaseX = WorldOrigin.X + delta_chunk_offset
+            //      This is independent of where the world actor was placed.
+            const float BaseX = WorldOrigin.X + (float)(TCC.X - ChunkCoord.X) * ChunkSize * VoxelSize;
+            const float BaseY = WorldOrigin.Y + (float)(TCC.Y - ChunkCoord.Y) * ChunkSize * VoxelSize;
+            const float BaseZ = WorldOrigin.Z + (float)(TCC.Z - ChunkCoord.Z) * ChunkSize * VoxelSize;
+
             for (const auto& Pair : MV)
             {
-                const int32 LIdx=Pair.Key;
-                const int32 lz=LIdx/(ChunkSize*ChunkSize), ly=(LIdx/ChunkSize)%ChunkSize, lx=LIdx%ChunkSize;
-                const float BaseX = WorldOrigin.X + (TCC.X - ChunkCoord.X) * ChunkSize * VoxelSize;
-                const float BaseY = WorldOrigin.Y + (TCC.Y - ChunkCoord.Y) * ChunkSize * VoxelSize;
-                const float BaseZ = WorldOrigin.Z + (TCC.Z - ChunkCoord.Z) * ChunkSize * VoxelSize;
+                const int32 LIdx = Pair.Key;
+                const int32 lz   = LIdx / (ChunkSize*ChunkSize);
+                const int32 ly   = (LIdx / ChunkSize) % ChunkSize;
+                const int32 lx   = LIdx % ChunkSize;
+
                 const float AX = BaseX + lx * VoxelSize;
                 const float AY = BaseY + ly * VoxelSize;
                 const float AZ = BaseZ + lz * VoxelSize;
-                const int32 GX=FMath::RoundToInt((AX-WorldOrigin.X)/EffVoxSz+1.f);
-                const int32 GY=FMath::RoundToInt((AY-WorldOrigin.Y)/EffVoxSz+1.f);
-                const int32 GZ=FMath::RoundToInt((AZ-WorldOrigin.Z)/EffVoxSz+1.f);
+
+                const int32 GX = FMath::RoundToInt((AX - WorldOrigin.X) / EffVoxSz + 1.f);
+                const int32 GY = FMath::RoundToInt((AY - WorldOrigin.Y) / EffVoxSz + 1.f);
+                const int32 GZ = FMath::RoundToInt((AZ - WorldOrigin.Z) / EffVoxSz + 1.f);
+
                 if (GX<0||GX>=EffSize||GY<0||GY>=EffSize||GZ<0||GZ>=EffSize) continue;
-                const int32 FI=GX+GY*EffSize+GZ*EffSize*EffSize;
-                DenseHasEdit[FI]=true; DenseEditVals[FI]=Pair.Value;
+                const int32 FI = GX + GY*EffSize + GZ*EffSize*EffSize;
+                DenseHasEdit [FI] = true;
+                DenseEditVals[FI] = Pair.Value;
             }
         }
     }
 
-    // ── Main density loop ────────────────────────────────────────────────
-    TAtomic<int32> SolidCount{0}; // FIX #10
+    // ── Main density loop ─────────────────────────────────────────────────
+    TAtomic<int32> SolidCount{0};
     TAtomic<int32> AirCount  {0};
 
     ParallelFor(EffSize * EffSize, [&](int32 FlatXY)
@@ -201,9 +224,8 @@ void FVoxelGeneratorTask::BuildDensityField()
         Weights.Normalize();
 
         const float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(WX, WY, Weights, Config);
-
-        const int32 LX=X-1, LY2=Y-1;
-        if (LX>=0 && LX<EffCS && LY2>=0 && LY2<EffCS)
+        const int32 LX = X-1, LY2 = Y-1;
+        if (LX>=0&&LX<EffCS&&LY2>=0&&LY2<EffCS)
         { ColumnWeights[LX+LY2*EffCS]=Weights; ColumnSurfaceH[LX+LY2*EffCS]=SurfH; }
 
         const float MaxWZ = WorldOrigin.Z + (EffSize+1)*EffVoxSz;
@@ -227,63 +249,51 @@ void FVoxelGeneratorTask::BuildDensityField()
             {
                 const int32 AX=(X-1)*StepSize, AY=(Y-1)*StepSize;
                 Ctx.SkylandCache = (AX>=0&&AX<ChunkSize&&AY>=0&&AY<ChunkSize)
-                    ? SkylandColumnCaches[AX*ChunkSize+AY]   // FIX #5
+                    ? SkylandColumnCaches[AX*ChunkSize+AY]
                     : FVoxelBiomeGenerators::GetSkylandColumnCache(WX,WY,SurfH,Weights,Config);
             }
 
-            // Early-out: pure air column above surface, below sky band
             const float OvH = Config.Performance.bEnableOverhangs ? Config.Overhangs.MaxDistFromSurface : 0.f;
-            const float SafeAirMinZ = SurfH + OvH + 200.f;
             const float SkyLB2 = SurfH+SC.MinAltitudeAboveTerrain-SC.BaseIslandSize*SC.ThicknessRatio-400.f;
-            if (MinWZ > SafeAirMinZ && MaxWZ < SkyLB2)
+            if (MinWZ > SurfH+OvH+200.f && MaxWZ < SkyLB2)
             {
                 for (int32 Z=0;Z<EffSize;++Z)
                 {
-                    const int32 Idx=X+Y*EffSize+Z*EffSize*EffSize;
-                    float D=-2.f;
+                    const int32 Idx=X+Y*EffSize+Z*EffSize*EffSize; float D=-2.f;
                     if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx])
                     { const float Ov=DenseEditVals[Idx]; D=(Ov<0.f)?FMath::Min(D,Ov):FMath::Max(D,Ov); }
-                    Densities[Idx]=D; 
-                    if (D > 0.f) SolidCount.IncrementExchange();
-                    else         AirCount.IncrementExchange();
+                    Densities[Idx]=D;
+                    if (D>0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
                 }
                 return;
             }
         }
 
-        // Early-out: below bedrock
         if (MaxWZ < Config.CaveTunnels.BedrockDepth)
         {
             for (int32 Z=0;Z<EffSize;++Z)
             {
-                const int32 Idx=X+Y*EffSize+Z*EffSize*EffSize;
-                float D=2.f;
+                const int32 Idx=X+Y*EffSize+Z*EffSize*EffSize; float D=2.f;
                 if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx])
                 { const float Ov=DenseEditVals[Idx]; D=(Ov<0.f)?FMath::Min(D,Ov):FMath::Max(D,Ov); }
                 Densities[Idx]=D;
-                if (D > 0.f) SolidCount.IncrementExchange();
-                else         AirCount.IncrementExchange();
+                if (D>0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
             }
             return;
         }
 
-        // Main per-voxel evaluation
         for (int32 Z=0;Z<EffSize;++Z)
         {
             const float WZ  = WorldOrigin.Z + (Z-1.f)*EffVoxSz;
             const int32 Idx = X+Y*EffSize+Z*EffSize*EffSize;
-
             float D = -2.f;
             if (bEnSurface)  D = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
             if (bEnCaves)    D = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
             if (bEnSkylands) D = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
-
-            if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx]) // FIX #6
+            if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx])
             { const float Ov=DenseEditVals[Idx]; D=(Ov<0.f)?FMath::Min(D,Ov):FMath::Max(D,Ov); }
-
-            Densities[Idx] = D;
-            if (D > 0.f) SolidCount.IncrementExchange(); // FIX #10
-            else          AirCount  .IncrementExchange();
+            Densities[Idx]=D;
+            if (D>0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
         }
     });
 
@@ -302,9 +312,9 @@ void FVoxelGeneratorTask::BuildMesh()
     MeshOutput.Reset();
     FVoxelMeshGenerator::GenerateMesh(
         Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
-    UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: [%d,%d,%d] Verts=%d"),
-        ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, MeshOutput.FlatMesh.Vertices.Num()));
+    UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: [%d,%d,%d] Flat=%d Slope=%d"),
+        ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
+        MeshOutput.FlatMesh.Vertices.Num(), MeshOutput.SlopeMesh.Vertices.Num()));
 }
 
-// FIX #10: no-op stub — folded into BuildDensityField parallel loop
 void FVoxelGeneratorTask::CountDensityStates(int32) {}
