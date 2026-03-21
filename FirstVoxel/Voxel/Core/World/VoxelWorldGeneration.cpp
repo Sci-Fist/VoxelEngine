@@ -402,27 +402,44 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     // Only lock the loading screen on the immediate spawn area + ground floor.
     // This prevents generating 150+ empty air chunks if spawning on a skyland.
     TSet<FIntVector> SpawnSet;
+    TSet<FIntVector> VisualSet;
     
-    auto AddToSet = [&](const FIntVector& C) { SpawnSet.Add(C); };
+    auto AddToCollision = [&](const FIntVector& C) { SpawnSet.Add(C); };
+    auto AddToVisual    = [&](const FIntVector& C) { VisualSet.Add(C); };
 
     // 1. Surrounding concentric 13x13 area of player spawn (Cinematic Crater Bounds)
-    for (int32 x=-6; x<=6; x++) for (int32 y2=-6; y2<=6; y2++) for (int32 z2=-2; z2<=2; z2++)
-        AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
+    for (int32 x=-32; x<=32; x++) for (int32 y2=-32; y2<=32; y2++) for (int32 z2=-2; z2<=2; z2++)
+    {
+        const bool bInner = (FMath::Abs(x) <= 6 && FMath::Abs(y2) <= 6);
+        if (bInner) AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
+        else        AddToVisual   (FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
+    }
 
     // 2. Add ground layer strictly beneath player if they spawn in the sky
     if (FMath::Abs(SpawnCoord.Z - GroundCoord.Z) > 1)
     {
-        for (int32 x=-6; x<=6; x++) for (int32 y2=-6; y2<=6; y2++)
+        for (int32 x=-32; x<=32; x++) for (int32 y2=-32; y2<=32; y2++)
         {
-            AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
-            AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z + 1));
-            AddToSet(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z - 1));
+            const bool bInner = (FMath::Abs(x) <= 6 && FMath::Abs(y2) <= 6);
+            if (bInner)
+            {
+                AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
+                AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z + 1));
+                AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z - 1));
+            }
+            else
+            {
+                AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
+                AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z + 1));
+                AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z - 1));
+            }
         }
     }
 
-    // Sort to prioritize chunk directly under feet
-    TArray<FIntVector> SpawnCoords = SpawnSet.Array();
-    SpawnCoords.Sort([SpawnCoord](const FIntVector& A, const FIntVector& B)
+    TArray<FIntVector> SpawnCoords  = SpawnSet.Array();
+    TArray<FIntVector> VisualCoords = VisualSet.Array();
+
+    auto SortCoords = [SpawnCoord](const FIntVector& A, const FIntVector& B)
     {
         const bool bBA = (A.X==SpawnCoord.X && A.Y==SpawnCoord.Y && A.Z <= SpawnCoord.Z);
         const bool bBB = (B.X==SpawnCoord.X && B.Y==SpawnCoord.Y && B.Z <= SpawnCoord.Z);
@@ -430,16 +447,29 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
         if (!bBA && bBB) return false;
         return (FMath::Abs(A.X-SpawnCoord.X) + FMath::Abs(A.Y-SpawnCoord.Y) + FMath::Abs(A.Z-SpawnCoord.Z))
              < (FMath::Abs(B.X-SpawnCoord.X) + FMath::Abs(B.Y-SpawnCoord.Y) + FMath::Abs(B.Z-SpawnCoord.Z));
-    });
+    };
+
+    SpawnCoords.Sort(SortCoords);
+    VisualCoords.Sort(SortCoords);
+
+    InitialSpawnCoords_Visual.Empty();
 
     for (const FIntVector& C : SpawnCoords)
     { 
         InitialSpawnCoords.Add(C); 
         if (!LoadedChunks.Contains(C)) 
         {
-            // FIX World Gen Lag: Only cook collision synchronously for chunks strictly beneath the actual Ground surface
             bool bSync = (C.X == GroundCoord.X && C.Y == GroundCoord.Y && C.Z <= GroundCoord.Z && C.Z >= GroundCoord.Z - 2);
             SpawnChunk(C, bSync); 
+        }
+    }
+
+    for (const FIntVector& C : VisualCoords)
+    {
+        InitialSpawnCoords_Visual.Add(C);
+        if (!LoadedChunks.Contains(C))
+        {
+            SpawnChunk(C, false); // Visual only never blocks synchronously
         }
     }
 

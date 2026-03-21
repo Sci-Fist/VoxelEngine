@@ -199,7 +199,15 @@ void AVoxelWorld::Tick(float DeltaTime)
             {
                 AVoxelChunk** P = LoadedChunks.Find(C);
                 if (!P || !(*P)->IsCollisionReady()) { bAllReady = false; break; }
-                ++ReadyCount;
+            }
+
+            if (bAllReady)
+            {
+                for (const FIntVector& C : InitialSpawnCoords_Visual)
+                {
+                    AVoxelChunk** P = LoadedChunks.Find(C);
+                    if (!P || !(*P)->IsReady()) { bAllReady = false; break; }
+                }
             }
         }
         else

@@ -271,6 +271,7 @@ private:
 
     bool  bWaitingForInitialSpawn = false;
     TArray<FIntVector> InitialSpawnCoords;
+    TArray<FIntVector> InitialSpawnCoords_Visual;
     float TargetCoordsZ       = 0.f;
     bool  bSkylandFoundBackup = false;
     float CachedSurfaceHeight = 0.f;
