@@ -40,7 +40,7 @@ FVector FVoxelMeshGenerator::ComputeNormal(
         const int32 C = X + Y * S + Z * S2;
         return -FVector(Densities[C+1]  - Densities[C-1],
                         Densities[C+S]  - Densities[C-S],
-                        Densities[C+S2] - Densities[C-S2]).GetSafeNormal();
+                        Densities[C+S2] - Densities[C-S2]).GetSafeNormal(1.0e-6f, FVector::UpVector);
     }
 
     auto SafeGet = [&](int32 ix, int32 iy, int32 iz) -> float {
@@ -51,7 +51,7 @@ FVector FVoxelMeshGenerator::ComputeNormal(
     };
     return -FVector(SafeGet(X+1,Y,Z)-SafeGet(X-1,Y,Z),
                     SafeGet(X,Y+1,Z)-SafeGet(X,Y-1,Z),
-                    SafeGet(X,Y,Z+1)-SafeGet(X,Y,Z-1)).GetSafeNormal();
+                    SafeGet(X,Y,Z+1)-SafeGet(X,Y,Z-1)).GetSafeNormal(1.0e-6f, FVector::UpVector);
 }
 
 // ---------------------------------------------------------------------------
@@ -240,16 +240,21 @@ void FVoxelMeshGenerator::GenerateMesh(
     };
 
     auto EmitTriangle = [&](FVoxelMeshData& Dest, TArray<int32>& Map,
-                             int32 i0, int32 i1, int32 i2,
+                             int32 IA, int32 IB, int32 IC,
                              const FVector& FaceNorm, const FColor& VC)
     {
-        if (!FaceNorm.IsNormalized()) return;
-        
-        // Remove aggressive area culling (was `if (AreaSq < 0.01f) return;`)
-        // Degenerate/microscopic triangles should still be emitted to preserve 
-        // the watertight property of the mesh, preventing visible holes when 
-        // quad vertices are collapsed together by aggressive SurfaceNets snapping.
+        const FVector& V0 = CellVertices[IA];
+        const FVector& V1 = CellVertices[IB];
+        const FVector& V2 = CellVertices[IC];
 
+        FVector TriNorm = FVector::CrossProduct(V1 - V0, V2 - V0);
+        if (TriNorm.SizeSquared() < 1e-8f) return; // Drop degenerate triangles
+
+        // Force Clockwise ordering relative to FaceNorm
+        if ((TriNorm | FaceNorm) > 0.0f)
+        {
+            int32 Temp = IB; IB = IC; IC = Temp;
+        }
 
         auto AppendV = [&](int32 ci) -> int32 {
             if (Map[ci] != -1) return Map[ci];
@@ -261,9 +266,9 @@ void FVoxelMeshGenerator::GenerateMesh(
             Map[ci] = NI;
             return NI;
         };
-        Dest.Triangles.Add(AppendV(i0));
-        Dest.Triangles.Add(AppendV(i1));
-        Dest.Triangles.Add(AppendV(i2));
+        Dest.Triangles.Add(AppendV(IA));
+        Dest.Triangles.Add(AppendV(IB));
+        Dest.Triangles.Add(AppendV(IC));
     };
 
     auto EmitQuad = [&](int32 i0, int32 i1, int32 i2, int32 i3,
@@ -279,10 +284,8 @@ void FVoxelMeshGenerator::GenerateMesh(
         if ((GeoNormal | OutwardNormal) < 0.f) GeoNormal = -GeoNormal;
 
         const bool bIsFlat = FMath::Abs(GeoNormal.Z) >= Config.SlopeThreshold;
-        FVoxelMeshData& Dest     = bIsFlat ? OutMesh.BackMesh    : OutMesh.SlopeBackMesh;
-        FVoxelMeshData& BackDest = bIsFlat ? OutMesh.FlatMesh   : OutMesh.SlopeMesh;
-        TArray<int32>&  Map      = bIsFlat ? BackMap             : SlopeBackMap;
-        TArray<int32>&  BMap     = bIsFlat ? FlatMap             : SlopeMap;
+        FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh   : OutMesh.SlopeMesh;
+        TArray<int32>&  Map      = bIsFlat ? FlatMap             : SlopeMap;
         const FColor&   VC       = GetQuadColor(ColX, ColY);
 
         // Splitting the quad along the shortest diagonal prevents
@@ -291,39 +294,15 @@ void FVoxelMeshGenerator::GenerateMesh(
         const float d13 = FVector::DistSquared(CellVertices[i1], CellVertices[i3]);
         const bool bFlip = d13 < d02;
 
-        if (!bD0Solid)
+        if (bFlip) 
         {
-            if (bFlip) 
-            {
-                EmitTriangle(Dest, Map, i1, i0, i3,  OutwardNormal, VC);
-                EmitTriangle(Dest, Map, i2, i1, i3,  OutwardNormal, VC);
-                EmitTriangle(BackDest, BMap, i0, i1, i3, -OutwardNormal, VC);
-                EmitTriangle(BackDest, BMap, i1, i2, i3, -OutwardNormal, VC);
-            } 
-            else 
-            {
-                EmitTriangle(Dest, Map, i2, i1, i0,  OutwardNormal, VC);
-                EmitTriangle(Dest, Map, i3, i2, i0,  OutwardNormal, VC);
-                EmitTriangle(BackDest, BMap, i0, i1, i2, -OutwardNormal, VC);
-                EmitTriangle(BackDest, BMap, i0, i2, i3, -OutwardNormal, VC);
-            }
-        }
-        else
+            EmitTriangle(Dest, Map, i0, i1, i3, OutwardNormal, VC);
+            EmitTriangle(Dest, Map, i1, i2, i3, OutwardNormal, VC);
+        } 
+        else 
         {
-            if (bFlip) 
-            {
-                EmitTriangle(Dest, Map, i0, i1, i3,  OutwardNormal, VC);
-                EmitTriangle(Dest, Map, i1, i2, i3,  OutwardNormal, VC);
-                EmitTriangle(BackDest, BMap, i1, i0, i3, -OutwardNormal, VC);
-                EmitTriangle(BackDest, BMap, i2, i1, i3, -OutwardNormal, VC);
-            } 
-            else 
-            {
-                EmitTriangle(Dest, Map, i0, i1, i2,  OutwardNormal, VC);
-                EmitTriangle(Dest, Map, i0, i2, i3,  OutwardNormal, VC);
-                EmitTriangle(BackDest, BMap, i2, i1, i0, -OutwardNormal, VC);
-                EmitTriangle(BackDest, BMap, i3, i2, i0, -OutwardNormal, VC);
-            }
+            EmitTriangle(Dest, Map, i0, i1, i2, OutwardNormal, VC);
+            EmitTriangle(Dest, Map, i0, i2, i3, OutwardNormal, VC);
         }
     };
 
@@ -341,7 +320,7 @@ void FVoxelMeshGenerator::GenerateMesh(
         // Y-axis edges
         { const float D0 = Densities[Idx(X,Y,Z,S)], D1 = Densities[Idx(X,Y+1,Z,S)];
           if ((D0>0.f)!=(D1>0.f))
-              EmitQuad(Idx(X,Y,Z,S),Idx(X,Y,Z-1,S),Idx(X-1,Y,Z-1,S),Idx(X-1,Y,Z,S),
+              EmitQuad(Idx(X,Y,Z,S),Idx(X-1,Y,Z,S),Idx(X-1,Y,Z-1,S),Idx(X,Y,Z-1,S),
                        X,Y,D0>0.f,FVector(0,1,0)); }
 
         // Z-axis edges

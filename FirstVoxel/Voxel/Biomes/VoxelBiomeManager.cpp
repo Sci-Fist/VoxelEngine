@@ -1,11 +1,18 @@
 // VoxelBiomeManager.cpp
-// FIX N10 — J-curve skyland probability fields (ProbMidDipCenter, ProbMidDipWidth,
-//            ProbMidDipDepth, ProbHighAltitudeThreshold) are now actually applied
-//            in GetSkylandColumnCache() via VoxelBiomeGenerators.
-//            Previously these four UPROPERTYs were defined but never read,
-//            making BaseProbability the only probability driver regardless of terrain.
-//            Now: probability has a Gaussian dip at mid-altitude (so rolling hills
-//            rarely get skylands) and a surge at high altitude (peaks get dense islands).
+//
+// ROOT FIX: GetNeutralSurfaceHeightStatic — returns base terrain WITHOUT crater overlay.
+//
+// Problem: GetSurfaceHeightStatic() ignores its weight parameter. It recomputes
+// internal weights from temp/erosion noise, then ALWAYS calls GetCraterHeight()
+// at the end. So passing zeroed-crater weights had zero effect. Every caller that
+// tried to get "pre-crater terrain" was silently receiving the full crater-modified
+// value. This caused skylands to compute altitude based on the crater FLOOR height
+// (e.g. 1840 cm) instead of the surrounding terrain (e.g. 9840 cm), placing
+// island bodies inside solid crater wall material.
+//
+// Fix: GetNeutralSurfaceHeightStatic() is identical to GetSurfaceHeightStatic()
+// except the GetCraterHeight() call at the end is REMOVED.
+// This gives the true pre-crater terrain reference.
 
 #include "VoxelBiomeManager.h"
 #include "FirstVoxel.h"
@@ -14,6 +21,9 @@
 
 DEFINE_LOG_CATEGORY(LogVoxelBiome);
 
+// ============================================================
+//  GetBiomeWeightsStatic
+// ============================================================
 FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(
     float X, float Y, const FVoxelGenerationConfig& Config)
 {
@@ -71,6 +81,9 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(
     return Map;
 }
 
+// ============================================================
+//  GetWeightsAndSurfaceHeightStatic
+// ============================================================
 FVoxelBiomeManager::FWeightsAndHeight FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(
     float X, float Y, const FVoxelGenerationConfig& Config)
 {
@@ -80,11 +93,15 @@ FVoxelBiomeManager::FWeightsAndHeight FVoxelBiomeManager::GetWeightsAndSurfaceHe
     return Out;
 }
 
+// ============================================================
+//  GetSurfaceHeightStatic — includes crater overlay
+//  NOTE: The 'W' parameter only affects the performance flags check below.
+//  The crater overlay is always applied unconditionally.
+//  Use GetNeutralSurfaceHeightStatic() to get pre-crater terrain.
+// ============================================================
 float FVoxelBiomeManager::GetSurfaceHeightStatic(
     float X, float Y, const FVoxelBiomeWeightMap& W, const FVoxelGenerationConfig& Config)
 {
-    // Recompute raw (unsuppressed) base biome weights to ensure continuous underlying terrain height.
-    // This prevents the crater overlay from causing steep vertical walls when its texture weight squashes the base weights to zero.
     const FVector Off = Config.GetSeedOffset();
     const float Temp    = GetTemperatureWithSeed(X, Y, Config, Off);
     const float Erosion = GetErosionWithSeed    (X, Y, Config, Off);
@@ -103,20 +120,65 @@ float FVoxelBiomeManager::GetSurfaceHeightStatic(
     if (!Config.Performance.bEnableMesa)   MesaW   = 0.f;
 
     float Height = 0.f, BaseWeightSum = 0.f;
-
     if (ForestW > 0.01f) { Height += FVoxelBiomeGenerators::GetForestHeight(X,Y,Config)*ForestW; BaseWeightSum += ForestW; }
     if (DesertW > 0.01f) { Height += FVoxelBiomeGenerators::GetDesertHeight(X,Y,Config)*DesertW; BaseWeightSum += DesertW; }
     if (PeaksW  > 0.01f) { Height += FVoxelBiomeGenerators::GetPeaksHeight(X,Y,Config)*PeaksW;   BaseWeightSum += PeaksW; }
     if (CliffsW > 0.01f) { Height += FVoxelBiomeGenerators::GetCliffsHeight(X,Y,Config)*CliffsW; BaseWeightSum += CliffsW; }
     if (MesaW   > 0.01f) { Height += FVoxelBiomeGenerators::GetMesaHeight(X,Y,Config)*MesaW;     BaseWeightSum += MesaW; }
-
     Height /= (BaseWeightSum + 0.0001f);
 
-    // Craters as overlay
+    // Crater overlay — always applied regardless of the 'W' parameter
     Height = FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config, Height);
     return Height;
 }
 
+// ============================================================
+//  GetNeutralSurfaceHeightStatic — ROOT FIX
+//  Returns base terrain height WITHOUT the crater overlay.
+//
+//  Use this everywhere "pre-crater terrain reference" is needed:
+//    • Skyland altitude calculation (so islands don't anchor to floor depth)
+//    • Skyland SkyLB early-out threshold (so rim doesn't kill nearby islands)
+//    • Cave pass neutral height (correct cavern depth reference)
+//
+//  Implementation: identical to GetSurfaceHeightStatic EXCEPT the
+//  GetCraterHeight() call at the end is omitted.
+// ============================================================
+float FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
+    float X, float Y, const FVoxelGenerationConfig& Config)
+{
+    const FVector Off = Config.GetSeedOffset();
+    const float Temp    = GetTemperatureWithSeed(X, Y, Config, Off);
+    const float Erosion = GetErosionWithSeed    (X, Y, Config, Off);
+    const FBiomeBlendConfig& B = Config.BiomeBlend;
+
+    float ForestW = FMath::SmoothStep(0.0f,0.6f,1.0f-Erosion)*FMath::SmoothStep(0.0f,1.0f,1.5f-Temp);
+    float DesertW = FMath::SmoothStep(0.0f,0.6f,1.0f-Erosion)*FMath::SmoothStep(0.0f,0.25f,Temp-0.70f);
+    float PeaksW  = FMath::SmoothStep(0.0f,0.2f,Erosion-0.68f)*B.PeaksStrength  *FMath::SmoothStep(0.0f,0.8f,1.2f-Temp);
+    float CliffsW = FMath::SmoothStep(0.0f,0.2f,Erosion-0.50f)*B.CliffsStrength *FMath::SmoothStep(0.0f,0.6f,Temp*1.3f-0.15f);
+    float MesaW   = FMath::SmoothStep(0.0f,0.2f,Temp-0.62f)   *B.MesaStrength   *FMath::SmoothStep(0.0f,0.2f,1.f-FMath::Abs(Erosion-0.4f));
+
+    if (!Config.Performance.bEnableForest) ForestW = 0.f;
+    if (!Config.Performance.bEnableDesert) DesertW = 0.f;
+    if (!Config.Performance.bEnablePeaks)  PeaksW  = 0.f;
+    if (!Config.Performance.bEnableCliffs) CliffsW = 0.f;
+    if (!Config.Performance.bEnableMesa)   MesaW   = 0.f;
+
+    float Height = 0.f, BaseWeightSum = 0.f;
+    if (ForestW > 0.01f) { Height += FVoxelBiomeGenerators::GetForestHeight(X,Y,Config)*ForestW; BaseWeightSum += ForestW; }
+    if (DesertW > 0.01f) { Height += FVoxelBiomeGenerators::GetDesertHeight(X,Y,Config)*DesertW; BaseWeightSum += DesertW; }
+    if (PeaksW  > 0.01f) { Height += FVoxelBiomeGenerators::GetPeaksHeight(X,Y,Config)*PeaksW;   BaseWeightSum += PeaksW; }
+    if (CliffsW > 0.01f) { Height += FVoxelBiomeGenerators::GetCliffsHeight(X,Y,Config)*CliffsW; BaseWeightSum += CliffsW; }
+    if (MesaW   > 0.01f) { Height += FVoxelBiomeGenerators::GetMesaHeight(X,Y,Config)*MesaW;     BaseWeightSum += MesaW; }
+    Height /= (BaseWeightSum + 0.0001f);
+
+    // NO GetCraterHeight() call — this is the whole point of this function.
+    return Height;
+}
+
+// ============================================================
+//  GetBaseSurfaceDensity
+// ============================================================
 float FVoxelBiomeManager::GetBaseSurfaceDensity(float Z, float SurfaceHeight,
                                                   const FVoxelGenerationConfig& Config)
 {
@@ -124,32 +186,23 @@ float FVoxelBiomeManager::GetBaseSurfaceDensity(float Z, float SurfaceHeight,
     return (SurfaceHeight - Z) / Config.SurfaceGradientScale;
 }
 
-// =============================================================================
-//  ComputeSkylandSpawnProbability  — FIX N10
-//  Previously BaseProbability was the only driver for skyland spawn chance.
-//  The J-curve fields (ProbMidDipCenter/Width/Depth, ProbHighAltitudeThreshold)
-//  were defined in the config but never applied.
-//  Now: a Gaussian dip suppresses probability at mid-terrain heights (no islands
-//  over rolling hills) and a smooth surge above ProbHighAltitudeThreshold gives
-//  dramatic peaks dense island coverage.
-// =============================================================================
+// ============================================================
+//  ComputeSkylandSpawnProbability
+// ============================================================
 float FVoxelBiomeManager::ComputeSkylandSpawnProbability(
     float HeightNorm, float RoughnessNorm, const FSkylandsLayerConfig& SC)
 {
-    // Base probability shaped by height and roughness bonuses
     float Prob = SC.BaseProbability
-               + HeightNorm     * SC.HeightProbabilityBonus
-               + RoughnessNorm  * SC.RoughnessProbabilityBonus;
+               + HeightNorm    * SC.HeightProbabilityBonus
+               + RoughnessNorm * SC.RoughnessProbabilityBonus;
 
-    // FIX N10: J-curve — Gaussian mid-altitude dip
-    // Suppresses skylands over rolling hills (HeightNorm ≈ ProbMidDipCenter)
-    const float DipDelta = HeightNorm - SC.ProbMidDipCenter;
+    // J-curve Gaussian mid-altitude dip
+    const float DipDelta   = HeightNorm - SC.ProbMidDipCenter;
     const float GaussianDip = SC.ProbMidDipDepth
         * FMath::Exp(-(DipDelta*DipDelta) / (2.f * SC.ProbMidDipWidth * SC.ProbMidDipWidth));
-    Prob -= GaussianDip * Prob; // proportional suppression
+    Prob -= GaussianDip * Prob;
 
-    // FIX N10: J-curve — high-altitude surge above threshold
-    // Islands become dramatically more common over tall peaks
+    // J-curve high-altitude surge
     if (HeightNorm > SC.ProbHighAltitudeThreshold)
     {
         const float SurgeT = FMath::SmoothStep(

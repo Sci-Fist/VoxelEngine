@@ -390,7 +390,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     UE_LOG(LogVoxelWorld,Warning,TEXT("VoxelWorld: Spawn Pos=(%.0f,%.0f) Surface=%.0f Z=%.0f CraterW=%.2f Sky=%d"),
         Pos.X,Pos.Y,Surface,TargetZ,CraterW,bSky?1:0);
 
-    Pos.Z = TargetZ; TargetCoordsZ = TargetZ; CachedSurfaceHeight = Surface;
+    Pos.Z = TargetZ; TargetCoordsZ = TargetZ + 30000.f; CachedSurfaceHeight = Surface;
     Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
 
     if (bWaitingForInitialSpawn) return;

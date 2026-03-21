@@ -1,22 +1,19 @@
 // VoxelGeneratorTask.cpp
 //
-// FIX #2  GDensityPool capped at 12 entries
-// FIX #5  SkylandColumnCaches flattened to 1D indexed [i*ChunkSize+j]
-// FIX #6  DenseHasEdit/DenseEditVals allocated only when DataMap != null
-// FIX #9  Dead air-column commented block removed
-// FIX #10 Solid/air counting folded into parallel loop via TAtomic
+// ROOT FIX applied here (pre-compute loop + main density loop):
 //
-// FIX N-DIG — DataMap coordinate mismatch fix.
-//   Root cause: the old code computed AX = (TCC.X * ChunkSize + lx) * VoxelSize
-//   treating chunk coordinates as if the world anchor is at (0,0,0). When
-//   AVoxelWorld is relocated by FindCraterSpawnLocation() (often to ±100k cm),
-//   the resulting GX/GY/GZ density-grid indices were offset by -Anchor/VoxelSize
-//   voxels — always out of bounds — so no DataMap edits were ever applied.
+// Pre-compute loop was calling:
+//   GetSkylandColumnCache(CX, CY, SH, W, Config)
+// where SH = GetSurfaceHeightStatic() = CRATER-MODIFIED height.
+// Inside the crater floor (SH ≈ 1840cm), HeightNorm = 0.07 → islands scheduled
+// at SkyAlt ≈ 9840cm, buried inside solid crater wall material.
 //
-//   Fix: compute AX/AY/AZ relative to WorldOrigin (the chunk's world position)
-//   by measuring the offset between the TCC chunk and the current chunk:
-//     BaseX = WorldOrigin.X + (TCC.X - ChunkCoord.X) * ChunkSize * VoxelSize
-//   This is anchor-independent and correct for any world position.
+// Fix: pass NeutralSurfaceHeight = GetNeutralSurfaceHeightStatic() (pre-crater)
+// → HeightNorm ≈ 0.39 → SkyAlt ≈ 19840cm → visible above the crater rim.
+//
+// Also fixed the SkyLB early-out which had wrong percentage-scaling constants.
+// SkyLB now uses NeutralSurfaceHeight so the lower-bound correctly reflects
+// where islands will actually appear, not where the crater floor is.
 
 #include "Generation/VoxelGeneratorTask.h"
 #include "Generation/VoxelMeshGenerator.h"
@@ -130,9 +127,12 @@ void FVoxelGeneratorTask::BuildDensityField()
 
     ColumnWeights .SetNumUninitialized(EffCS * EffCS);
     ColumnSurfaceH.SetNumUninitialized(EffCS * EffCS);
-    SkylandColumnCaches.SetNum(ChunkSize * ChunkSize); // FIX #5: 1D flat
+    SkylandColumnCaches.SetNum(ChunkSize * ChunkSize);
 
-    // ── Per-column weight/cache pre-compute ───────────────────────────────
+    // ── Per-column pre-compute ────────────────────────────────────────────
+    // ROOT FIX: pass NeutralSH (pre-crater terrain) to GetSkylandColumnCache,
+    // not SH (crater-modified). Islands must float above neutral terrain,
+    // not above the crater floor (which may be 8000cm below the terrain).
     ParallelFor(ChunkSize * ChunkSize, [&](int32 Idx)
     {
         const int32 i  = Idx / ChunkSize;
@@ -149,12 +149,13 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (!bEnCraters) W.SetWeight(EVoxelBiome::Craters, 0.f);
         W.Normalize();
 
-        const float SH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, W, Config);
+        // ROOT FIX: use neutral (pre-crater) height for skyland altitude reference
+        const float NeutralSH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, Config);
         SkylandColumnCaches[i * ChunkSize + j] =
-            FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, SH, W, Config);
+            FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, NeutralSH, W, Config);
     });
 
-    // ── DataMap edit arrays (FIX #6: only allocated when DataMap exists) ──
+    // ── DataMap edit arrays ────────────────────────────────────────────────
     TArray<bool>  DenseHasEdit;
     TArray<float> DenseEditVals;
     if (DataMap)
@@ -170,11 +171,6 @@ void FVoxelGeneratorTask::BuildDensityField()
             TMap<int32,float> MV;
             if (!DataMap->GetChunkData(TCC, MV)) continue;
 
-            // FIX N-DIG: Compute position relative to THIS chunk's WorldOrigin.
-            // Old: AX = TCC.X * ChunkSize * VoxelSize   ← absolute, breaks when
-            //      world is at non-zero anchor (after crater relocation).
-            // New: BaseX = WorldOrigin.X + delta_chunk_offset
-            //      This is independent of where the world actor was placed.
             const float BaseX = WorldOrigin.X + (float)(TCC.X - ChunkCoord.X) * ChunkSize * VoxelSize;
             const float BaseY = WorldOrigin.Y + (float)(TCC.Y - ChunkCoord.Y) * ChunkSize * VoxelSize;
             const float BaseZ = WorldOrigin.Z + (float)(TCC.Z - ChunkCoord.Z) * ChunkSize * VoxelSize;
@@ -223,7 +219,10 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (!bEnCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
         Weights.Normalize();
 
-        const float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(WX, WY, Weights, Config);
+        const float SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(WX, WY, Weights, Config);
+        // ROOT FIX: get the pre-crater neutral height for skyland altitude reference
+        const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(WX, WY, Config);
+
         const int32 LX = X-1, LY2 = Y-1;
         if (LX>=0&&LX<EffCS&&LY2>=0&&LY2<EffCS)
         { ColumnWeights[LX+LY2*EffCS]=Weights; ColumnSurfaceH[LX+LY2*EffCS]=SurfH; }
@@ -232,57 +231,76 @@ void FVoxelGeneratorTask::BuildDensityField()
         const float MinWZ = WorldOrigin.Z - EffVoxSz;
 
         FColumnContext Ctx;
-        Ctx.SurfaceHeight = SurfH;
-        Ctx.BiomeWeights  = Weights;
-        Ctx.MaxWorldZ     = MaxWZ;
+        Ctx.SurfaceHeight        = SurfH;
+        Ctx.NeutralSurfaceHeight = NeutralH;  // passed through to CavePass and SkylandPass
+        Ctx.BiomeWeights         = Weights;
+        Ctx.MaxWorldZ            = MaxWZ;
 
         if (bEnSurface) SurfacePass.PrepareColumn(WX, WY, Config, Ctx);
+        // CavePass.PrepareColumn sets NeutralSurfaceHeight via GetNeutralSurfaceHeightStatic
+        // It will overwrite our value — that's fine, both calls produce the same result.
         if (bEnCaves)   CavePass   .PrepareColumn(WX, WY, Config, Ctx);
 
         if (bEnSkylands)
         {
             const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
-            const float SkyLB = SurfH+SC.MinAltitudeAboveTerrain-SC.BaseIslandSize*SC.ThicknessRatio-1000.f;
+
+            // ROOT FIX: use NeutralH for SkyLB.
+            // Old: used SurfH (crater floor = 1840cm) → SkyLB = ~8240cm
+            //      → chunks covering 8240-16240cm got skylands → buried in wall.
+            // New: uses NeutralH (~9840cm) → SkyLB = ~16240cm
+            //      → only chunks above 16240cm get skylands → visible above rim.
+            const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain
+                              - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
+
             if (MaxWZ < SkyLB)
                 Ctx.SkylandCache.bHasSkyland = false;
             else
             {
-                const int32 AX=(X-1)*StepSize, AY=(Y-1)*StepSize;
+                const int32 AX = (X-1)*StepSize, AY = (Y-1)*StepSize;
+                // Pre-built cache (built with NeutralSH above) — use directly.
+                // Fallback (border columns): build now with NeutralH.
                 Ctx.SkylandCache = (AX>=0&&AX<ChunkSize&&AY>=0&&AY<ChunkSize)
                     ? SkylandColumnCaches[AX*ChunkSize+AY]
-                    : FVoxelBiomeGenerators::GetSkylandColumnCache(WX,WY,SurfH,Weights,Config);
+                    : FVoxelBiomeGenerators::GetSkylandColumnCache(WX, WY, NeutralH, Weights, Config);
             }
 
-            const float OvH = Config.Performance.bEnableOverhangs ? Config.Overhangs.MaxDistFromSurface : 0.f;
-            const float SkyLB2 = SurfH+SC.MinAltitudeAboveTerrain-SC.BaseIslandSize*SC.ThicknessRatio-400.f;
-            if (MinWZ > SurfH+OvH+200.f && MaxWZ < SkyLB2)
+            // Early-out for pure-air columns well below the skyland band
+            const float OvH     = Config.Performance.bEnableOverhangs ? Config.Overhangs.MaxDistFromSurface : 0.f;
+            const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain
+                                - SC.BaseIslandSize * SC.ThicknessRatio - 400.f;
+            if (MinWZ > SurfH + OvH + 200.f && MaxWZ < SkyLB2)
             {
-                for (int32 Z=0;Z<EffSize;++Z)
+                for (int32 Z=0; Z<EffSize; ++Z)
                 {
-                    const int32 Idx=X+Y*EffSize+Z*EffSize*EffSize; float D=-2.f;
-                    if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx])
-                    { const float Ov=DenseEditVals[Idx]; D=(Ov<0.f)?FMath::Min(D,Ov):FMath::Max(D,Ov); }
-                    Densities[Idx]=D;
-                    if (D>0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
+                    const int32 Idx = X+Y*EffSize+Z*EffSize*EffSize;
+                    float D = -2.f;
+                    if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
+                    { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
+                    Densities[Idx] = D;
+                    if (D > 0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
                 }
                 return;
             }
         }
 
+        // Below-bedrock early-out
         if (MaxWZ < Config.CaveTunnels.BedrockDepth)
         {
-            for (int32 Z=0;Z<EffSize;++Z)
+            for (int32 Z=0; Z<EffSize; ++Z)
             {
-                const int32 Idx=X+Y*EffSize+Z*EffSize*EffSize; float D=2.f;
-                if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx])
-                { const float Ov=DenseEditVals[Idx]; D=(Ov<0.f)?FMath::Min(D,Ov):FMath::Max(D,Ov); }
-                Densities[Idx]=D;
-                if (D>0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
+                const int32 Idx = X+Y*EffSize+Z*EffSize*EffSize;
+                float D = 2.f;
+                if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
+                { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
+                Densities[Idx] = D;
+                if (D > 0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
             }
             return;
         }
 
-        for (int32 Z=0;Z<EffSize;++Z)
+        // Per-voxel evaluation
+        for (int32 Z=0; Z<EffSize; ++Z)
         {
             const float WZ  = WorldOrigin.Z + (Z-1.f)*EffVoxSz;
             const int32 Idx = X+Y*EffSize+Z*EffSize*EffSize;
@@ -290,10 +308,10 @@ void FVoxelGeneratorTask::BuildDensityField()
             if (bEnSurface)  D = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
             if (bEnCaves)    D = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
             if (bEnSkylands) D = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
-            if (!DenseHasEdit.IsEmpty()&&DenseHasEdit[Idx])
-            { const float Ov=DenseEditVals[Idx]; D=(Ov<0.f)?FMath::Min(D,Ov):FMath::Max(D,Ov); }
-            Densities[Idx]=D;
-            if (D>0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
+            if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
+            { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
+            Densities[Idx] = D;
+            if (D > 0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
         }
     });
 

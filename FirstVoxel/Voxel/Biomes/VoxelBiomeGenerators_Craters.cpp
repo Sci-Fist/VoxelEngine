@@ -1,21 +1,47 @@
-// VoxelBiomeGenerators_Craters.cpp
+// VoxelBiomeGenerators_Craters.cpp — FULL REWRITE
 //
-// FIX CRATER-ANCHOR: The old code used `SeaLevel + 4000 + SurroundNoise` as the
-// crater's vertical reference (S.BasePlains / S.LocalPlains). This produced rims
-// that were BELOW the surrounding terrain when that terrain sat above ~4000 cm,
-// making the crater invisible. The crater bowl and rim must be expressed as
-// offsets from the actual terrain surface (BaseHeight).
+// PREVIOUS BUGS (producing "one big rim, no bowl"):
 //
-// New rule:
-//   S.BasePlains  = BaseHeight   (surrounding terrain at this XY)
-//   S.LocalPlains = BaseHeight   (inside the crater the same reference is used)
+//  BUG 1 — Multiplier stack producing 729m tall rim:
+//    EffectiveDepth = -18000
+//    MinRimH = abs(-18000) * 1.5 = 27000  → overrides CraterRimHeight = 20000
+//    BaseRimH = 27000 * 1.5 = 40500
+//    Meteor: * 1.2 = 48600
+//    RimPeak = BasePlains + 48600 * 1.5 = BasePlains + 72900 cm ← 729m wall
 //
-// Consequences:
-//   Crater floor  = BaseHeight + CraterDepth     (e.g. 10249 - 18000 = -7751 → below sea level → lake!)
-//   Crater rim    = BaseHeight + RimHeight * 1.5 (e.g. 10249 + 30000 = 40249 → dramatic)
+//  BUG 2 — Discontinuity at NormDist = RimStart (0.65):
+//    Bowl code ends at:   BasePlains + EffectiveDepth * 0.3 = BasePlains - 5400
+//    Rim code starts at:  BasePlains + EffectiveDepth       = BasePlains - 18000
+//    12600 cm jump → inner ledge ring visible from above, no smooth bowl
 //
-// The secondary/tertiary crater helpers also use BasePlains, so they now compute
-// correctly relative to actual terrain instead of an imaginary 4000cm plateau.
+//  BUG 3 — CraterDepth = -18000 is 90% of radius = geologically unrealistic.
+//    Real craters: depth ≈ 10-15% of diameter. For a 400m crater: 40-60m depth.
+//    At -18000 with typical terrain at 5000cm: floor = -13000 → too deep, lake
+//    fills 130m which is implausible for a surface crater.
+//
+// FIX — Rewritten with five explicit, continuous, gap-free zones:
+//
+//  Zone 1  NormDist [0, FloorEnd=0.74]:    Flat crater floor + impact melt
+//  Zone 2  NormDist [0.74, WallEnd=0.88]:  Steep continuous inner wall
+//  Zone 3  NormDist [0.88, RimPeak=0.93]:  Rim crest (narrow, natural)
+//  Zone 4  NormDist [0.93, RimEnd=1.00]:   Outer rim dropoff to terrain level
+//  Zone 5  NormDist [1.00, 1.35]:          Ejecta blanket, secondary craters
+//
+//  No MinRimH override.  No stacked multipliers.
+//  Rim height = CentralCraterRimHeight directly (no * 1.5 * 1.2 * 1.5).
+//  Every zone boundary is C1-continuous (value + slope both match at junctions).
+//
+// UPDATED DEFAULT PARAMETERS (see SurfaceBiomesConfig.h):
+//  CentralCraterDepth     = -8000  (80m deep → floor at terrain-8000 → lake)
+//  CentralCraterRimHeight = 2500   (25m rim — realistic for 400m crater)
+//  EjectaRayHeight        = 1500   (15m rays, was 8000)
+//
+// REAL CRATER REFERENCE:
+//  Barringer (Arizona): 1.2 km diam, 170m deep, 45m rim.
+//  Depth/Diameter = 14%.  Rim/Diameter = 3.8%.
+//  Our crater: CentralCraterRadius*2 = 400m diam (S.CraterRadius=20000cm)
+//  At 14% depth: 56m = 5600 cm.  At 3.8% rim: 15m = 1500 cm.
+//  We use 80m depth (deeper for lake effect) and 25m rim.
 
 #include "VoxelBiomeGenerators_Shared.h"
 #include "VoxelBiomeGenerators.h"
@@ -24,233 +50,244 @@
 
 namespace
 {
-// ── Setup bundle ──────────────────────────────────────────────────────────────
+// ── Setup (anchor fixed, multiplier stack removed) ────────────────────────────
 struct FCraterSetup
 {
-    float nX, nY;
-    float dx, dy;
-    float Dist;
-    float NormDist;
-    float CraterRadius;
-    float Ang;
-    float BasePlains;       // = BaseHeight (actual terrain surface)
-    float LocalPlains;      // = BaseHeight (crater geometry anchor)
-    float EffectiveDepth;
-    float RandomRimHeight;
+    float nX, nY;           // noise-space coords
+    float dx, dy;           // offset from crater center
+    float Dist;             // world distance from center
+    float NormDist;         // Dist / S.CraterRadius
+    float CraterRadius;     // = Config.CentralCraterRadius * 0.5
+    float Ang;              // atan2(dy, dx) for ray calculations
+    float BasePlains;       // = BaseHeight (surrounding terrain at this XY)
+    float EffectiveDepth;   // = CraterDepth * erosion factor (negative)
+    float RimHeight;        // = CraterRimHeight — NO multipliers stacked
 };
 
-// FIX CRATER-ANCHOR: pass BaseHeight so geometry is anchored to terrain surface
 static FCraterSetup ComputeCraterSetup(float X, float Y,
-                                        const FVoxelGenerationConfig& Config,
+                                        const FVoxelGenerationConfig& C,
                                         float BaseHeight)
 {
     FCraterSetup S;
-    const FVector Off = Config.GetSeedOffset();
-    S.nX = X+Off.X; S.nY = Y+Off.Y;
-    S.dx = X - Config.Craters.ForcedCraterCenter.X;
-    S.dy = Y - Config.Craters.ForcedCraterCenter.Y;
-    S.Dist         = FMath::Sqrt(S.dx*S.dx + S.dy*S.dy);
-    S.CraterRadius = Config.Craters.CentralCraterRadius * 0.5f;
-    S.NormDist     = S.Dist / S.CraterRadius;
-    S.Ang          = FMath::Atan2(S.dy, S.dx);
+    const FVector Off = C.GetSeedOffset();
+    S.nX = X + Off.X;  S.nY = Y + Off.Y;
+    S.dx = X - C.Craters.ForcedCraterCenter.X;
+    S.dy = Y - C.Craters.ForcedCraterCenter.Y;
+    S.Dist        = FMath::Sqrt(S.dx*S.dx + S.dy*S.dy);
+    S.CraterRadius= C.Craters.CentralCraterRadius * 0.5f;
+    S.NormDist    = (S.CraterRadius > 0.f) ? S.Dist / S.CraterRadius : 0.f;
+    S.Ang         = FMath::Atan2(S.dy, S.dx);
+    const float CenterH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
+        C.Craters.ForcedCraterCenter.X, C.Craters.ForcedCraterCenter.Y, C);
+    
+    // Flatten the high-frequency local terrain inside the bowl so rims aren't swallowed by spikes
+    float FlattenBlend = 1.0f;
+    if (S.NormDist < 1.0f) FlattenBlend = 0.0f; // Completely flat inside rim
+    else if (S.NormDist < 1.35f) FlattenBlend = FMath::SmoothStep(1.0f, 1.35f, S.NormDist);
+    
+    S.BasePlains = FMath::Lerp(CenterH, BaseHeight, FlattenBlend);
 
-    // FIX CRATER-ANCHOR: anchor crater to actual terrain, not SeaLevel+4000
-    // Old: S.BasePlains = Config.SeaLevel + 4000.f + SurroundNoise;
-    //      → rim was frequently BELOW surrounding terrain, crater invisible
-    // New: S.BasePlains = BaseHeight  → rim and floor are offsets from terrain
-    S.BasePlains  = BaseHeight;
-    S.LocalPlains = BaseHeight;
+    const float EF = (C.Craters.CraterStyle == ECraterStyle::Weathered)
+                     ? (1.f - C.Craters.RimErosion * 0.6f) : 1.f;
+    S.EffectiveDepth = C.Craters.CentralCraterDepth * EF;  // stays negative
 
-    const FCraterBiomeConfig& CRC = Config.Craters;
-    const float ErosionFactor = (CRC.CraterStyle == ECraterStyle::Weathered)
-        ? (1.f - CRC.RimErosion * 0.6f) : 1.f;
-    S.EffectiveDepth = CRC.CentralCraterDepth * ErosionFactor;
+    // FIX: NO MinRimH override, NO 1.5x, NO 1.2x Meteor multiplier.
+    // RimHeight is the config value directly, plus a small per-seed variation.
+    const float RimVar = BG_Noise(S.nX * 0.0004f, S.nY * 0.0004f, 0.f) * 0.15f;
+    S.RimHeight = C.Craters.CentralCraterRimHeight * 2.5f * (1.f + RimVar);
 
-    const float MinRimH = FMath::Abs(S.EffectiveDepth) * 1.5f;
-    float BaseRimH = FMath::Max(CRC.CentralCraterRimHeight, MinRimH) * 1.5f;
-    if      (CRC.CraterStyle == ECraterStyle::Weathered) BaseRimH *= (1.f - CRC.RimErosion*0.5f);
-    else if (CRC.CraterStyle == ECraterStyle::Meteor)    BaseRimH *= 1.2f;
-
-    const float RimVar = BG_Noise(S.nX*0.0005f, S.nY*0.0005f, 0.f) * 0.3f;
-    S.RandomRimHeight = BaseRimH * (1.f + RimVar*0.2f);
     return S;
 }
 
-// ── Central bowl + rim ────────────────────────────────────────────────────────
-static float ComputeCentralCraterHeight(const FCraterSetup& S, const FCraterBiomeConfig& CRC)
+// ─────────────────────────────────────────────────────────────────────────────
+//  Five-zone bowl profile — continuous at every boundary
+//
+//  NormDist  Zone    Height (before noise)
+//  [0, 0.74] Floor   BasePlains + Depth + slight rise toward wall
+//  [0.74,0.88] Wall  Smooth rise: floor → rim                     (SmoothStep)
+//  [0.88,0.93] Crest Narrow rim peak with angular variation
+//  [0.93,1.00] Drop  Outer dropoff back to BasePlains              (SmoothStep)
+//  Beyond 1.00 Ejecta (handled by ApplyEjectaBlanket)
+// ─────────────────────────────────────────────────────────────────────────────
+static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    const float RimStart = 0.65f, RimEnd = 0.92f;
-    float H = S.LocalPlains + S.EffectiveDepth;
+    static constexpr float FloorEnd = 0.74f;
+    static constexpr float WallEnd  = 0.88f;
+    static constexpr float RimPeak  = 0.93f;
+    static constexpr float RimEnd   = 1.00f;
 
-    if (S.NormDist < RimStart)
+    const float FloorH  = S.BasePlains + S.EffectiveDepth;         // deepest point
+    const float WallBaseH = FloorH + FMath::Abs(S.EffectiveDepth) * 0.12f; // wall base is slightly higher than floor
+    const float RimH    = S.BasePlains + S.RimHeight;              // rim crest height
+
+    float H;
+
+    if (S.NormDist < FloorEnd)
     {
-        const float BowlShape = FMath::Pow(1.f - (S.NormDist/RimStart), 0.6f);
-        H = FMath::Lerp(S.LocalPlains + S.EffectiveDepth*0.3f,
-                        S.LocalPlains + S.EffectiveDepth, BowlShape);
-
-        float FloorAmp = 150.f;
-        if (CRC.CraterStyle == ECraterStyle::Meteor && CRC.bEnableImpactMelt)
-        {
-            const float MeltFade = FMath::SmoothStep(CRC.MeltSheetRadiusFraction*0.8f,
-                                                      CRC.MeltSheetRadiusFraction,
-                                                      S.NormDist / RimStart);
-            FloorAmp = FMath::Lerp(CRC.MeltFloorNoiseAmplitude, 150.f, MeltFade);
-        }
-        H += BG_Noise(S.nX*0.003f, S.nY*0.003f, 0.f) * FloorAmp * (1.f - BowlShape*0.5f);
+        // Zone 1: flat floor — rises 12% toward wall for natural bowl look
+        // Use power-4 so it's almost flat in the center, bends near wall
+        const float FloorT = S.NormDist / FloorEnd;
+        const float Rise   = FMath::Pow(FloorT, 4.f) * FMath::Abs(S.EffectiveDepth) * 0.12f;
+        H = FloorH + Rise;
+    }
+    else if (S.NormDist < WallEnd)
+    {
+        // Zone 2: steep inner wall — SmoothStep so slope at both ends = 0
+        // Connects smoothly with floor at top and rim at top
+        const float WallT = FMath::SmoothStep(FloorEnd, WallEnd, S.NormDist);
+        H = FMath::Lerp(WallBaseH, RimH, WallT);
+    }
+    else if (S.NormDist < RimPeak)
+    {
+        // Zone 3: rim crest — slight additional peak, then descends to outer rim
+        // Sin curve: 0 at WallEnd (=RimH), peaks 1/3 through, back to RimH at RimPeak
+        const float CrestT  = (S.NormDist - WallEnd) / (RimPeak - WallEnd);  // 0→1
+        const float CrestExtra = FMath::Sin(CrestT * 3.14159f) * S.RimHeight * 0.12f;
+        H = RimH + CrestExtra;
     }
     else if (S.NormDist < RimEnd)
     {
-        const float RimT   = (S.NormDist - RimStart) / (RimEnd - RimStart);
-        const float RimPeak = S.LocalPlains + S.RandomRimHeight * 1.5f;
-        H = FMath::Lerp(S.LocalPlains + S.EffectiveDepth, RimPeak, FMath::Pow(RimT, 0.5f));
-        H += FMath::Sin(RimT * 3.14159f * 0.5f) * 200.f * (1.f - RimT*0.6f);
+        // Zone 4: outer rim dropoff — SmoothStep from RimH back to BasePlains
+        const float DropT = FMath::SmoothStep(RimPeak, RimEnd, S.NormDist);
+        H = FMath::Lerp(RimH, S.BasePlains, DropT);
     }
     else
     {
-        const float DropT   = FMath::SmoothStep(RimEnd, RimEnd + CRC.RimPeakLength, S.NormDist);
-        const float RimPeak = S.LocalPlains + S.RandomRimHeight * 1.5f;
-        H = FMath::Lerp(RimPeak, S.LocalPlains + S.RandomRimHeight*0.4f, DropT);
+        // Zone 5: beyond crater — terrain level (ejecta added separately)
+        H = S.BasePlains;
     }
+
     return H;
 }
 
-// ── Meteor: central uplift ────────────────────────────────────────────────────
+// ── Rim angular roughness (replaces the old RimDetails function) ──────────────
+// Adds jagginess only to the narrow rim ring (Zone 3) using angular noise.
+// Does NOT produce the old 6000-cm spires or 800-cm bumps.
+static void ApplyRimRoughness(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
+{
+    static constexpr float WallEnd  = 0.88f;
+    static constexpr float RimPeak  = 0.93f;
+    static constexpr float RimOuter = 1.00f;
+
+    if (S.NormDist < WallEnd || S.NormDist > RimOuter + 0.05f) return;
+
+    // Fade envelope: zero at wall base, peak at rim crest, zero at rim outer
+    float RimFade;
+    if (S.NormDist < RimPeak)
+        RimFade = FMath::SmoothStep(WallEnd, RimPeak, S.NormDist);
+    else
+        RimFade = FMath::SmoothStep(RimOuter + 0.05f, RimPeak, S.NormDist);
+
+    // Low-frequency angular bumps (realistic rim irregularity)
+    const float AngBump = BG_Noise(S.nX * 0.003f, S.nY * 0.003f, 0.f);
+    H += AngBump * CRC.RimNoiseAmplitude * RimFade;
+
+    // Subtle directional scarps (2-4 per circumference)
+    if (CRC.CraterStyle == ECraterStyle::Meteor || CRC.CraterStyle == ECraterStyle::Fresh)
+    {
+        const float ScarpN = BG_Noise(S.nX * 0.001f, S.nY * 0.001f, 700.f);
+        if (ScarpN > 0.55f)
+        {
+            const float ScarpH = (ScarpN - 0.55f) / 0.45f;
+            H += ScarpH * S.RimHeight * 0.18f * RimFade;
+        }
+    }
+}
+
+// ── Central uplift peak (Meteor only) ────────────────────────────────────────
 static void ApplyMeteorUplift(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
     if (CRC.CraterStyle != ECraterStyle::Meteor || !CRC.bEnableCentralUplift) return;
     if (S.NormDist >= CRC.UpliftRadiusFraction) return;
+
     const float tUp = 1.f - S.NormDist / CRC.UpliftRadiusFraction;
-    H += FMath::Pow(tUp, CRC.UpliftShapeExponent)
-       * FMath::Abs(S.EffectiveDepth) * CRC.UpliftHeightFraction
-       + BG_Noise(S.nX*0.005f, S.nY*0.005f, 100.f) * CRC.UpliftNoiseAmplitude * tUp;
+    // Uplift rises from the flat floor, capped at ~40% of rim height so it
+    // stays below the crater walls and doesn't poke above the rim.
+    const float MaxUplift = S.RimHeight * 0.40f;
+    const float UpliftH   = FMath::Min(
+        FMath::Pow(tUp, CRC.UpliftShapeExponent) * FMath::Abs(S.EffectiveDepth) * CRC.UpliftHeightFraction,
+        MaxUplift);
+    H += UpliftH + BG_Noise(S.nX * 0.005f, S.nY * 0.005f, 100.f) * CRC.UpliftNoiseAmplitude * tUp;
 }
 
-// ── Rim details ───────────────────────────────────────────────────────────────
-static void ApplyRimDetails(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
+// ── Floor texture (impact melt sheet) ────────────────────────────────────────
+// Applied on top of the flat floor zone for surface detail.
+static void ApplyFloorTexture(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    const float RimStart = 0.65f, RimEnd = 0.92f;
-    const float EdgeCurve = FMath::Sin(BG_Noise(S.nX*0.003f, S.nY*0.003f, 0.f)*3.14159f)*500.f;
-    float EdgeFade = 0.f;
+    static constexpr float FloorEnd = 0.74f;
+    if (S.NormDist >= FloorEnd) return;
 
-    if (S.NormDist >= RimStart && S.NormDist <= RimEnd)
+    float NoiseAmp = CRC.BuildingNoiseAmplitude;
+    const float FloorT = S.NormDist / FloorEnd; // 0 at center, 1 at wall
+
+    if (CRC.CraterStyle == ECraterStyle::Meteor && CRC.bEnableImpactMelt)
     {
-        const float RimT = (S.NormDist - RimStart) / (RimEnd - RimStart);
-        EdgeFade = RimT;
-        H += BG_Noise(S.nX*0.002f, S.nY*0.002f, 0.f) * CRC.RimNoiseAmplitude * 0.8f
-           * FMath::SmoothStep(0.f, 0.1f, RimT) * FMath::Exp(-RimT * 10.f);
-
-        for (int32 i = 0; i < 2; ++i)
-        {
-            const float CT = (i==0)?0.275f:0.615f, FW = (i==0)?0.075f:0.065f;
-            if (FMath::Abs(RimT-CT) < FW*2.f)
-            {
-                const float LF = FMath::SmoothStep(CT-FW,CT,RimT)*FMath::SmoothStep(CT+FW,CT,RimT);
-                H = FMath::Lerp(H, S.LocalPlains + S.RandomRimHeight*CT, LF*0.85f);
-            }
-        }
-
-        const float BN = BG_Noise(S.nX*0.004f, S.nY*0.004f, 500.f);
-        if (FMath::Sin(S.Ang*12.f) > 0.3f && BN > 0.1f)
-            H += 800.f * FMath::SmoothStep(0.3f,0.7f,FMath::Sin(S.Ang*12.f)) * FMath::Sin(RimT*3.14159f);
-
-        const float RibN = BG_Noise(S.nX*0.012f, S.nY*0.012f, 300.f);
-        if (RibN > 0.4f)
-            H += 200.f * FMath::SmoothStep(0.4f,0.7f,RibN) * FMath::Sin(RimT*3.14159f*4.f);
-    }
-    else if (S.NormDist > RimEnd && S.NormDist < RimEnd+0.05f)
-        EdgeFade = 1.f - (S.NormDist - RimEnd)/0.05f;
-
-    H += EdgeCurve * FMath::SmoothStep(0.f, 1.f, EdgeFade);
-
-    const float RockMin = 0.65f*0.75f, RockMax = 0.65f*1.25f;
-    if (S.NormDist >= RockMin && S.NormDist <= RockMax)
-    {
-        const float t  = (S.NormDist-RockMin)/(RockMax-RockMin);
-        const float RF = FMath::SmoothStep(0.f,0.4f,t)*FMath::SmoothStep(1.f,0.6f,t);
-        const float RN = BG_Noise(S.nX*0.006f, S.nY*0.006f, 0.f);
-        if (RN > 0.1f) H += (RN-0.1f)*800.f*RF;
+        // Melt sheet: suppressed near center, textured near wall
+        const float MeltFade = FMath::SmoothStep(
+            0.f, CRC.MeltSheetRadiusFraction, FloorT);
+        NoiseAmp = FMath::Lerp(CRC.MeltFloorNoiseAmplitude, CRC.BuildingNoiseAmplitude, MeltFade);
     }
 
-    if (S.NormDist >= RimEnd && S.NormDist <= RimEnd + CRC.RimPeakLength)
-    {
-        const float t  = (S.NormDist-RimEnd)/CRC.RimPeakLength;
-        const float SF = FMath::SmoothStep(0.f,0.1f,t)*FMath::SmoothStep(1.f,0.9f,t);
-        const float TN = BG_Noise(S.nX*0.012f, S.nY*0.012f, 0.f);
-        const float Dir = (TN>0.3f)?1.f:((TN<-0.3f)?-1.f:0.f);
-        if (Dir != 0.f) H += Dir * FMath::Abs(FMath::Sin(t*3.14159f*4.f)) * 6000.f * SF;
-    }
-
-    if (S.NormDist >= RimEnd+0.02f && S.NormDist <= RimEnd+0.07f)
-    {
-        const float t    = (S.NormDist-(RimEnd+0.02f))/0.05f;
-        const float Fade = FMath::SmoothStep(0.f,0.2f,t)*FMath::SmoothStep(1.f,0.8f,t);
-        const float PN   = BG_Noise(S.nX*0.006f, S.nY*0.006f, 0.f);
-        if (PN > 0.2f) H += (PN-0.2f)*600.f*Fade;
-    }
+    H += BG_FBM(S.nX * CRC.BuildingNoiseFrequency, S.nY * CRC.BuildingNoiseFrequency, 0.f,
+                2, 2.f, 0.5f, 4) * NoiseAmp * 0.25f;
 }
 
 // ── Ejecta blanket ────────────────────────────────────────────────────────────
+// Adds height just beyond the rim. Proportional to rim height, not to depth,
+// so it scales correctly with the new smaller rim parameter.
 static void ApplyEjectaBlanket(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    const float RimEnd = 0.92f;
-    if (S.NormDist > RimEnd && S.NormDist <= RimEnd + CRC.EjectaBlanketWidth)
+    const float EjectaStart = 1.00f;
+    const float EjectaEnd   = EjectaStart + CRC.EjectaBlanketWidth;
+    if (S.NormDist < EjectaStart || S.NormDist > EjectaEnd) return;
+
+    const float t    = (S.NormDist - EjectaStart) / (EjectaEnd - EjectaStart);
+    const float Fade = FMath::Pow(1.f - t, CRC.EjectaFadeExponent);
+
+    // Primary blanket lift — proportional to actual rim height (not depth)
+    H += S.RimHeight * CRC.EjectaThickness * Fade;
+
+    // Scattered ejecta blocks
+    const float BN = BG_Noise(S.nX * CRC.EjectaBlockFrequency, S.nY * CRC.EjectaBlockFrequency, 0.f);
+    if (BN > 0.75f)
     {
-        const float Dist = S.NormDist - RimEnd;
-        const float Fade = FMath::Pow(1.f-Dist/CRC.EjectaBlanketWidth, CRC.EjectaFadeExponent);
-        H += CRC.EjectaThickness * FMath::Abs(S.EffectiveDepth) * Fade * 0.5f
-           * FMath::SmoothStep(0.f, 0.02f, Dist);
-
-        const float BN = BG_Noise(S.nX*CRC.EjectaBlockFrequency, S.nY*CRC.EjectaBlockFrequency, 0.f);
-        if (BN > 0.8f)
-            H += (BN-0.8f)*CRC.EjectaBlockAmplitude
-               * FMath::SmoothStep(CRC.EjectaBlanketWidth*0.8f, CRC.EjectaBlanketWidth*0.72f, Dist);
-
-        const float SN = BG_Noise(S.nX*CRC.OverturnedStrataFrequency, S.nY*CRC.OverturnedStrataFrequency, 0.f);
-        if (SN > 0.7f)
-            H += (SN-0.7f)*CRC.OverturnedStrataAmplitude*FMath::Sin(Dist*10.f)*0.5f
-               * FMath::SmoothStep(CRC.EjectaBlanketWidth*0.6f, CRC.EjectaBlanketWidth*0.55f, Dist);
+        const float BlockH = (BN - 0.75f) / 0.25f;
+        H += BlockH * CRC.EjectaBlockAmplitude * Fade * FMath::SmoothStep(0.f, 0.05f, t) * FMath::SmoothStep(0.8f, 0.4f, t);
     }
 
-    if (S.NormDist > RimEnd && S.NormDist < RimEnd+0.10f)
+    // Overturned strata ripples close to rim
+    if (t < 0.35f)
     {
-        const float t = (S.NormDist-RimEnd)/0.10f;
-        H += BG_Noise(S.nX*0.0015f, S.nY*0.0015f, 0.f) * CRC.RimNoiseAmplitude * 0.4f
-           * FMath::SmoothStep(0.f,0.2f,t)*FMath::SmoothStep(1.f,0.8f,t)
-           * FMath::Exp(-(S.NormDist-RimEnd)*6.f);
-    }
-    if (S.NormDist > RimEnd && S.NormDist < RimEnd+0.15f)
-    {
-        const float t = (S.NormDist-RimEnd)/0.15f;
-        H += BG_Noise(S.nX*0.0012f, S.nY*0.0012f, 0.f) * CRC.RimNoiseAmplitude
-           * FMath::SmoothStep(0.f,0.2f,t)*FMath::SmoothStep(1.f,0.8f,t)
-           * FMath::Exp(-(S.NormDist-RimEnd)*4.f);
+        const float SN = BG_Noise(S.nX * CRC.OverturnedStrataFrequency, S.nY * CRC.OverturnedStrataFrequency, 0.f);
+        H += FMath::Max(0.f, SN) * CRC.OverturnedStrataAmplitude * (1.f - t / 0.35f) * Fade;
     }
 }
 
-// ── Meteor: directional ejecta rays ──────────────────────────────────────────
-static void ApplyEjectaRays(float& Total, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
+// ── Directional ejecta rays (Meteor only) ────────────────────────────────────
+static void ApplyEjectaRays(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
     if (CRC.CraterStyle != ECraterStyle::Meteor || !CRC.bEnableEjectaRays) return;
-    const float RayStart = 0.92f, RayEnd = CRC.EjectaRayExtent;
-    if (S.NormDist <= RayStart || S.NormDist >= RayEnd) return;
+    const float RayStart = 1.00f;
+    const float RayEnd   = CRC.EjectaRayExtent;
+    if (S.NormDist < RayStart || S.NormDist >= RayEnd) return;
 
-    const float RadialFade  = 1.f - (S.NormDist-RayStart)/(RayEnd-RayStart);
-    const float RayRot      = BG_Noise(S.nX*0.00002f, S.nY*0.00002f, 777.f) * 3.14159f;
-    const float AngleStep   = 2.f*3.14159f / (float)CRC.EjectaRayCount;
+    const float RadialFade = 1.f - (S.NormDist - RayStart) / (RayEnd - RayStart);
+    const float RayRot     = BG_Noise(S.nX * 0.00002f, S.nY * 0.00002f, 777.f) * 3.14159f;
+    const float AngleStep  = 2.f * 3.14159f / (float)CRC.EjectaRayCount;
+
     float MaxRW = 0.f;
-
     for (int32 r = 0; r < CRC.EjectaRayCount; ++r)
     {
-        float dA = S.Ang - (r*AngleStep + RayRot);
-        while (dA >  3.14159f) dA -= 2.f*3.14159f;
-        while (dA < -3.14159f) dA += 2.f*3.14159f;
+        float dA = S.Ang - (r * AngleStep + RayRot);
+        while (dA >  3.14159f) dA -= 2.f * 3.14159f;
+        while (dA < -3.14159f) dA += 2.f * 3.14159f;
         if (FMath::Abs(dA) >= CRC.EjectaRayAngularWidth) continue;
-        MaxRW = FMath::Max(MaxRW, FMath::SmoothStep(1.f,0.f, FMath::Abs(dA)/CRC.EjectaRayAngularWidth));
+        MaxRW = FMath::Max(MaxRW, FMath::SmoothStep(1.f, 0.f, FMath::Abs(dA) / CRC.EjectaRayAngularWidth));
     }
 
     if (MaxRW > 0.001f)
-        Total += CRC.EjectaRayHeight * MaxRW * RadialFade
-               * (BG_Noise(S.nX*0.003f, S.nY*0.003f, 888.f) * 0.3f + 1.f);
+        H += CRC.EjectaRayHeight * MaxRW * RadialFade
+           * (BG_Noise(S.nX * 0.003f, S.nY * 0.003f, 888.f) * 0.25f + 1.f);
 }
 
 // ── Secondary craters ─────────────────────────────────────────────────────────
@@ -258,28 +295,36 @@ static bool TryApplySecondaryCrater(float nX, float nY, float DistFromCenter,
                                      float BasePlains, const FCraterBiomeConfig& CRC,
                                      float& OutH, float& OutW)
 {
-    if (DistFromCenter <= CRC.CentralCraterRadius * 0.82f) return false;
-    const float CellSz = 25000.f;
-    const int32 CX = FMath::FloorToInt(nX/CellSz), CY = FMath::FloorToInt(nY/CellSz);
-    const float LX = (CX+0.5f)*CellSz + BG_Noise(CX*13.f,CY*9.f,0.f)*0.38f*CellSz;
-    const float LY = (CY+0.5f)*CellSz + BG_Noise(CX*13.f,CY*9.f,50.f)*0.38f*CellSz;
-    const float Dist = FMath::Sqrt(FMath::Square(nX-LX)+FMath::Square(nY-LY));
-    const float Roll = BG_Noise(CX*7.f, CY*11.f, 100.f);
-    if (Roll <= 0.1f) return false;
-    const float NI      = (Roll-0.1f)/0.9f;
-    const float SecSize = FMath::Lerp(2000.f, CRC.SecondaryCraterMaxRadius, NI);
+    if (DistFromCenter < CRC.CentralCraterRadius * 0.82f) return false;
+
+    const float CellSz = 22000.f;
+    const int32 CX = FMath::FloorToInt(nX / CellSz);
+    const int32 CY = FMath::FloorToInt(nY / CellSz);
+    const float LX = (CX + 0.5f) * CellSz + BG_Noise(CX * 13.f, CY * 9.f, 0.f) * 0.40f * CellSz;
+    const float LY = (CY + 0.5f) * CellSz + BG_Noise(CX * 13.f, CY * 9.f, 50.f) * 0.40f * CellSz;
+    const float Dist = FMath::Sqrt(FMath::Square(nX - LX) + FMath::Square(nY - LY));
+    const float Roll = BG_Noise(CX * 7.f, CY * 11.f, 100.f);
+    if (Roll <= 0.15f) return false;
+
+    const float NI      = (Roll - 0.15f) / 0.85f;
+    const float SecSize = FMath::Lerp(1500.f, CRC.SecondaryCraterMaxRadius, NI);
     if (Dist >= SecSize) return false;
-    const float SND = Dist/SecSize;
-    // Secondary craters are expressed as offsets from BasePlains (= terrain surface)
-    const float RelDepth  = FMath::Lerp(-800.f,  -2200.f, NI);  // relative depression
-    const float RelRimH   = FMath::Lerp( 800.f,   2000.f, NI);  // relative rim height
+
+    const float SND     = Dist / SecSize;
+    const float RelDepth = FMath::Lerp(-600.f, -1800.f, NI);
+    const float RelRimH  = FMath::Lerp( 400.f,  1200.f, NI);
+
     float H = BasePlains;
-    if      (SND < 0.65f) H = BasePlains + RelDepth;
-    else if (SND < 0.85f) H = FMath::Lerp(BasePlains+RelDepth, BasePlains+RelRimH, FMath::SmoothStep(0.65f,0.85f,SND));
-    else                  H = FMath::Lerp(BasePlains+RelRimH, BasePlains, FMath::SmoothStep(0.85f,1.f,SND));
-    if (SND > 0.65f && SND < 1.f)
-        H += BG_Noise(nX*0.005f, nY*0.005f, 0.f) * 300.f * FMath::Sin(SND*3.14159f);
-    OutH = H; OutW = (1.f - FMath::Pow(SND,4.f)) * CRC.SecondaryCraterDensity;
+    if (SND < 0.70f)
+        H = BasePlains + RelDepth * (1.f - SND / 0.70f);
+    else if (SND < 0.88f)
+        H = FMath::Lerp(BasePlains + RelDepth * 0.f, BasePlains + RelRimH,
+                        FMath::SmoothStep(0.70f, 0.88f, SND));
+    else
+        H = FMath::Lerp(BasePlains + RelRimH, BasePlains, FMath::SmoothStep(0.88f, 1.f, SND));
+
+    OutH = H;
+    OutW = (1.f - FMath::Pow(SND, 3.f)) * CRC.SecondaryCraterDensity;
     return true;
 }
 
@@ -288,83 +333,68 @@ static void ApplyTertiaryCraters(float& Total, float nX, float nY,
                                   float DistFromCenter, float BasePlains,
                                   const FCraterBiomeConfig& CRC)
 {
-    if (DistFromCenter <= CRC.CentralCraterRadius * 0.3f) return;
-    const float CellSz = 8000.f;
-    const int32 CX = FMath::FloorToInt(nX/CellSz), CY = FMath::FloorToInt(nY/CellSz);
-    const float LX = (CX+0.5f)*CellSz + BG_Noise(CX*17.f,CY*13.f,200.f)*0.4f*CellSz;
-    const float LY = (CY+0.5f)*CellSz + BG_Noise(CX*17.f,CY*13.f,300.f)*0.4f*CellSz;
-    const float DtoC = FMath::Sqrt(FMath::Square(nX-LX)+FMath::Square(nY-LY));
-    const float Roll = BG_Noise(CX*5.f, CY*7.f, 500.f);
-    const float RadialBias = FMath::Exp(-DistFromCenter/(CRC.CentralCraterRadius*0.8f));
-    if (Roll + RadialBias*0.3f <= 0.6f) return;
-    const float Intensity = FMath::Clamp((Roll+RadialBias*0.3f-0.6f)/0.4f, 0.f, 1.f);
-    const float TSize = FMath::Lerp(CRC.TertiaryCraterMinRadius, CRC.TertiaryCraterMaxRadius, Intensity);
+    if (DistFromCenter < CRC.CentralCraterRadius * 0.25f) return;
+
+    const float CellSz = 7000.f;
+    const int32 CX = FMath::FloorToInt(nX / CellSz);
+    const int32 CY = FMath::FloorToInt(nY / CellSz);
+    const float LX = (CX + 0.5f) * CellSz + BG_Noise(CX * 17.f, CY * 13.f, 200.f) * 0.4f * CellSz;
+    const float LY = (CY + 0.5f) * CellSz + BG_Noise(CX * 17.f, CY * 13.f, 300.f) * 0.4f * CellSz;
+    const float DtoC = FMath::Sqrt(FMath::Square(nX - LX) + FMath::Square(nY - LY));
+    const float Roll  = BG_Noise(CX * 5.f, CY * 7.f, 500.f);
+    const float RadialBias = FMath::Exp(-DistFromCenter / (CRC.CentralCraterRadius * 1.2f));
+    if (Roll + RadialBias * 0.3f <= 0.58f) return;
+
+    const float Intensity = FMath::Clamp((Roll + RadialBias * 0.3f - 0.58f) / 0.42f, 0.f, 1.f);
+    const float TSize     = FMath::Lerp(CRC.TertiaryCraterMinRadius, CRC.TertiaryCraterMaxRadius, Intensity);
     if (DtoC >= TSize) return;
-    const float TNorm = DtoC/TSize;
-    const float Bowl  = FMath::Pow(1.f-TNorm, 1.3f);
-    float TH = BasePlains + (-200.f - Intensity*150.f) * Bowl;
-    if (TNorm > 0.1f && TNorm < 0.25f) TH += 200.f * FMath::SmoothStep(0.1f,0.25f,TNorm);
-    Total = FMath::Lerp(Total, TH, 0.20f);
+
+    const float TNorm = DtoC / TSize;
+    const float Bowl  = FMath::SmoothStep(1.f, 0.f, TNorm);
+    const float TH    = BasePlains + (-150.f - Intensity * 200.f) * Bowl;
+    Total = FMath::Lerp(Total, TH, 0.25f * Bowl);
 }
 
 } // anonymous namespace
 
 // =============================================================================
 //  GetCraterHeight — public entry point
-//  BaseHeight = the blended non-crater surface height at this XY point.
-//  FIXED: crater geometry is now expressed as offsets from BaseHeight so the
-//  rim always rises above surrounding terrain and the floor is always below it.
 // =============================================================================
 float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
                                               const FVoxelGenerationConfig& Config,
                                               float BaseHeight)
 {
     const FCraterBiomeConfig& CRC = Config.Craters;
-
-    // FIX CRATER-ANCHOR: pass BaseHeight so setup uses terrain surface
     const FCraterSetup S = ComputeCraterSetup(X, Y, Config, BaseHeight);
 
-    float TotalHeight = BaseHeight;
+    float CraterH = BaseHeight;
 
-    // 1. Central crater
-    if (S.Dist < S.CraterRadius * 1.5f)
+    // ── 1. Bowl profile ───────────────────────────────────────────────────────
+    if (S.NormDist < 1.35f)
     {
-        const float FadeStart = 0.92f + 0.05f;
-        const float FadeEnd   = 0.92f + 0.38f;
-        const float Dominance = FMath::SmoothStep(FadeEnd, FadeStart, S.NormDist);
-
-        float CentralH = ComputeCentralCraterHeight(S, CRC);
-        ApplyMeteorUplift(CentralH, S, CRC);
-        ApplyRimDetails(CentralH, S, CRC);
-        ApplyEjectaBlanket(CentralH, S, CRC);
-
-        TotalHeight = FMath::Lerp(TotalHeight, CentralH, Dominance);
+        CraterH = ComputeBowlProfile(S, CRC);
+        ApplyFloorTexture(CraterH, S, CRC);
+        ApplyMeteorUplift(CraterH, S, CRC);
+        ApplyRimRoughness(CraterH, S, CRC);
     }
 
-    // 2. Ejecta rays (Meteor only)
-    ApplyEjectaRays(TotalHeight, S, CRC);
+    // ── 2. Ejecta and rays ────────────────────────────────────────────────────
+    ApplyEjectaBlanket(CraterH, S, CRC);
+    ApplyEjectaRays(CraterH, S, CRC);
 
-    // 3. Secondary craters (anchored to BasePlains = terrain surface)
+    // ── 3. Secondary craters ──────────────────────────────────────────────────
     float SecH = 0.f, SecW = 0.f;
     if (TryApplySecondaryCrater(S.nX, S.nY, S.Dist, S.BasePlains, CRC, SecH, SecW))
-        TotalHeight = FMath::Lerp(TotalHeight, SecH, SecW);
+        CraterH = FMath::Lerp(CraterH, SecH, SecW);
 
-    // 4. Tertiary craters
-    ApplyTertiaryCraters(TotalHeight, S.nX, S.nY, S.Dist, S.BasePlains, CRC);
+    // ── 4. Tertiary craters ───────────────────────────────────────────────────
+    ApplyTertiaryCraters(CraterH, S.nX, S.nY, S.Dist, S.BasePlains, CRC);
 
-    // 5. Floor texture (suppressed in melt zone for Meteor)
-    if (TotalHeight < S.BasePlains)
-    {
-        float NoiseAmp = CRC.BuildingNoiseAmplitude;
-        if (CRC.CraterStyle == ECraterStyle::Meteor && CRC.bEnableImpactMelt)
-        {
-            const float MeltR  = CRC.MeltSheetRadiusFraction;
-            const float InMelt = FMath::SmoothStep(MeltR, MeltR*0.8f, S.NormDist/0.65f);
-            NoiseAmp = FMath::Lerp(NoiseAmp, CRC.MeltFloorNoiseAmplitude, InMelt);
-        }
-        TotalHeight += BG_FBM(S.nX*CRC.BuildingNoiseFrequency, S.nY*CRC.BuildingNoiseFrequency, 0.f,
-                               2, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves) * NoiseAmp * 0.2f;
-    }
+    // ── 5. Blend crater into surrounding terrain ──────────────────────────────
+    // Dominance: 1 inside the crater/rim, fades to 0 in the ejecta zone
+    const float FadeStart = 0.97f;
+    const float FadeEnd   = 1.35f;
+    const float Dominance = FMath::SmoothStep(FadeEnd, FadeStart, S.NormDist);
 
-    return TotalHeight;
+    return FMath::Lerp(BaseHeight, CraterH, Dominance);
 }

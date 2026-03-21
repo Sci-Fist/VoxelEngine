@@ -152,6 +152,7 @@ void AFirstVoxelCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	PlayerInputComponent->BindKey(EKeys::M,     IE_Pressed, this, &AFirstVoxelCharacter::ToggleMap);
 	PlayerInputComponent->BindKey(EKeys::P,     IE_Pressed, this, &AFirstVoxelCharacter::TogglePauseMenu);
 	PlayerInputComponent->BindKey(EKeys::V,     IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
+	PlayerInputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &AFirstVoxelCharacter::ToggleCameraMode);
 	PlayerInputComponent->BindKey(EKeys::LeftControl, IE_Pressed, this, &AFirstVoxelCharacter::FlyDown);
 	
 	PlayerInputComponent->BindKey(EKeys::R,                            IE_Pressed, this, &AFirstVoxelCharacter::ToggleAutoWalk);
@@ -512,6 +513,12 @@ void AFirstVoxelCharacter::ToggleCameraMode()
 		FirstPersonCamera->SetVisibility(true);
 		FirstPersonCamera->Activate();
 		CameraBoom->TargetArmLength = 0.f;
+		
+		if (GetMesh())
+		{
+			GetMesh()->SetOwnerNoSee(true);
+			GetMesh()->bCastHiddenShadow = true; // Preserve shadows
+		}
 	}
 	else
 	{
@@ -519,6 +526,11 @@ void AFirstVoxelCharacter::ToggleCameraMode()
 		FollowCamera->Activate();
 		FollowCamera->SetVisibility(true);
 		CameraBoom->TargetArmLength = 400.f;
+
+		if (GetMesh())
+		{
+			GetMesh()->SetOwnerNoSee(false);
+		}
 	}
 }
 

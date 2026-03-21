@@ -13,6 +13,7 @@
 // let GameMode::HandleStartingNewPlayer handle possession as designed.
 
 #include "VoxelWorld.h"
+#include "FirstVoxelCharacter.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -99,12 +100,12 @@ void AVoxelWorld::BeginPlay()
                 CMC->SetMovementMode(EMovementMode::MOVE_None);
     }
 
-    if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-        if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
-        { HUD->bShowLoadBar = true; HUD->LoadProgress = 0.f; }
-
     if (bAutoGenerateOnBeginPlay)
     {
+        if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+            if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+            { HUD->bShowLoadBar = true; HUD->LoadProgress = 0.f; }
+
         if (bRandomizeSeedOnStartup) RandomizeSeed();
         ClearWorld();
         GenerateWorldDeferred();
@@ -115,7 +116,10 @@ void AVoxelWorld::BeginPlay()
         ClearWorld();
         if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
             if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+            {
+                HUD->bShowLoadBar = false;
                 HUD->bShowTitleScreen = true;
+            }
     }
 }
 
@@ -167,7 +171,7 @@ void AVoxelWorld::Tick(float DeltaTime)
     if (GetWorld()->IsGameWorld())
     {
         StreamingTimer += DeltaTime;
-        if (StreamingTimer >= StreamingInterval)
+        if (StreamingTimer >= StreamingInterval && !bWaitingForInitialSpawn)
         { StreamingTimer = 0.f; UpdateChunkStreaming(); }
     }
 
@@ -205,15 +209,6 @@ void AVoxelWorld::Tick(float DeltaTime)
                     if ((*P)->IsReady()) ++ReadyCount;
         }
 
-        if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-            if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
-            {
-                HUD->bShowLoadBar = true;
-                HUD->bShowTitleScreen = false;
-                HUD->LoadProgress = (Total > 0)
-                    ? FMath::Min((float)ReadyCount / (float)Total, 0.99f) : 0.f;
-            }
-
         APawn* SpawnPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
         if (!SpawnPlayer) return;
 
@@ -229,6 +224,10 @@ void AVoxelWorld::Tick(float DeltaTime)
                         CMC->bJustTeleported = true;
                     }
                 }
+                if (AFirstVoxelCharacter* FVCh = Cast<AFirstVoxelCharacter>(Ch))
+                {
+                    if (!FVCh->bIsFirstPerson) FVCh->ToggleCameraMode();
+                }
             }
 
             FVector HoverPos = SpawnPlayer->GetActorLocation();
@@ -243,6 +242,22 @@ void AVoxelWorld::Tick(float DeltaTime)
             if (bTimedOut)
                 UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn timeout (%.1fs). Releasing with %d/%d ready."), SpawnWaitAccum, ReadyCount, Total);
 
+            bWaitingForInitialSpawn = false;
+            SpawnWaitAccum = SpawnDelayAccum = 0.f;
+            InitialSpawnCoords.Empty();
+
+            SpawnPlayer->SetActorHiddenInGame(false);
+
+            // === DROP PLAYER & HIDE HUD IMMEDIATELY ON CORE READY ===
+            if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+            {
+                if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+                {
+                    HUD->LoadProgress = 1.f;
+                    HUD->bShowLoadBar = false;
+                }
+            }
+
             SpawnPlayer->SetActorEnableCollision(true);
             const FVector TraceOrigin = SpawnPlayer->GetActorLocation();
             FHitResult Hit;
@@ -250,32 +265,50 @@ void AVoxelWorld::Tick(float DeltaTime)
             const FVector Start = TraceOrigin + FVector(0,0,50.f);
             const FVector End   = TraceOrigin + FVector(0,0,-150000.f);
             FCollisionShape Sphere = FCollisionShape::MakeSphere(30.f);
-            bool bHit = GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Visibility, Sphere, QP);
-            if (!bHit)
-                bHit = GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, QP);
+            bool bHit2 = GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Visibility, Sphere, QP);
+            if (!bHit2)
+                bHit2 = GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, QP);
 
-            if (bHit || bTimedOut)
+            if (bHit2)
             {
-                if (bHit)
+                FVector LandPos = TraceOrigin;
+                LandPos.Z = Hit.ImpactPoint.Z + 101.f;
+                SpawnPlayer->SetActorLocation(LandPos, false, nullptr, ETeleportType::TeleportPhysics);
+            }
+
+            if (ACharacter* Ch = Cast<ACharacter>(SpawnPlayer))
+            {
+                if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
                 {
-                    FVector LandPos = TraceOrigin;
-                    LandPos.Z = Hit.ImpactPoint.Z + 101.f;
-                    SpawnPlayer->SetActorLocation(LandPos, false, nullptr, ETeleportType::TeleportPhysics);
+                    CMC->Velocity = FVector::ZeroVector; 
+                    CMC->SetMovementMode(MOVE_Walking);
+                    CMC->UpdateFloorFromAdjustment(); 
+                    CMC->bJustTeleported = false; 
                 }
+            }
+        }
+    }
 
-                bWaitingForInitialSpawn = false;
-                SpawnWaitAccum = SpawnDelayAccum = 0.f;
-                InitialSpawnCoords.Empty();
+    // ── Update Loading Screen HUD ────────────────────────────────────────
+    if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+    {
+        if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
+        {
+            if (HUD->bShowLoadBar)
+            {
+                const int32 TotalQ = GenerationQueue.Num();
+                if (!bWaitingForInitialSpawn && TotalQ > 0 && QueueHead >= TotalQ && ActiveGenerations == 0)
+                {
+                    HUD->LoadProgress = 1.f;
+                    HUD->bShowLoadBar = false;
 
-                if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-                    if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
-                    { HUD->LoadProgress = 1.f; HUD->bShowLoadBar = false; }
-
-                SpawnPlayer->SetActorHiddenInGame(false);
-                if (ACharacter* Ch = Cast<ACharacter>(SpawnPlayer))
-                    if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
-                    { CMC->Velocity = FVector::ZeroVector; CMC->SetMovementMode(MOVE_Walking);
-                      CMC->UpdateFloorFromAdjustment(); CMC->bJustTeleported = false; }
+                    // Old drop logic removed; handled above immediately on core ready.
+                }
+                else if (TotalQ > 0)
+                {
+                    HUD->bShowTitleScreen = false;
+                    HUD->LoadProgress = FMath::Min((float)QueueHead / (float)TotalQ, 0.99f);
+                }
             }
         }
     }

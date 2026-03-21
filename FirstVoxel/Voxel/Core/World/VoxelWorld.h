@@ -1,8 +1,4 @@
-//
-// VoxelWorld.h
-// FIX SafeSpawnHeightOffset: was 25000 (250m above surface!) → 200 (2m).
-// Players were spawning 250m in the air and falling. With the crater anchor
-// fix the crater floor is correctly anchored to terrain, so a small offset is enough.
+// VoxelWorld.h — Valheim-scale render distance parameters
 
 #pragma once
 
@@ -42,29 +38,72 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|World")
     float VoxelSize = 100.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
-    int32 RenderDistanceXY = 8;
+    // ── Render Distance — Three-zone system ──────────────────────────────────
+    //
+    //  Zone A (LOD 0 — full detail):
+    //    Radius = RenderDistanceXY chunks × 1600 cm = 2240 cm = ~22m
+    //    Vertical = RenderDistanceZ × 1600 cm above/below terrain = ±16000cm
+    //    This is the immediate play area — everything looks sharp.
+    //
+    //  Zone B (LOD 1 — half resolution):
+    //    Radius = MidRenderDistanceXY × 1600 cm = ~640m
+    //    Vertical = MidRenderDistanceZ × 1600 cm = ±6400cm around terrain
+    //    Distant terrain still looks good, hills and forests readable.
+    //
+    //  Zone C (LOD 2 — quarter resolution):
+    //    Radius = DistantRenderDistanceXY × 1600 cm = ~1280m
+    //    Vertical = only 1 chunk above/below surface (silhouette only)
+    //    Far horizon like Valheim — you can see the shape of distant lands.
+    //
+    //  Skylands:
+    //    Radius = SkylandsRenderDistanceXY = ~320m
+    //    Vertical = SkylandsRenderDistanceZ chunks above SkyAlt (sky band)
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
-    int32 SkylandsRenderDistanceXY = 8;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
+        meta=(ToolTip="Zone A radius (LOD 0 full detail). 14 chunks = 224m."))
+    int32 RenderDistanceXY = 14;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming", meta=(ClampMin="0"))
-    int32 DistantRenderDistanceXY = 24;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
+        meta=(ToolTip="Zone A vertical half-range above/below terrain (chunks). 10 = ±160m, covers caves and skylands from crater floor."))
+    int32 RenderDistanceZ = 10;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming", meta=(ClampMin="2", ClampMax="4"))
-    int32 DistantLOD = 3;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
+        meta=(ToolTip="Zone B radius (LOD 1 half-resolution). 40 chunks = 640m. Middle ground between playspace and horizon."))
+    int32 MidRenderDistanceXY = 40;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
-    int32 RenderDistanceZ = 2;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
+        meta=(ToolTip="Zone B vertical half-range (chunks). 4 = ±64m. Thin slice — just terrain surface + a little above/below."))
+    int32 MidRenderDistanceZ = 4;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Performance")
-    int32 MaxConcurrentGenerations = 6;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
+        meta=(ToolTip="Zone C radius (LOD 2 silhouette). 80 chunks = 1280m. Valheim-level horizon view distance."))
+    int32 DistantRenderDistanceXY = 80;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD")
-    float LOD1Distance = 6000.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
+        meta=(ClampMin="2", ClampMax="4",
+              ToolTip="LOD for chunks beyond MidRenderDistanceXY. 2 = quarter-resolution silhouette (recommended)."))
+    int32 DistantLOD = 2;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD")
-    float LOD2Distance = 12000.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
+        meta=(ToolTip="Skylands XY radius (chunks). 20 chunks = 320m sky island coverage."))
+    int32 SkylandsRenderDistanceXY = 20;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
+        meta=(ToolTip="Extra Z chunks above skylands SkyAlt for full sky band. 8 = 128m sky coverage."))
+    int32 SkylandsRenderDistanceZ = 8;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Performance",
+        meta=(ClampMin="4", ClampMax="64",
+              ToolTip="Parallel chunk generation slots. Increase for faster streaming fill at cost of CPU spikes. 24 recommended for Valheim-style fill-in."))
+    int32 MaxConcurrentGenerations = 24;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD",
+        meta=(ToolTip="World distance (cm) at which LOD 0 transitions to LOD 1. 40000 = 400m (Zone A/B boundary)."))
+    float LOD1Distance = 22400.f;   // = RenderDistanceXY * ChunkSize * VoxelSize
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD",
+        meta=(ToolTip="World distance (cm) at which LOD 1 transitions to LOD 2. 100000 = 1000m (Zone B/C boundary)."))
+    float LOD2Distance = 64000.f;   // = MidRenderDistanceXY * ChunkSize * VoxelSize
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
     UMaterialInterface* MasterFlatMaterial  = nullptr;
@@ -121,8 +160,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Generation")
     bool bAutoGenerateOnBeginPlay = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",
-        meta=(ToolTip="When true, the player spawns inside a natural noise-crater."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
     bool bSpawnInNaturalCrater = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn", meta=(ClampMin="1000.0"))
@@ -134,15 +172,10 @@ public:
     FIntVector WorldToChunkCoord(const FVector& WorldPos) const;
     FVector    ChunkCoordToWorld(const FIntVector& Coord)  const;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",
-              meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn", meta=(ClampMin="0.0", ClampMax="1.0"))
     float CraterSpawnMinWeight = 0.25f;
 
-    // FIX SafeSpawnHeightOffset: was 25000 (250m!) — player spawned 250m in the air.
-    // Now 200cm (2m) above terrain — just enough to clear the surface mesh,
-    // with the hover-lock handling fine Z placement once collision is ready.
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn",
-        meta=(ToolTip="Height above terrain surface to park the player while collision bakes (cm). 200 = 2m."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
     float SafeSpawnHeightOffset = 200.f;
 
     UFUNCTION(CallInEditor, Category="Voxel") void GenerateWorld();
@@ -154,8 +187,7 @@ public:
     virtual void OnConstruction(const FTransform& Transform) override;
 
     UFUNCTION(BlueprintCallable, Category="Voxel|Interaction")
-    void SetVoxelSphere(FVector WorldPosition, float Radius, float DensityValue,
-                        bool bRebuildChunks = true);
+    void SetVoxelSphere(FVector WorldPosition, float Radius, float DensityValue, bool bRebuildChunks = true);
 
     UFUNCTION(BlueprintCallable, Category="Voxel|Testing") void RunVoxelTests();
 
@@ -168,8 +200,7 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
     virtual void Tick(float DeltaTime) override;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Persistence")
-    FString SaveSlotName = TEXT("DefaultSlot");
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Persistence") FString SaveSlotName = TEXT("DefaultSlot");
 
     UFUNCTION(BlueprintCallable, Category="Voxel|Persistence") void SaveToFile(const FString& SlotName);
     UFUNCTION(BlueprintCallable, Category="Voxel|Persistence") void LoadFromFile(const FString& SlotName);
@@ -183,7 +214,6 @@ public:
     UFUNCTION(BlueprintCallable, Category="Voxel|Terrain") float GetTerrainHeight(float X, float Y) const;
     float GetSurfaceZ(float X, float Y) const;
 
-    // ── Per-biome ─────────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")  FVoxelBiomeRenderConfig ForestRender;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")  FVoxelBiomeWaterConfig  ForestWater;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")   FVoxelBiomeRenderConfig PeaksRender;
@@ -199,14 +229,11 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands") FVoxelBiomeRenderConfig SkylandsRender;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands") FVoxelBiomeWaterConfig  SkylandsWater;
 
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel")
-    class UVoxelWaterComponent* WaterComponent = nullptr;
-
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel") class UVoxelWaterComponent* WaterComponent = nullptr;
     UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") UStaticMesh* TreeMesh  = nullptr;
     UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") UStaticMesh* GrassMesh = nullptr;
-    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy", meta=(ClampMin="0.0", ClampMax="1.0")) float FoliageDensity = 0.05f;
+    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy", meta=(ClampMin="0.0", ClampMax="1.0")) float FoliageDensity  = 0.05f;
     UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy", meta=(ClampMin="0.0", ClampMax="1.0")) float MaxFoliageSlope = 0.8f;
-
     UPROPERTY(VisibleAnywhere, Category="Voxel") class USceneComponent* Root;
 
 private:
@@ -216,7 +243,6 @@ private:
     FVoxelChunkManager             ChunkManager;
     FVoxelChunkPool                ChunkPool;
     TArray<FIntVector>             DirtyRebuildQueue;
-
     void MarkChunkDirty(const FIntVector& Coord);
 
     TArray<FIntVector> GenerationQueue;
@@ -256,12 +282,10 @@ private:
     FVector SnapToVoxelGrid         (const FVector& WorldPos) const;
     FVector FindCraterSpawnLocation  (const FVector& StartPos, const FVoxelGenerationConfig& Config) const;
     float   GetSafeSpawnHeightOffset () const;
-
     void RandomizeSeed();
 
 public:
     void GenerateWorldDeferred();
-
     UFUNCTION(BlueprintPure, Category="Voxel") bool  IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
     UFUNCTION(BlueprintPure, Category="Voxel") float GetGenerationProgress()    const;
 

@@ -1,63 +1,38 @@
-// VoxelBiomeGenerators_Skylands.cpp
+// VoxelBiomeGenerators_Skylands.cpp — three targeted fixes:
 //
-// Floating island density system.
+// FIX LOAD: GetSkylandColumnCache cell-center height was using the broken
+//   zero-crater-weight trick: zeroing Craters weight then calling
+//   GetSurfaceHeightStatic() — which ignores its weight parameter and always
+//   calls GetCraterHeight(). So CH was still crater-modified.
+//   Fix: call GetNeutralSurfaceHeightStatic() which genuinely omits the crater.
 //
-// FIX N10 — J-curve probability fields are NOW implemented.
-//            Previously FSkylandsLayerConfig declared:
-//              ProbMidDipCenter, ProbMidDipWidth, ProbMidDipDepth,
-//              ProbHighAltitudeThreshold, RoughnessProbabilityBonus
-//            but GetSkylandColumnCache() never read them — spawn probability
-//            was a flat BaseProbability + HeightProbabilityBonus*CST with no
-//            J-curve shaping. This caused islands to appear uniformly over
-//            mid-altitude terrain instead of clustering over flat plains
-//            (shards) and dramatic peaks (islands) with a gap in between.
+// FIX GROUNDED: Altitude coupling for low CST (flat plains, CST ≈ 0.18) was
+//   computing SkyAlt = CH + 2100 + noise(±4250), which could reach CH − 2143.
+//   Only guard was FMath::Max(SkyAlt, CH + HalfThick + 200) = CH + ~500 cm.
+//   Island bottom at CH + 200 cm = essentially touching terrain surface.
+//   Fix: final clamp uses MinAltitudeAboveTerrain (8000 cm) so the island
+//   BOTTOM (SkyAlt − HalfThick) is always ≥ MinAlt above neutral terrain.
 //
-//            Implementation:
-//              effective_prob = BaseProbability
-//                             + HeightBonus * high_alt_factor(HeightNorm)
-//                             + RoughnessBonus * RoughnessNorm
-//                             - MidDip * gaussian(HeightNorm)
-//
-//            where gaussian suppresses probability at ProbMidDipCenter
-//            with width ProbMidDipWidth, creating the characteristic J-curve.
+// FIX N10: J-curve probability (unchanged from previous session).
 
 #include "VoxelBiomeGenerators_Shared.h"
 #include "VoxelBiomeGenerators.h"
 #include "VoxelBiomeManager.h"
 #include "Voxel/Config/VoxelGenerationConfig.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Internal: J-curve probability for a given HeightNorm + RoughnessNorm.
-// FIX N10: reads the previously-unused J-curve config fields.
-// ─────────────────────────────────────────────────────────────────────────────
 static float ComputeIslandSpawnProbability(
-    float HeightNorm, float RoughnessNorm,
-    const FSkylandsLayerConfig& SC)
+    float HeightNorm, float RoughnessNorm, const FSkylandsLayerConfig& SC)
 {
-    // Base probability (even over flat/sea-level terrain)
     float P = SC.BaseProbability;
-
-    // High-altitude bonus: only kicks in above ProbHighAltitudeThreshold
-    // (FIX N10: was applied linearly from 0 via HeightProbabilityBonus*CST)
-    const float HighAltFactor = FMath::SmoothStep(
-        SC.ProbHighAltitudeThreshold, 1.f, HeightNorm);
+    const float HighAltFactor = FMath::SmoothStep(SC.ProbHighAltitudeThreshold, 1.f, HeightNorm);
     P += SC.HeightProbabilityBonus * HighAltFactor;
-
-    // Roughness bonus: steep terrain spawns more islands regardless of altitude
     P += SC.RoughnessProbabilityBonus * RoughnessNorm;
-
-    // Mid-altitude Gaussian suppression (FIX N10: was never applied before)
-    // Carves a dip centred at ProbMidDipCenter so rolling hills get fewer islands.
     const float MidDev = (HeightNorm - SC.ProbMidDipCenter) / FMath::Max(SC.ProbMidDipWidth, 0.01f);
     const float MidDip = SC.ProbMidDipDepth * FMath::Exp(-0.5f * MidDev * MidDev);
     P -= MidDip;
-
     return FMath::Clamp(P, 0.f, 1.f);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GetSkylandDensity — convenience wrapper (builds cache then evaluates)
-// ─────────────────────────────────────────────────────────────────────────────
 float FVoxelBiomeGenerators::GetSkylandDensity(float X, float Y, float Z,
     float SurfaceHeight, const FVoxelBiomeWeightMap& Weights,
     const FVoxelGenerationConfig& Config, int32 StepSize)
@@ -66,9 +41,6 @@ float FVoxelBiomeGenerators::GetSkylandDensity(float X, float Y, float Z,
     return GetSkylandDensityFromCache(Cache, X, Y, Z, Config, StepSize);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GetSkylandColumnCache — build per-column island metadata
-// ─────────────────────────────────────────────────────────────────────────────
 FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     float X, float Y, float SurfaceHeight,
     const FVoxelBiomeWeightMap& Weights,
@@ -78,12 +50,11 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
     const FVector Off = Config.GetSeedOffset();
 
-    // Terrain strength at this column
     const float ColHN = FMath::Clamp(SurfaceHeight/SC.MaxTerrainReference, 0.f, 1.f);
     const float ColRN = FMath::Clamp(Weights.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);
     const float ColTS = FMath::Clamp(ColHN*1.5f + ColRN*0.8f, 0.f, 1.f);
     const float ColST = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, ColTS);
-    const float GridSize = SC.BaseIslandSize * FMath::Lerp(1.f, 4.f, ColST);
+    const float GridSize = SC.BaseIslandSize * 3.0f;
     if (GridSize <= 0.f) return Cache;
 
     const int32 CellX = FMath::FloorToInt(X/GridSize);
@@ -97,29 +68,44 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float nX2 = (float)cX*GridSize+Off.X;
         const float nY2 = (float)cY*GridSize+Off.Y;
 
-        // Island centre (hash-jittered within cell)
-        const float HX = (BG_Noise(nX2*0.001f, nY2*0.001f, 0.f)+1.f)*0.5f;
-        const float HY = (BG_Noise(nX2*0.001f, nY2*0.001f, 100.f)+1.f)*0.5f;
+        const float HX  = (BG_Noise(nX2*0.001f, nY2*0.001f, 0.f)+1.f)*0.5f;
+        const float HY  = (BG_Noise(nX2*0.001f, nY2*0.001f, 100.f)+1.f)*0.5f;
         const float CX2 = (cX+0.12f+HX*0.76f)*GridSize;
         const float CY2 = (cY+0.12f+HY*0.76f)*GridSize;
         const float Dist = FMath::Sqrt(FMath::Square(X-CX2)+FMath::Square(Y-CY2));
 
-        // Terrain at island cell centre
+        // FIX CLIPPING: Sample height at the center and at 4 perimeter points.
+        // Take the MAXIMUM of both Neutral (pre-crater) and Full (post-crater) height.
+        // This guarantees the island floats safely above mountain peaks and crater rims
+        // that exist under its footprint, without dipping into crater bowls.
+        const float SampleR = FMath::Max(1500.f, SC.BaseIslandSize * 0.75f);
+        auto GetMaxH = [&](float sX, float sY)
+        {
+            const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(sX, sY, Config);
+            const FVoxelBiomeWeightMap mCW = FVoxelBiomeManager::GetBiomeWeightsStatic(sX, sY, Config);
+            const float FullH = FVoxelBiomeManager::GetSurfaceHeightStatic(sX, sY, mCW, Config);
+            return FMath::Max(NeutralH, FullH);
+        };
+
         const FVoxelBiomeWeightMap CW = FVoxelBiomeManager::GetBiomeWeightsStatic(CX2, CY2, Config);
-        FVoxelBiomeWeightMap NW = CW; NW.SetWeight(EVoxelBiome::Craters, 0.f); NW.Normalize();
-        const float CH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX2, CY2, NW, Config);
+        const float CenterNeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX2, CY2, Config);
+        const float CenterFullH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX2, CY2, CW, Config);
+        
+        float CH = FMath::Max(CenterNeutralH, CenterFullH);
+        CH = FMath::Max(CH, GetMaxH(CX2 + SampleR, CY2));
+        CH = FMath::Max(CH, GetMaxH(CX2 - SampleR, CY2));
+        CH = FMath::Max(CH, GetMaxH(CX2, CY2 + SampleR));
+        CH = FMath::Max(CH, GetMaxH(CX2, CY2 - SampleR));
         const float HN = FMath::Clamp(CH/SC.MaxTerrainReference, 0.f, 1.f);
         const float RN = FMath::Clamp(CW.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);
         const float TS = FMath::Clamp(HN*1.5f+RN*0.8f, 0.f, 1.f);
         const float CST = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TS);
 
-        // FIX N10: use J-curve probability instead of flat linear ramp
         const float cnX2 = CX2+Off.X, cnY2 = CY2+Off.Y;
         const float HP   = (BG_Noise(cnX2*0.002f, cnY2*0.002f, 200.f)+1.f)*0.5f;
         const float SpawnProb = ComputeIslandSpawnProbability(HN, RN, SC);
         if (HP > SpawnProb) continue;
 
-        // Island size
         const float SMN = FMath::Max(0.20f, SC.ShardMinScale);
         const float SF  = (BG_FBM(cnX2*0.00008f, cnY2*0.00008f, 50.f, 2, 2.f, 0.5f, 2)+1.f)*0.5f;
         const float NR  = FMath::Lerp(0.5f, 0.25f, CST);
@@ -127,7 +113,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         IS = FMath::Clamp(IS*((1.f-NR)+NR*SF*2.f), 150.f, GridSize*0.48f);
         if (Dist > IS) continue;
 
-        // Altitude
+        // Base altitude
         const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
         const float CuH = FMath::Pow(FMath::Max(0.f,HN), 2.5f);
         const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
@@ -142,13 +128,20 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
                 SkyAlt = CH + HA*FMath::Lerp(0.2f,0.7f,CST) + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
             else
                 SkyAlt = CH + HA + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
-            SkyAlt += BG_Noise(cnX2*0.006f, cnY2*0.006f, 500.f)*FMath::Lerp(5000.f,1500.f,CST);
+            // Noise perturbation — clamped range so it can't pull altitude below minimum
+            const float NoiseRange = FMath::Lerp(5000.f, 1500.f, CST);
+            SkyAlt += BG_Noise(cnX2*0.006f, cnY2*0.006f, 500.f) * NoiseRange;
         }
 
         const float HA2 = (BG_Noise(cnX2*0.005f, cnY2*0.005f, 300.f)+1.f)*0.5f;
         const float ET  = FMath::Lerp(FMath::Lerp(0.12f,0.25f,HA2), SC.ThicknessRatio, CST);
         float HT = FMath::Min(IS*ET, IS*FMath::Lerp(0.75f, SC.MaxThicknessRatio, CST));
-        SkyAlt = FMath::Max(SkyAlt, CH+HT+200.f);
+
+        // FIX GROUNDED: enforce MinAltitudeAboveTerrain as a hard floor.
+        // Old: FMath::Max(SkyAlt, CH + HT + 200) → island bottom at CH+200cm
+        //      (2m above terrain) → merged with terrain via FMath::Max(SkyD,SurfD).
+        // New: SkyAlt - HT >= CH + MinAltitudeAboveTerrain (8000cm = 80m gap).
+        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain + HT);
 
         float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST)
                   + FMath::Lerp(0.20f, 0.f, CST);
@@ -176,9 +169,6 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     return Cache;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GetSkylandDensityFromCache — per-voxel evaluation
-// ─────────────────────────────────────────────────────────────────────────────
 float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
     const FSkylandColumnCache& Cache, float X, float Y, float Z,
     const FVoxelGenerationConfig& Config, int32 StepSize)
