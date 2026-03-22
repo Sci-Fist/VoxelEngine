@@ -60,12 +60,12 @@ public:
     //    Vertical = SkylandsRenderDistanceZ chunks above SkyAlt (sky band)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Zone A radius (LOD 0 full detail). 14 chunks = 224m."))
-    int32 RenderDistanceXY = 14;
+        meta=(ToolTip="Zone A radius (LOD 0 full detail). 24 chunks = 384m."))
+    int32 RenderDistanceXY = 24;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Zone A vertical half-range above/below terrain (chunks). 10 = ±160m, covers caves and skylands from crater floor."))
-    int32 RenderDistanceZ = 10;
+        meta=(ToolTip="Zone A vertical half-range above/below terrain (chunks). 16 = ±256m, covers caves and skylands from crater floor."))
+    int32 RenderDistanceZ = 16;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Zone B radius (LOD 1 half-resolution). 40 chunks = 640m. Middle ground between playspace and horizon."))

@@ -114,14 +114,17 @@ void UVoxelWaterComponent::TickComponent(float DeltaTime, ELevelTick TickType,
         Params.AddIgnoredActor(GetOwner());
         Params.AddIgnoredActor(Player);
 
+        // Shortened trace to 3000 cm (30m) so Skylands or high peaks don't trigger cave logic
         bCachedHasCeiling = GetWorld()->LineTraceSingleByChannel(
-            Hit, PlayerPos, PlayerPos + FVector(0.f, 0.f, 20000.f),
+            Hit, PlayerPos, PlayerPos + FVector(0.f, 0.f, 3000.f),
             ECC_WorldStatic, Params);
 
         CeilingCheckTimer = 0.f;
         LastCeilingCheckZ = PlayerPos.Z;
     }
 
-    // Hide when player is underground (ceiling above = inside terrain)
-    OceanComponent->SetVisibility(!bCachedHasCeiling);
+    // Hide when player is in a cave (ceiling close above) AND below sea level
+    // This prevents seeing the infinite ocean plane through cave floors or mesh gaps.
+    const bool bIsUnderground = bCachedHasCeiling && (PlayerPos.Z < SeaLevel + 1000.f);
+    OceanComponent->SetVisibility(!bIsUnderground);
 }

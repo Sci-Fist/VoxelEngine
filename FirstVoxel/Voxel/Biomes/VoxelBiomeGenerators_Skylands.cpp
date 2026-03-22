@@ -125,7 +125,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
 
         // Absolute height anchor coordinates (e.g., config values should be absolute offsets above sea level)
-        float SkyAlt = AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
+        float SkyAlt = CH + AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
 
         // Size/altitude coupling
         {
@@ -140,8 +140,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float ET  = FMath::Lerp(FMath::Lerp(0.12f,0.25f,HA2), SC.ThicknessRatio, CST);
         float HT = FMath::Min(IS*ET, IS*FMath::Lerp(0.75f, SC.MaxThicknessRatio, CST));
 
-        // Removed the CH + SC.MinAltitudeAboveTerrain override that was ballooning altitude above mountains.
-        SkyAlt = FMath::Max(SkyAlt, SC.MinAltitudeAboveTerrain + HT);
+        // Removed the absolute sea level override that was burying islands in mountains.
+        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain + HT);
 
         float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST)
                   + FMath::Lerp(0.20f, 0.f, CST);

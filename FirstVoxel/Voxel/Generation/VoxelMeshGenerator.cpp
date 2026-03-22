@@ -38,9 +38,9 @@ FVector FVoxelMeshGenerator::ComputeNormal(
         Z >= 1 && Z <= InChunkSize + 1)
     {
         const int32 C = X + Y * S + Z * S2;
-        return -FVector(Densities[C+1]  - Densities[C-1],
-                        Densities[C+S]  - Densities[C-S],
-                        Densities[C+S2] - Densities[C-S2]).GetSafeNormal(1.0e-6f, FVector::UpVector);
+        return (-FVector(Densities[C+1]  - Densities[C-1],
+                         Densities[C+S]  - Densities[C-S],
+                         Densities[C+S2] - Densities[C-S2])).GetSafeNormal(1.0e-6f, FVector::UpVector);
     }
 
     auto SafeGet = [&](int32 ix, int32 iy, int32 iz) -> float {
@@ -49,9 +49,9 @@ FVector FVoxelMeshGenerator::ComputeNormal(
         iz = FMath::Clamp(iz, 0, S-1);
         return Densities[Idx(ix, iy, iz, S)];
     };
-    return -FVector(SafeGet(X+1,Y,Z)-SafeGet(X-1,Y,Z),
-                    SafeGet(X,Y+1,Z)-SafeGet(X,Y-1,Z),
-                    SafeGet(X,Y,Z+1)-SafeGet(X,Y,Z-1)).GetSafeNormal(1.0e-6f, FVector::UpVector);
+    return (-FVector(SafeGet(X+1,Y,Z)-SafeGet(X-1,Y,Z),
+                     SafeGet(X,Y+1,Z)-SafeGet(X,Y-1,Z),
+                     SafeGet(X,Y,Z+1)-SafeGet(X,Y,Z-1))).GetSafeNormal(1.0e-6f, FVector::UpVector);
 }
 
 // ---------------------------------------------------------------------------
