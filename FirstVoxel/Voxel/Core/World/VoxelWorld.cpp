@@ -394,7 +394,15 @@ void AVoxelWorld::SnapPlayerToGround()
 
     FVector Pos = Target->GetActorLocation();
     const FVoxelGenerationConfig Cfg = GetEffectiveConfig(); // FIX #30: value copy
-    if (bSpawnInNaturalCrater) Pos = FindCraterSpawnLocation(Pos, Cfg);
+    if (bSpawnInNaturalCrater)
+    {
+        Pos = FindCraterSpawnLocation(Pos, Cfg);
+        if (BiomePreset != nullptr)
+        {
+            BiomePreset->Config.Craters.ForcedCraterCenter = FVector2D(Pos.X, Pos.Y);
+        }
+        GenerationConfig.Craters.ForcedCraterCenter = FVector2D(Pos.X, Pos.Y);
+    }
 
     Pos.Z = GetTerrainHeight(Pos.X, Pos.Y) + SafeSpawnHeightOffset;
     Target->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);

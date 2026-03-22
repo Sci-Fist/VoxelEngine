@@ -152,13 +152,16 @@ FVector AVoxelWorld::FindCraterSpawnLocation(
             (CY+0.5f)*CellSz + COffY - Off.Y,
             StartPos.Z);
 
+        FVoxelGenerationConfig TempCfg = Config;
+        TempCfg.Craters.ForcedCraterCenter = FVector2D(Candidate.X, Candidate.Y);
+
         const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(
-            Candidate.X, Candidate.Y, Config);
+            Candidate.X, Candidate.Y, TempCfg);
         const float CratersW = W.GetWeight(EVoxelBiome::Craters);
         if (CratersW < 0.15f) continue;
 
         const float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(
-            Candidate.X, Candidate.Y, W, Config);
+            Candidate.X, Candidate.Y, W, TempCfg);
 
         const bool bStrictlyBetter =
             (CratersW > BestWeight + WeightTol) ||

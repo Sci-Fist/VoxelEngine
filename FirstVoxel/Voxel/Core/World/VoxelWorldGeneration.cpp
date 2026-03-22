@@ -56,6 +56,14 @@ void AVoxelWorld::GenerateWorldDeferred()
     {
         UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Natural crater at %s"), *CraterPos.ToString());
         CandidatePos = CraterPos;
+        
+        // ROOT FIX overlay offset: Force the world density generator 
+        // to render its central bowl math center aligned on the player spawn coord.
+        if (BiomePreset != nullptr)
+        {
+            BiomePreset->Config.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
+        }
+        GenerationConfig.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
     }
 
 #if !WITH_EDITOR
