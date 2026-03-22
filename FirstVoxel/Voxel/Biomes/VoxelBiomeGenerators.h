@@ -75,6 +75,8 @@ struct FSkylandIslandData
     float HeightNorm = 0.f;
     float ShardFalloff = 0.f;
     float IslandSize = 0.f;
+    float CX2 = 0.f;
+    float CY2 = 0.f;
 };
 
 struct FSkylandColumnCache
@@ -149,7 +151,8 @@ struct FIRSTVOXEL_API FVoxelBiomeGenerators
     static FSkylandColumnCache GetSkylandColumnCache(
         float X, float Y, float SurfaceHeight,
         const FVoxelBiomeWeightMap& Weights,
-        const FVoxelGenerationConfig& Config);
+        const FVoxelGenerationConfig& Config,
+        TMap<FIntPoint, TArray<FSkylandIslandData>>* CacheMap = nullptr);
 
     static float GetSkylandDensityFromCache(
         const FSkylandColumnCache& Cache, float X, float Y, float Z,

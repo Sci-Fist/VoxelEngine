@@ -146,6 +146,9 @@ void FVoxelGeneratorTask::BuildDensityField()
     PrecalcColumns.SetNum(EffSize * EffSize);
     ColumnWeights .SetNum(EffSize * EffSize);
     ColumnSurfaceH.SetNum(EffSize * EffSize);
+
+    TMap<FIntPoint, TArray<FSkylandIslandData>> SkylandTaskCache;
+
     for (int32 Idx = 0; Idx < EffSize * EffSize; ++Idx)
     {
         const int32 Y  = Idx / EffSize;
@@ -170,7 +173,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, LocalConfig, Temp, Erosion);
         Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig, Temp, Erosion);
 
-        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig);
+        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig, &SkylandTaskCache);
 
         // Backward compatibility
         ColumnWeights[Idx]  = Item.Weights;

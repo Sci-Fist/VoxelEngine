@@ -44,7 +44,8 @@ float FVoxelBiomeGenerators::GetSkylandDensity(float X, float Y, float Z,
 FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     float X, float Y, float SurfaceHeight,
     const FVoxelBiomeWeightMap& Weights,
-    const FVoxelGenerationConfig& Config)
+    const FVoxelGenerationConfig& Config,
+    TMap<FIntPoint, TArray<FSkylandIslandData>>* CacheMap)
 {
     FSkylandColumnCache Cache;
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
@@ -61,10 +62,15 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
     const int32 CellY = FMath::FloorToInt(Y/GridSize);
     Cache.bHasSkyland = false;
 
+    // crater probability boost weighting
+    const float CraterW = Weights.GetWeight(EVoxelBiome::Craters);
+
     for (int32 dx=-1; dx<=1; ++dx)
     for (int32 dy=-1; dy<=1; ++dy)
     {
         const int32 cX = CellX+dx, cY = CellY+dy;
+        const FIntPoint Key(cX, cY);
+
         const float nX2 = (float)cX*GridSize+Off.X;
         const float nY2 = (float)cY*GridSize+Off.Y;
 
@@ -72,15 +78,37 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float HY  = (BG_Noise(nX2*0.001f, nY2*0.001f, 100.f)+1.f)*0.5f;
         const float CX2 = (cX+0.12f+HX*0.76f)*GridSize;
         const float CY2 = (cY+0.12f+HY*0.76f)*GridSize;
-        const float Dist = FMath::Sqrt(FMath::Square(X-CX2)+FMath::Square(Y-CY2));
 
-        // FIX CLIPPING: Sample height at the center and at 4 perimeter points.
-        // Take the MAXIMUM of both Neutral (pre-crater) and Full (post-crater) height.
-        // This guarantees the island floats safely above mountain peaks and crater rims
-        // that exist under its footprint, without dipping into crater bowls.
-        const float MaxIS = SC.BaseIslandSize + SC.HeightSizeBonus;
-        const float SampleR = FMath::Max(1500.f, MaxIS);
-        const float SampleD = SampleR * 0.7071f;
+        const float WarpAmt = SC.BaseIslandSize * 0.35f;
+        const float WarpX = BG_Noise(X * 0.0015f, Y * 0.0015f, 700.f) * WarpAmt;
+        const float WarpY = BG_Noise(X * 0.0015f, Y * 0.0015f, 800.f) * WarpAmt;
+        const float Dist = FMath::Sqrt(FMath::Square(X + WarpX - CX2) + FMath::Square(Y + WarpY - CY2));
+
+        // --- SPEEDUP CACHE LOOKUP ---
+        if (CacheMap)
+        {
+            if (TArray<FSkylandIslandData>* Precalc = CacheMap->Find(Key))
+            {
+                for (const auto& Isl : *Precalc)
+                {
+                    // Recalculate distance using column X/Y to evaluate hull boundary
+                    const float dX = X + WarpX - Isl.CX2;
+                    const float dY = Y + WarpY - Isl.CY2;
+                    const float d2 = FMath::Sqrt(dX*dX + dY*dY);
+                    if (d2 <= Isl.IslandSize)
+                    {
+                        Cache.Islands.Add(Isl);
+                        Cache.bHasSkyland = true;
+                    }
+                }
+                continue;
+            }
+        }
+
+        const FVoxelBiomeWeightMap CW = FVoxelBiomeManager::GetBiomeWeightsStatic(CX2, CY2, Config);
+        const float CenterNeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX2, CY2, Config);
+        const float CenterFullH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX2, CY2, CW, Config);
+        
         auto GetMaxH = [&](float sX, float sY)
         {
             const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(sX, sY, Config);
@@ -89,10 +117,10 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             return FMath::Max(NeutralH, FullH);
         };
 
-        const FVoxelBiomeWeightMap CW = FVoxelBiomeManager::GetBiomeWeightsStatic(CX2, CY2, Config);
-        const float CenterNeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX2, CY2, Config);
-        const float CenterFullH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX2, CY2, CW, Config);
-        
+        const float MaxIS = SC.BaseIslandSize + SC.HeightSizeBonus;
+        const float SampleR = FMath::Max(1500.f, MaxIS);
+        const float SampleD = SampleR * 0.7071f;
+
         float CH = FMath::Max(CenterNeutralH, CenterFullH);
         CH = FMath::Max(CH, GetMaxH(CX2 + SampleR, CY2));
         CH = FMath::Max(CH, GetMaxH(CX2 - SampleR, CY2));
@@ -102,6 +130,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         CH = FMath::Max(CH, GetMaxH(CX2 - SampleD, CY2 - SampleD));
         CH = FMath::Max(CH, GetMaxH(CX2 + SampleD, CY2 - SampleD));
         CH = FMath::Max(CH, GetMaxH(CX2 - SampleD, CY2 + SampleD));
+
         const float HN = FMath::Clamp(CH/SC.MaxTerrainReference, 0.f, 1.f);
         const float RN = FMath::Clamp(CW.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);
         const float TS = FMath::Clamp(HN*1.5f+RN*0.8f, 0.f, 1.f);
@@ -110,8 +139,12 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float cnX2 = CX2+Off.X, cnY2 = CY2+Off.Y;
         const float HP   = (BG_Noise(cnX2*0.002f, cnY2*0.002f, 200.f)+1.f)*0.5f;
         float SpawnProb = ComputeIslandSpawnProbability(HN, RN, SC);
-        // RULE: Lower terrain (CH < 0) = Less Probability (Linear decay below Sea Level)
-        if (CH < 0.f) SpawnProb *= FMath::Clamp(1.f + CH / 15000.f, 0.20f, 1.f);
+
+        // Crater probability boost
+        if (CraterW > 0.4f) SpawnProb = FMath::Min(1.0f, SpawnProb + 0.35f);
+
+        // RULE: Lower terrain (CH < 0) = Less Probability
+        if (CH < 0.f && CraterW < 0.4f) SpawnProb *= FMath::Clamp(1.f + CH / 15000.f, 0.20f, 1.f);
         if (HP > SpawnProb) continue;
 
         const float SMN = FMath::Max(0.20f, SC.ShardMinScale);
@@ -119,16 +152,15 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float NR  = FMath::Lerp(0.5f, 0.25f, CST);
         float IS = FMath::Lerp(SC.BaseIslandSize*SMN, SC.BaseIslandSize+SC.HeightSizeBonus, CST);
         IS = FMath::Clamp(IS*((1.f-NR)+NR*SF*2.f), 150.f, GridSize*0.48f);
-        // RULE: Lower terrain (CH < 0) = Smaller island size
-        if (CH < 0.f) IS *= FMath::Clamp(1.f + CH / 15000.f, 0.30f, 1.f);
-        if (Dist > IS) continue;
+
+        if (CH < 0.f && CraterW < 0.4f) IS *= FMath::Clamp(1.f + CH / 15000.f, 0.30f, 1.f);
 
         // Base altitude - Scale down based on Size (CST) to let small shards hover lower
         const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
         const float CuH = FMath::Pow(FMath::Max(0.f,HN), 2.5f);
         const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
 
-        // Absolute height anchor coordinates (e.g., config values should be absolute offsets above sea level)
+        // Absolute height anchor coordinates
         float SkyAlt = CH + AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
 
         // Size/altitude coupling
@@ -144,28 +176,35 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float ET  = FMath::Lerp(FMath::Lerp(0.12f,0.25f,HA2), SC.ThicknessRatio, CST);
         float HT = FMath::Min(IS*ET, IS*FMath::Lerp(0.75f, SC.MaxThicknessRatio, CST));
 
-        // RULE: Lower terrain (CH < 0) = Lower altitude (hover closer to floor)
+        // RULE: Lower terrain (CH < 0) = Lower altitude
         float LocalMinAlt = SC.MinAltitudeAboveTerrain;
         if (CH < 0.f) LocalMinAlt = FMath::Lerp(2500.f, LocalMinAlt, FMath::Clamp(1.f + CH / 15000.f, 0.f, 1.f));
         SkyAlt = FMath::Max(SkyAlt, CH + LocalMinAlt + HT);
 
-        float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST)
-                  + FMath::Lerp(0.20f, 0.f, CST);
+        float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST) + FMath::Lerp(0.20f, 0.f, CST);
         if (CST > 0.5f) Thr -= FMath::Log2(FMath::Max(1.f, IS/SC.BaseIslandSize))*0.05f;
 
-        if (FMath::Square(1.f-Dist/IS) > 0.001f)
+        // Populate constant island data for memoization
+        FSkylandIslandData PrecalcIsl;
+        PrecalcIsl.SkyAlt       = SkyAlt;
+        PrecalcIsl.HalfThick    = HT;
+        PrecalcIsl.Threshold    = Thr;
+        PrecalcIsl.ShardT       = CST;
+        PrecalcIsl.HeightNorm   = HN;
+        PrecalcIsl.ShardFalloff = FMath::Pow(FMath::Max(0.f,TS), 2.2f);
+        PrecalcIsl.IslandSize   = IS;
+        const float SR   = FMath::Max(1.f, IS/SC.BaseIslandSize);
+        PrecalcIsl.Freq         = FMath::Max(FMath::Lerp(SC.ShapeFrequency*6.f, SC.ShapeFrequency/SR, CST), 0.00025f);
+        PrecalcIsl.CX2          = CX2;
+        PrecalcIsl.CY2          = CY2;
+
+        TArray<FSkylandIslandData> LocalList;
+        TArray<FSkylandIslandData>& PrecalcList = CacheMap ? CacheMap->FindOrAdd(Key) : LocalList;
+        PrecalcList.Add(PrecalcIsl);
+
+        if (Dist <= IS)
         {
-            FSkylandIslandData Isl;
-            Isl.SkyAlt       = SkyAlt;
-            Isl.HalfThick    = HT;
-            Isl.Threshold    = Thr;
-            Isl.ShardT       = CST;
-            Isl.HeightNorm   = HN;
-            Isl.ShardFalloff = FMath::Pow(FMath::Max(0.f,TS), 2.2f);
-            Isl.IslandSize   = IS;
-            const float SR   = FMath::Max(1.f, IS/SC.BaseIslandSize);
-            Isl.Freq         = FMath::Max(FMath::Lerp(SC.ShapeFrequency*6.f, SC.ShapeFrequency/SR, CST), 0.00025f);
-            Cache.Islands.Add(Isl);
+            Cache.Islands.Add(PrecalcIsl);
             Cache.bHasSkyland = true;
         }
     }
