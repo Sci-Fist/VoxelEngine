@@ -217,8 +217,16 @@ void AVoxelWorld::UpdateChunkStreaming()
         const int32 dx = FMath::Abs(It.Key.X - PlayerCoord.X);
         const int32 dy = FMath::Abs(It.Key.Y - PlayerCoord.Y);
         const int32 rSq = dx*dx + dy*dy;
-        if      (rSq > MidRenderDistanceXY * MidRenderDistanceXY) LOD = FMath::Max(LOD, 2);
-        else if (rSq > RenderDistanceXY    * RenderDistanceXY)    LOD = FMath::Max(LOD, 1);
+        const bool bIsSkylandZ = (It.Key.Z >= SkyZMin && It.Key.Z <= SkyZMax);
+        if (bIsSkylandZ)
+        {
+            if (rSq > RenderDistanceXY * RenderDistanceXY) LOD = FMath::Max(LOD, 1);
+        }
+        else
+        {
+            if      (rSq > MidRenderDistanceXY * MidRenderDistanceXY) LOD = FMath::Max(LOD, 2);
+            else if (rSq > RenderDistanceXY    * RenderDistanceXY)    LOD = FMath::Max(LOD, 1);
+        }
 
         DesiredLODs.Add(It.Key, LOD);
     }
@@ -247,6 +255,12 @@ void AVoxelWorld::UpdateChunkStreaming()
             }
         }
     }
+
+    // ── Self-healing: clear sky coordinates from EmptyChunks to allow Lod 1 mesh retries ──
+    TArray<FIntVector> EmptySkyToRemove;
+    for (const FIntVector& C : EmptyChunks)
+        if (C.Z >= SkyZMin && C.Z <= SkyZMax) EmptySkyToRemove.Add(C);
+    for (const FIntVector& C : EmptySkyToRemove) EmptyChunks.Remove(C);
 
     // ── PASS 3: Apply transitions ─────────────────────────────────────────
     for (auto& It : LoadedChunks)
