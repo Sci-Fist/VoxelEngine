@@ -207,7 +207,10 @@ void FVoxelGeneratorTask::BuildDensityField()
         FVoxelNoiseSIMD::EvaluateColumn_BiomeWeights_AVX2(CX_v, CY_v, LocalConfig, PermTable, Weights_v, Temp_v, Eros_v);
 
         __m256 SurfH_v;
-        FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(CX_v, CY_v, Weights_v, LocalConfig, PermTable, Temp_v, Eros_v, SurfH_v);
+        const float CenterH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
+            LocalConfig.Craters.ForcedCraterCenter.X, LocalConfig.Craters.ForcedCraterCenter.Y, LocalConfig);
+
+        FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(CX_v, CY_v, Weights_v, LocalConfig, PermTable, Temp_v, Eros_v, SurfH_v, CenterH);
 
         float Forest[8], Desert[8], Peaks[8], Cliffs[8], Mesa[8], Craters[8], Ocean[8], SurfH[8], Temp[8], Eros[8];
         _mm256_storeu_ps(Forest, Weights_v.Forest);
@@ -245,7 +248,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             Item.SurfH = SurfH[k];
             
             // Tier 4 fallback: If any unsupported biome is active, re-calculate scalar.
-            const float MissingWeights = Cliffs[k] + Craters[k] + Ocean[k];
+            const float MissingWeights = Cliffs[k] + Ocean[k];
             if (MissingWeights > 0.001f || Item.SurfH == 0.f)
             {
                 Item.SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, LocalConfig, Temp[k], Eros[k]);
@@ -376,8 +379,10 @@ void FVoxelGeneratorTask::BuildDensityField()
             //      → chunks covering 8240-16240cm got skylands → buried in wall.
             // New: uses NeutralH (~9840cm) → SkyLB = ~16240cm
             //      → only chunks above 16240cm get skylands → visible above rim.
-            const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain
-                              - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
+            const float CraterW = Weights.GetWeight(EVoxelBiome::Craters);
+            const float BaseH   = FMath::Lerp(NeutralH, SurfH, CraterW);
+            const float SkyLB   = BaseH + SC.MinAltitudeAboveTerrain
+                                - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
 
             if (MaxWZ < SkyLB)
                 Ctx.SkylandCache.bHasSkyland = false;

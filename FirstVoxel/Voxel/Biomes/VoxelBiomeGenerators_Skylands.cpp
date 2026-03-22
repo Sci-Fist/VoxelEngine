@@ -142,7 +142,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         {
             if (CST > 0.4f) // If transitioning into large islands
             {
-                SpawnProb *= 0.25f; // 4x less likely for large skylands
+                SpawnProb *= 0.05f; // 20x less likely for large skylands
             }
             else
             {

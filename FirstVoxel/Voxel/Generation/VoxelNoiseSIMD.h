@@ -70,7 +70,8 @@ namespace FVoxelNoiseSIMD
         const FVoxelGenerationConfig& Config, 
         const int32* PermTable,
         __m256 InTemp, __m256 InErosion,
-        __m256& OutSurfH);
+        __m256& OutSurfH,
+        float CenterH);
 
     // Accessor for static hash lookup
     const int32* GetPermutationTable();

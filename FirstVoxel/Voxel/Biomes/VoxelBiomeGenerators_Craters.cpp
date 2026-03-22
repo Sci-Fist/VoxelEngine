@@ -298,14 +298,25 @@ static void ApplyEjectaRays(float& H, const FCraterSetup& S, const FCraterBiomeC
     const float RayRot     = BG_Noise(S.nX * 0.00002f, S.nY * 0.00002f, 777.f) * 3.14159f;
     const float AngleStep  = 2.f * 3.14159f / (float)CRC.EjectaRayCount;
 
+    float RelAng = S.Ang - RayRot;
+    while (RelAng < 0.f)           RelAng += 6.2831853f;
+    while (RelAng >= 6.2831853f) RelAng -= 6.2831853f;
+
+    const float RayIndex = RelAng / AngleStep;
+    const int32 r0 = FMath::FloorToInt(RayIndex);
+
     float MaxRW = 0.f;
-    for (int32 r = 0; r < CRC.EjectaRayCount; ++r)
+    for (int32 r = r0 - 1; r <= r0 + 1; ++r)
     {
-        float dA = S.Ang - (r * AngleStep + RayRot);
-        while (dA >  3.14159f) dA -= 2.f * 3.14159f;
-        while (dA < -3.14159f) dA += 2.f * 3.14159f;
-        if (FMath::Abs(dA) >= CRC.EjectaRayAngularWidth) continue;
-        MaxRW = FMath::Max(MaxRW, FMath::SmoothStep(1.f, 0.f, FMath::Abs(dA) / CRC.EjectaRayAngularWidth));
+        float dA = RelAng - r * AngleStep;
+        if (dA >  3.14159265f) dA -= 6.2831853f;
+        if (dA < -3.14159265f) dA += 6.2831853f;
+
+        if (FMath::Abs(dA) < CRC.EjectaRayAngularWidth)
+        {
+            float rw = FMath::SmoothStep(1.f, 0.f, FMath::Abs(dA) / CRC.EjectaRayAngularWidth);
+            MaxRW = FMath::Max(MaxRW, rw);
+        }
     }
 
     if (MaxRW > 0.001f)

@@ -1006,7 +1006,8 @@ void EvaluateColumn_Skylands_AVX2(
         const FVoxelGenerationConfig& Config, 
         const int32* PermTable,
         __m256 InTemp, __m256 InErosion,
-        __m256& OutSurfH)
+        __m256& OutSurfH,
+        float CenterH)
     {
         const FVector Off = Config.GetSeedOffset();
         __m256 OffX = _mm256_set1_ps(Off.X);
@@ -1206,6 +1207,63 @@ void EvaluateColumn_Skylands_AVX2(
                 Height = _mm256_add_ps(Height, _mm256_mul_ps(FinalN, _mm256_set1_ps(160.f)));
  
                 OutSurfH = _mm256_fmadd_ps(Height, Weights.Mesa, OutSurfH);
+            }
+        }
+
+        // 6. Craters Post-Process Overlay
+        {
+            __m256 Mask = _mm256_cmp_ps(Weights.Craters, _mm256_set1_ps(0.001f), _CMP_GT_OQ);
+            if (_mm256_movemask_ps(Mask))
+            {
+                const FCraterBiomeConfig& CRC = Config.Craters;
+
+                __m256 dX = _mm256_sub_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(CRC.ForcedCraterCenter.X));
+                __m256 dY = _mm256_sub_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(CRC.ForcedCraterCenter.Y));
+                __m256 Dist = _mm256_sqrt_ps(_mm256_fmadd_ps(dX, dX, _mm256_mul_ps(dY, dY)));
+                
+                __m256 Radius = _mm256_set1_ps(CRC.CentralCraterRadius * 0.5f);
+                __m256 NormDist = _mm256_div_ps(Dist, Radius);
+
+                __m256 CenterH_v = _mm256_set1_ps(CenterH);
+                
+                // Continuous Spline bounds
+                __m256 R0 = _mm256_set1_ps(0.74f); // Floor End
+                __m256 R1 = _mm256_set1_ps(0.93f); // Rim Crest
+                __m256 R2 = _mm256_set1_ps(1.05f); // Rim Dropoff End
+
+                // Floor flattening blend
+                __m256 T_Floor = _mm256_div_ps(_mm256_sub_ps(NormDist, R0), _mm256_sub_ps(R2, R0));
+                T_Floor = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Floor));
+                __m256 Smooth_Floor = SmoothStep_AVX2(Zero, One, T_Floor);
+                __m256 C_Mask_Floor = _mm256_cmp_ps(NormDist, R0, _CMP_LT_OQ);
+                __m256 FlatBlend = _mm256_blendv_ps(Smooth_Floor, Zero, C_Mask_Floor);
+
+                __m256 BasePlains = Lerp_AVX2(FlatBlend, CenterH_v, OutSurfH);
+
+                __m256 Depth = _mm256_set1_ps(CRC.CentralCraterDepth * 1.25f);
+                __m256 RimH = _mm256_set1_ps(CRC.CentralCraterRimHeight * 1.8f);
+
+                // 1. Inner Wall
+                __m256 T_Wall = _mm256_div_ps(_mm256_sub_ps(NormDist, R0), _mm256_sub_ps(R1, R0));
+                T_Wall = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Wall));
+                __m256 WallH = _mm256_add_ps(_mm256_mul_ps(SmoothStep_AVX2(Zero, One, T_Wall), _mm256_sub_ps(RimH, Depth)), Depth);
+                WallH = _mm256_add_ps(BasePlains, WallH);
+
+                // 2. Outer Dropoff
+                __m256 T_Drop = _mm256_div_ps(_mm256_sub_ps(NormDist, R1), _mm256_sub_ps(R2, R1));
+                T_Drop = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Drop));
+                __m256 DropH = Lerp_AVX2(SmoothStep_AVX2(Zero, One, T_Drop), _mm256_add_ps(BasePlains, RimH), BasePlains);
+
+                // 3. Combine with blends
+                __m256 C_Mask_Crest = _mm256_cmp_ps(NormDist, R1, _CMP_LT_OQ);
+                __m256 CraterH = _mm256_blendv_ps(DropH, WallH, C_Mask_Crest);
+
+                // 4. Domimance Fade
+                __m256 T_Fade = _mm256_div_ps(_mm256_sub_ps(NormDist, _mm256_set1_ps(0.97f)), _mm256_set1_ps(1.80f - 0.97f));
+                T_Fade = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Fade));
+                __m256 Dominance = _mm256_sub_ps(One, SmoothStep_AVX2(Zero, One, T_Fade));
+
+                OutSurfH = Lerp_AVX2(Dominance, CraterH, OutSurfH);
             }
         }
     }
