@@ -118,11 +118,12 @@ void AFirstVoxelHUD::DrawLoadingScreen(UFont* Font)
     DrawText(Status, FLinearColor::White, CX-SW*0.5f, BY+BH+8.f, Font, 1.f);
 
     // Chunk-map grid
-    const float BoxSz=14.f, BoxPad=3.f, Radius=11.f;
+    const float BoxSz=8.f, BoxPad=2.f, Radius=35.f;
     const float GridW=(Radius*2+1)*(BoxSz+BoxPad), GridX=CX-GridW*0.5f, GridY=BY+BH+40.f;
     const auto& Loaded = *W->GetLoadedChunks();
-    for (int32 cy=-11; cy<=11; ++cy)
-    for (int32 cx=-11; cx<=11; ++cx)
+    const int32 iRadius = FMath::RoundToInt(Radius);
+    for (int32 cy=-iRadius; cy<=iRadius; ++cy)
+    for (int32 cx=-iRadius; cx<=iRadius; ++cx)
     {
         FLinearColor Col(0.1f,0.1f,0.12f,0.4f);
         if (const AVoxelChunk* const* P = Loaded.Find(FIntVector(cx,cy,0)))
@@ -130,7 +131,7 @@ void AFirstVoxelHUD::DrawLoadingScreen(UFont* Font)
                 Col = C->IsReady()      ? FLinearColor(0.2f,0.8f,0.3f,0.9f)
                     : C->IsGenerating() ? FLinearColor(0.9f,0.8f,0.2f,0.9f)
                                         : FLinearColor(0.4f,0.4f,0.45f,0.7f);
-        DrawRect(Col, GridX+(cx+11)*(BoxSz+BoxPad), GridY+(cy+11)*(BoxSz+BoxPad), BoxSz, BoxSz);
+        DrawRect(Col, GridX+(cx+iRadius)*(BoxSz+BoxPad), GridY+(cy+iRadius)*(BoxSz+BoxPad), BoxSz, BoxSz);
     }
 
     // FIX: NO auto-dismiss here.

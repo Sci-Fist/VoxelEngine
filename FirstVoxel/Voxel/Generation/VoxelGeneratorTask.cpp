@@ -83,6 +83,7 @@ void FVoxelGeneratorTask::Execute()
     if (bCancelled || bIsFullSolid || bIsFullAir) return;
     BuildMesh();
     if (bCancelled) return;
+    if (StepSize > 1) return; // Skip foliage and water on distant silhouette chunks
     CalculateFoliage();
     if (bCancelled) return;
     PlaceWaterSources();
@@ -109,10 +110,12 @@ void FVoxelGeneratorTask::BuildDensityField()
     Densities.SetNumUninitialized(TotalSamples);
 
     // Speedup Tier 3: Disable sub-voxel overhangs and caves on distant high-LOD chunks (silhouette only)
+    FVoxelGenerationConfig LocalConfig = Config;
     if (StepSize > 1)
     {
-        const_cast<bool&>(Config.Performance.bEnableCaves) = false;
-        const_cast<bool&>(Config.Performance.bEnableOverhangs) = false;
+        LocalConfig.Performance.bEnableCaves = false;
+        LocalConfig.Performance.bEnableOverhangs = false;
+        LocalConfig.Performance.MaxNoiseOctaves = (StepSize >= 4) ? 1 : 2;
     }
 
     static FVoxelDensityGenerator FallbackGen;
@@ -122,15 +125,15 @@ void FVoxelGeneratorTask::BuildDensityField()
     const FVoxelCavePass    CavePass;
     const FVoxelSkylandPass SkylandPass;
 
-    const bool bEnForest   = Config.Performance.bEnableForest;
-    const bool bEnDesert   = Config.Performance.bEnableDesert;
-    const bool bEnPeaks    = Config.Performance.bEnablePeaks;
-    const bool bEnCliffs   = Config.Performance.bEnableCliffs;
-    const bool bEnMesa     = Config.Performance.bEnableMesa;
-    const bool bEnCraters  = Config.Performance.bEnableCraters;
-    const bool bEnSurface  = Config.Performance.bEnableSurface;
-    const bool bEnCaves    = Config.Performance.bEnableCaves;
-    const bool bEnSkylands = Config.Performance.bEnableSkylands;
+    const bool bEnForest   = LocalConfig.Performance.bEnableForest;
+    const bool bEnDesert   = LocalConfig.Performance.bEnableDesert;
+    const bool bEnPeaks    = LocalConfig.Performance.bEnablePeaks;
+    const bool bEnCliffs   = LocalConfig.Performance.bEnableCliffs;
+    const bool bEnMesa     = LocalConfig.Performance.bEnableMesa;
+    const bool bEnCraters  = LocalConfig.Performance.bEnableCraters;
+    const bool bEnSurface  = LocalConfig.Performance.bEnableSurface;
+    const bool bEnCaves    = LocalConfig.Performance.bEnableCaves;
+    const bool bEnSkylands = LocalConfig.Performance.bEnableSkylands;
 
     ColumnWeights .SetNumUninitialized(EffCS * EffCS);
     ColumnSurfaceH.SetNumUninitialized(EffCS * EffCS);
@@ -147,7 +150,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         const float CX = WorldOrigin.X + i * VoxelSize;
         const float CY = WorldOrigin.Y + j * VoxelSize;
 
-        FVoxelBiomeWeightMap W = Provider->GetBiomeWeights(CX, CY, Config);
+        FVoxelBiomeWeightMap W = Provider->GetBiomeWeights(CX, CY, LocalConfig);
         if (!bEnForest)  W.SetWeight(EVoxelBiome::Forest,  0.f);
         if (!bEnDesert)  W.SetWeight(EVoxelBiome::Desert,  0.f);
         if (!bEnPeaks)   W.SetWeight(EVoxelBiome::Peaks,   0.f);
@@ -157,9 +160,9 @@ void FVoxelGeneratorTask::BuildDensityField()
         W.Normalize();
 
         // ROOT FIX: use neutral (pre-crater) height for skyland altitude reference
-        const float NeutralSH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, Config);
+        const float NeutralSH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig);
         SkylandColumnCaches[i * ChunkSize + j] =
-            FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, NeutralSH, W, Config);
+            FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, NeutralSH, W, LocalConfig);
     });
 
     // ── DataMap edit arrays ────────────────────────────────────────────────
@@ -217,7 +220,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         const float WX = FMath::RoundToFloat(WorldOrigin.X + (X-1.f)*EffVoxSz);
         const float WY = FMath::RoundToFloat(WorldOrigin.Y + (Y-1.f)*EffVoxSz);
 
-        FVoxelBiomeWeightMap Weights = Provider->GetBiomeWeights(WX, WY, Config);
+        FVoxelBiomeWeightMap Weights = Provider->GetBiomeWeights(WX, WY, LocalConfig);
         if (!bEnForest)  Weights.SetWeight(EVoxelBiome::Forest,  0.f);
         if (!bEnDesert)  Weights.SetWeight(EVoxelBiome::Desert,  0.f);
         if (!bEnPeaks)   Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
@@ -226,9 +229,9 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (!bEnCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
         Weights.Normalize();
 
-        const float SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(WX, WY, Weights, Config);
+        const float SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(WX, WY, Weights, LocalConfig);
         // ROOT FIX: get the pre-crater neutral height for skyland altitude reference
-        const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(WX, WY, Config);
+        const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(WX, WY, LocalConfig);
 
         const int32 LX = X-1, LY2 = Y-1;
         if (LX>=0&&LX<EffCS&&LY2>=0&&LY2<EffCS)
@@ -242,16 +245,16 @@ void FVoxelGeneratorTask::BuildDensityField()
         Ctx.NeutralSurfaceHeight = NeutralH;  // passed through to CavePass and SkylandPass
         Ctx.BiomeWeights         = Weights;
         Ctx.MaxWorldZ            = MaxWZ;
-        Ctx.CachedSeedOffset     = Config.GetSeedOffset();
+        Ctx.CachedSeedOffset     = LocalConfig.GetSeedOffset();
 
-        if (bEnSurface) SurfacePass.PrepareColumn(WX, WY, Config, Ctx);
+        if (bEnSurface) SurfacePass.PrepareColumn(WX, WY, LocalConfig, Ctx);
         // CavePass.PrepareColumn sets NeutralSurfaceHeight via GetNeutralSurfaceHeightStatic
         // It will overwrite our value — that's fine, both calls produce the same result.
-        if (bEnCaves)   CavePass   .PrepareColumn(WX, WY, Config, Ctx);
+        if (bEnCaves)   CavePass   .PrepareColumn(WX, WY, LocalConfig, Ctx);
 
         if (bEnSkylands)
         {
-            const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+            const FSkylandsLayerConfig& SC = LocalConfig.SkylandsLayer;
 
             // ROOT FIX: use NeutralH for SkyLB.
             // Old: used SurfH (crater floor = 1840cm) → SkyLB = ~8240cm
@@ -270,11 +273,11 @@ void FVoxelGeneratorTask::BuildDensityField()
                 // Fallback (border columns): build now with NeutralH.
                 Ctx.SkylandCache = (AX>=0&&AX<ChunkSize&&AY>=0&&AY<ChunkSize)
                     ? SkylandColumnCaches[AX*ChunkSize+AY]
-                    : FVoxelBiomeGenerators::GetSkylandColumnCache(WX, WY, NeutralH, Weights, Config);
+                    : FVoxelBiomeGenerators::GetSkylandColumnCache(WX, WY, NeutralH, Weights, LocalConfig);
             }
 
             // Early-out for pure-air columns well below the skyland band
-            const float OvH     = Config.Performance.bEnableOverhangs ? Config.Overhangs.MaxDistFromSurface : 0.f;
+            const float OvH     = LocalConfig.Performance.bEnableOverhangs ? LocalConfig.Overhangs.MaxDistFromSurface : 0.f;
             const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain
                                 - SC.BaseIslandSize * SC.ThicknessRatio - 400.f;
             if (MinWZ > SurfH + OvH + 200.f && MaxWZ < SkyLB2)
@@ -293,7 +296,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         }
 
         // Below-bedrock early-out
-        if (MaxWZ < Config.CaveTunnels.BedrockDepth)
+        if (MaxWZ < LocalConfig.CaveTunnels.BedrockDepth)
         {
             for (int32 Z=0; Z<EffSize; ++Z)
             {
@@ -313,9 +316,9 @@ void FVoxelGeneratorTask::BuildDensityField()
             const float WZ  = WorldOrigin.Z + (Z-1.f)*EffVoxSz;
             const int32 Idx = X+Y*EffSize+Z*EffSize*EffSize;
             float D = -2.f;
-            if (bEnSurface)  D = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
-            if (bEnCaves)    D = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
-            if (bEnSkylands) D = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, Config, D);
+            if (bEnSurface)  D = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, LocalConfig, D);
+            if (bEnCaves)    D = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ), Ctx, LocalConfig, D);
+            if (bEnSkylands) D = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, LocalConfig, D);
             if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
             { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
             Densities[Idx] = D;

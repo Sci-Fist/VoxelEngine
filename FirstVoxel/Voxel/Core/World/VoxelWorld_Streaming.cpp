@@ -267,14 +267,22 @@ void AVoxelWorld::UpdateChunkStreaming()
         if (!LoadedChunks.Contains(C) && !EmptyChunks.Contains(C)) Merged.Add(C);
     for (int32 i=QueueHead; i<GenerationQueue.Num(); ++i) Merged.Add(GenerationQueue[i]);
 
-    TArray<TPair<int32,FIntVector>> Sorted;
+    TArray<TPair<float,FIntVector>> Sorted;
     Sorted.Reserve(Merged.Num());
+
+    const FVector Fwd = Player ? Player->GetActorForwardVector() : FVector::ForwardVector;
+
     for (const FIntVector& C : Merged)
     {
-        const FIntVector L = C - PlayerCoord;
-        Sorted.Add({L.X*L.X + L.Y*L.Y + L.Z*L.Z, C});
+        const FVector ChunkWorld = ChunkCoordToWorld(C) + FVector(ChunkSize * VoxelSize * 0.5f);
+        const float DistSq = FVector::DistSquared(PlayerPos, ChunkWorld);
+        const float Dot = FVector::DotProduct(Fwd, (ChunkWorld - PlayerPos).GetSafeNormal());
+        
+        // Front chunks receive a scaling divisor (effectively appearing 3x closer worth of priority weight)
+        const float Key = DistSq / (1.0f + FMath::Max(0.f, Dot) * 2.0f);
+        Sorted.Add({Key, C});
     }
-    Sorted.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key<B.Key; });
+    Sorted.Sort([](const TPair<float,FIntVector>& A, const TPair<float,FIntVector>& B){ return A.Key<B.Key; });
 
     GenerationQueue.Reset();
     GenerationQueue.Reserve(Sorted.Num());

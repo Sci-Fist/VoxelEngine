@@ -347,7 +347,7 @@ void AVoxelChunk::UploadSection(int32 Idx, const FVoxelMeshData& Data,
 	UProceduralMeshComponent* M = Target ? Target : ProceduralMesh;
 	if (!IsValid(M)) return;
 	if (Data.Vertices.Num() == 0) { M->ClearMeshSection(Idx); return; } // FIX-3
-	const bool bCol = (M == ProceduralMesh) && (LOD < 3);
+	const bool bCol = (M == ProceduralMesh) && (LOD == 0);
 	M->ClearMeshSection(Idx); // Force instant PhysX buffer flush before rewrite
 	M->CreateMeshSection(Idx, Data.Vertices, Data.Triangles, Data.Normals,
 	                     Data.UVs, Data.VertexColors, Data.Tangents, bCol);

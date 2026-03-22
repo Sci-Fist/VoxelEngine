@@ -201,6 +201,32 @@ void AVoxelWorld::Tick(float DeltaTime)
                 if (!P || !(*P)->IsCollisionReady()) { bAllReady = false; break; }
             }
 
+            if (bAllReady)
+            {
+                for (const FIntVector& C : InitialSpawnCoords_Visual)
+                {
+                    if (AVoxelChunk** P = LoadedChunks.Find(C))
+                    {
+                        if (!(*P)->IsReady()) { bAllReady = false; break; }
+                    }
+                    else { bAllReady = false; break; }
+                }
+            }
+
+            // --- GRACE DELAY CUSHION ---
+            if (bAllReady)
+            {
+                SpawnDelayAccum += DeltaTime;
+                if (SpawnDelayAccum < 3.0f) // hold for 3 seconds of buffer safety
+                {
+                    bAllReady = false; 
+                }
+            }
+            else
+            {
+                SpawnDelayAccum = 0.f;
+            }
+
         }
         else
         {

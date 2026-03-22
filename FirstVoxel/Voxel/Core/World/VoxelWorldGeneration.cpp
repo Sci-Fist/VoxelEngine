@@ -439,9 +439,9 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     auto AddToVisual    = [&](const FIntVector& C) { VisualSet.Add(C); };
 
     // 1. Surrounding concentric area of player spawn (Cinematic Crater Bounds)
-    for (int32 x=-20; x<=20; x++) for (int32 y2=-20; y2<=20; y2++) for (int32 z2=-2; z2<=2; z2++)
+    for (int32 x=-35; x<=35; x++) for (int32 y2=-35; y2<=35; y2++) for (int32 z2=-8; z2<=4; z2++)
     {
-        const bool bInner = (FMath::Abs(x) <= 8 && FMath::Abs(y2) <= 8);
+        const bool bInner = (FMath::Abs(x) <= 20 && FMath::Abs(y2) <= 20);
         if (bInner) AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
         else        AddToVisual   (FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
     }
@@ -449,9 +449,9 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     // 2. Add ground layer strictly beneath player if they spawn in the sky
     if (FMath::Abs(SpawnCoord.Z - GroundCoord.Z) > 1)
     {
-        for (int32 x=-20; x<=20; x++) for (int32 y2=-20; y2<=20; y2++)
+        for (int32 x=-35; x<=35; x++) for (int32 y2=-35; y2<=35; y2++)
         {
-            const bool bInner = (FMath::Abs(x) <= 8 && FMath::Abs(y2) <= 8);
+            const bool bInner = (FMath::Abs(x) <= 20 && FMath::Abs(y2) <= 20);
             if (bInner)
             {
                 AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
