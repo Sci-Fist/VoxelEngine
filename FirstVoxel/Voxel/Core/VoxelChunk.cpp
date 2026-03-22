@@ -223,9 +223,8 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
 		LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
 
-	// Tier 1 Merge: SlopeMesh always empty — section 0 holds all geometry.
-	// UploadSection(1, SlopeMesh) removed to eliminate useless ClearMeshSection GPU call.
-	UploadSection(0, Out.FlatMesh, FlatMat, TEXT("Flat"), nullptr);
+	UploadSection(0, Out.FlatMesh,  FlatMat,  TEXT("Flat"),  nullptr);
+	UploadSection(1, Out.SlopeMesh, SlopeMat, TEXT("Slope"), nullptr);
 
 	// ── Per-biome foliage ─────────────────────────────────────────────────
 	const TArray<TArray<FTransform>>& PFT = CompletedTask->GetPerFoliageTransforms();

@@ -181,8 +181,8 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
             if (LoadedChunks.Contains(C)) continue;
 
             bool bValid = false;
-            // A) Zone A Ground: GroundZ - 2 to GroundZ + 2
-            if (z >= GroundZ - 2 && z <= GroundZ + 2) bValid = true;
+            // A) Zone A Ground: GroundZ - 2 to GroundZ + 12
+            if (z >= GroundZ - 2 && z <= GroundZ + 12) bValid = true;
             // B) Skylands zone: SkyZ_Min to SkyZ_Max
             else if (z >= SkyZ_Min && z <= SkyZ_Max) bValid = true;
 
@@ -200,7 +200,7 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 #if WITH_EDITOR
     if (!GetWorld()->IsGameWorld())
     {
-        const FVoxelGenerationConfig Cfg = GetEffectiveConfig(); // value copy
+        // Using outer scope Cfg
         FVector Pos = SnapToVoxelGrid(FVector(Anchor.X, Anchor.Y, 0.f));
         const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Cfg);
         const float Surface = Wh.SurfaceHeight;

@@ -18,6 +18,7 @@
 #include "Generation/VoxelGeneratorTask.h"
 #include "Generation/VoxelMeshGenerator.h"
 #include "Generation/VoxelDensityGenerator.h"
+#include "VoxelNoiseSIMD.h"
 #include "Generation/IVoxelGenerationStage.h"
 #include "Voxel/Core/VoxelDataMap.h"
 #include "Biomes/VoxelBiomeManager.h"
@@ -118,11 +119,11 @@ void FVoxelGeneratorTask::Execute()
     float TWater  = (T4 - T3) * 1000.f;
     float TTotal  = (T4 - T0) * 1000.f;
 
-    if (TTotal > 100.0f) // Only log slow chunks to find hotspots
-    {
-        UE_LOG(LogTemp, Log, TEXT("Chunk [%d,%d,%d] LOD%d: Total=%.1fms (Dense=%.1fms, Mesh=%.1fms, Foliage=%.1fms, Water=%.1fms)"),
-            ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, StepSize - 1, TTotal, TDense, TMesh, TFoli, TWater);
-    }
+    // if (TTotal > 100.0f) // Only log slow chunks to find hotspots
+    // {
+    //     UE_LOG(LogTemp, Log, TEXT("Chunk [%d,%d,%d] LOD%d: Total=%.1fms (Dense=%.1fms, Mesh=%.1fms, Foliage=%.1fms, Water=%.1fms)"),
+    //         ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, StepSize - 1, TTotal, TDense, TMesh, TFoli, TWater);
+    // }
 }
 
 // ============================================================
@@ -177,44 +178,113 @@ void FVoxelGeneratorTask::BuildDensityField()
     ColumnWeights .SetNum(EffSize * EffSize);
     ColumnSurfaceH.SetNum(EffSize * EffSize);
 
-    // OPT-1: Parallelise the per-column pre-compute loop.
-    // All called functions are pure/stateless — safe for concurrent execution.
-    // SkylandTaskCache (intra-chunk dedup TMap) removed: it required shared mutable
-    // state and the benefit was marginal vs the cost of a mutex or lock-free workaround.
-    ParallelFor(EffSize * EffSize, [&](int32 Idx)
+    const int32 NumCols = EffSize * EffSize;
+    const int32* PermTable = FVoxelNoiseSIMD::GetPermutationTable();
+    
+    // Tier 5: Pass-through cache map for O(1) Skyland Skyland Column lookups lookups.
+    TMap<FIntPoint, TArray<FSkylandIslandData>> SkylandCacheMap;
+
+    int32 ColIdx = 0;
+    // ── 8-WIDE SIMD PRE-CALC ───────────────────────────────────────────────
+    for (; ColIdx <= NumCols - 8; ColIdx += 8)
     {
-        const int32 Y  = Idx / EffSize;
-        const int32 X  = Idx % EffSize;
+        float CX[8], CY[8];
+        for (int32 k = 0; k < 8; ++k)
+        {
+            const int32 curIdx = ColIdx + k;
+            const int32 Y = curIdx / EffSize;
+            const int32 X = curIdx % EffSize;
+            CX[k] = FMath::RoundToFloat(WorldOrigin.X + (X - 1.f) * EffVoxSz);
+            CY[k] = FMath::RoundToFloat(WorldOrigin.Y + (Y - 1.f) * EffVoxSz);
+        }
+
+        __m256 CX_v = _mm256_loadu_ps(CX);
+        __m256 CY_v = _mm256_loadu_ps(CY);
+
+        FVoxelNoiseSIMD::FBiomeWeights_AVX2 Weights_v;
+        __m256 Temp_v, Eros_v;
+        FVoxelNoiseSIMD::EvaluateColumn_BiomeWeights_AVX2(CX_v, CY_v, LocalConfig, PermTable, Weights_v, Temp_v, Eros_v);
+
+        __m256 SurfH_v;
+        FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(CX_v, CY_v, Weights_v, LocalConfig, PermTable, Temp_v, Eros_v, SurfH_v);
+
+        float Forest[8], Desert[8], Peaks[8], Cliffs[8], Mesa[8], Craters[8], Ocean[8], SurfH[8], Temp[8], Eros[8];
+        _mm256_storeu_ps(Forest, Weights_v.Forest);
+        _mm256_storeu_ps(Desert, Weights_v.Desert);
+        _mm256_storeu_ps(Peaks,  Weights_v.Peaks);
+        _mm256_storeu_ps(Cliffs, Weights_v.Cliffs);
+        _mm256_storeu_ps(Mesa,   Weights_v.Mesa);
+        _mm256_storeu_ps(Craters, Weights_v.Craters);
+        _mm256_storeu_ps(Ocean,  Weights_v.Ocean);
+        _mm256_storeu_ps(SurfH,  SurfH_v);
+        _mm256_storeu_ps(Temp,   Temp_v);
+        _mm256_storeu_ps(Eros,   Eros_v);
+
+        for (int32 k = 0; k < 8; ++k)
+        {
+            const int32 curIdx = ColIdx + k;
+            FColumnCacheItem& Item = PrecalcColumns[curIdx];
+
+            Item.Weights.SetWeight(EVoxelBiome::Forest,  Forest[k]);
+            Item.Weights.SetWeight(EVoxelBiome::Desert,  Desert[k]);
+            Item.Weights.SetWeight(EVoxelBiome::Peaks,   Peaks[k]);
+            Item.Weights.SetWeight(EVoxelBiome::Cliffs,  Cliffs[k]);
+            Item.Weights.SetWeight(EVoxelBiome::Mesa,    Mesa[k]);
+            Item.Weights.SetWeight(EVoxelBiome::Craters, Craters[k]);
+            Item.Weights.Normalize();
+
+            if (!LocalConfig.Performance.bEnableForest)  Item.Weights.SetWeight(EVoxelBiome::Forest,  0.f);
+            if (!LocalConfig.Performance.bEnableDesert)  Item.Weights.SetWeight(EVoxelBiome::Desert,  0.f);
+            if (!LocalConfig.Performance.bEnablePeaks)   Item.Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
+            if (!LocalConfig.Performance.bEnableCliffs)  Item.Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
+            if (!LocalConfig.Performance.bEnableMesa)    Item.Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
+            if (!LocalConfig.Performance.bEnableCraters) Item.Weights.SetWeight(EVoxelBiome::Craters, 0.f);
+            Item.Weights.Normalize();
+
+            Item.SurfH = SurfH[k];
+            
+            // Tier 4 fallback: If any unsupported biome is active, re-calculate scalar.
+            const float MissingWeights = Peaks[k] + Cliffs[k] + Mesa[k] + Craters[k] + Ocean[k];
+            if (MissingWeights > 0.001f || Item.SurfH == 0.f)
+            {
+                Item.SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, LocalConfig, Temp[k], Eros[k]);
+            }
+            
+            Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], LocalConfig, Temp[k], Eros[k]);
+            Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX[k], CY[k], Item.NeutralH, Item.Weights, LocalConfig, &SkylandCacheMap);
+
+            ColumnWeights[curIdx]  = Item.Weights;
+            ColumnSurfaceH[curIdx] = Item.SurfH;
+        }
+    }
+
+    // ── REMAINDER FALLBACK ──────────────────────────────────────────────────
+    for (; ColIdx < NumCols; ++ColIdx)
+    {
+        const int32 Y  = ColIdx / EffSize;
+        const int32 X  = ColIdx % EffSize;
         const float CX = FMath::RoundToFloat(WorldOrigin.X + (X - 1.f) * EffVoxSz);
         const float CY = FMath::RoundToFloat(WorldOrigin.Y + (Y - 1.f) * EffVoxSz);
 
-        FColumnCacheItem& Item = PrecalcColumns[Idx];
+        FColumnCacheItem& Item = PrecalcColumns[ColIdx];
 
-        // OPT-3: Get biome weights via GetBiomeWeightsStatic directly so we also
-        // capture Temp/Erosion in one call. We then apply the same performance-flag
-        // masking, saving 2 redundant Perlin2D evaluations vs calling GetBiomeWeights
-        // (provider) + a separate GetBiomeWeightsStatic for Temp/Erosion.
         float Temp = -999.f, Erosion = -999.f;
         Item.Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(CX, CY, LocalConfig, &Temp, &Erosion);
-        if (!bEnForest)  Item.Weights.SetWeight(EVoxelBiome::Forest,  0.f);
-        if (!bEnDesert)  Item.Weights.SetWeight(EVoxelBiome::Desert,  0.f);
-        if (!bEnPeaks)   Item.Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
-        if (!bEnCliffs)  Item.Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
-        if (!bEnMesa)    Item.Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
-        if (!bEnCraters) Item.Weights.SetWeight(EVoxelBiome::Craters, 0.f);
+        if (!LocalConfig.Performance.bEnableForest)  Item.Weights.SetWeight(EVoxelBiome::Forest,  0.f);
+        if (!LocalConfig.Performance.bEnableDesert)  Item.Weights.SetWeight(EVoxelBiome::Desert,  0.f);
+        if (!LocalConfig.Performance.bEnablePeaks)   Item.Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
+        if (!LocalConfig.Performance.bEnableCliffs)  Item.Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
+        if (!LocalConfig.Performance.bEnableMesa)    Item.Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
+        if (!LocalConfig.Performance.bEnableCraters) Item.Weights.SetWeight(EVoxelBiome::Craters, 0.f);
         Item.Weights.Normalize();
 
         Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, LocalConfig, Temp, Erosion);
-        // OPT-3: pass cached Temp/Erosion — avoids 2× redundant Perlin2D per column
         Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig, Temp, Erosion);
+        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig, &SkylandCacheMap);
 
-        // No shared SkylandTaskCache — each column builds its FSkylandColumnCache independently
-        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig);
-
-        // Backward-compat arrays (written at same Idx — no race condition)
-        ColumnWeights[Idx]  = Item.Weights;
-        ColumnSurfaceH[Idx] = Item.SurfH;
-    });
+        ColumnWeights[ColIdx]  = Item.Weights;
+        ColumnSurfaceH[ColIdx] = Item.SurfH;
+    }
 
     // ── DataMap edit arrays ────────────────────────────────────────────────
     TArray<bool>  DenseHasEdit;
@@ -260,12 +330,10 @@ void FVoxelGeneratorTask::BuildDensityField()
     }
 
     // ── Main density loop ─────────────────────────────────────────────────
-    // PERF-3: plain int32 — the loop is serial, TAtomic<int32> added lock-prefix
-    // overhead (lock xadd per increment) with zero thread-safety benefit here.
-    TAtomic<int32> AtomicSolid(0);
-    TAtomic<int32> AtomicAir(0);
+    int32 SolidCount = 0;
+    int32 AirCount = 0;
 
-    ParallelFor(EffSize * EffSize, [&](int32 FlatXY)
+    for (int32 FlatXY = 0; FlatXY < EffSize * EffSize; ++FlatXY)
     {
         if (bCancelled) return;
         int32 LocalSolid = 0;
@@ -332,9 +400,9 @@ void FVoxelGeneratorTask::BuildDensityField()
                     Densities[Idx] = D;
                     if (D > 0.f) LocalSolid++; else LocalAir++;
                 }
-                if (LocalSolid > 0) AtomicSolid += LocalSolid;
-                if (LocalAir > 0)   AtomicAir   += LocalAir;
-                return;
+                SolidCount += LocalSolid;
+                AirCount   += LocalAir;
+                continue;
             }
         }
 
@@ -350,62 +418,116 @@ void FVoxelGeneratorTask::BuildDensityField()
                 Densities[Idx] = D;
                 if (D > 0.f) LocalSolid++; else LocalAir++;
             }
-            if (LocalSolid > 0) AtomicSolid += LocalSolid;
-            if (LocalAir > 0)   AtomicAir   += LocalAir;
-            return;
+            SolidCount += LocalSolid;
+            AirCount   += LocalAir;
+            continue;
         }
 
-        // Cascade upsampling cache
-        float LastD = -2.f;
-        const int32 ZStep = 2; // 1=Off, 2=Fast, 4=Ultrafast
+        // ── Phase 1: SIMD Surface Pre-Calculation ──────────────────────────────
+        float SF_Densities[256]; 
+        const float SteepW = Ctx.BiomeWeights.Cliffs + Ctx.BiomeWeights.Peaks;
 
-        for (int32 Z = 0; Z < EffSize; Z += ZStep)
+        // Tier 7: Bounding Box Pruning — Restrict Z evaluation range range
+        const float ExactMinZ = WorldOrigin.Z - EffVoxSz;
+        const float MinCarveZ = SurfH - 1200.f;  // Buffer buffer node node range
+        const float MaxCarveZ = SurfH + 1200.f;
+
+        int32 StartZIdx = FMath::Clamp(FMath::FloorToInt((MinCarveZ - ExactMinZ) / EffVoxSz), 0, EffSize);
+        int32 EndZIdx   = FMath::Clamp(FMath::CeilToInt((MaxCarveZ - ExactMinZ) / EffVoxSz), 0, EffSize);
+
+        // Fill non-evaluated evaluated node nodes with Base Base defaults defaults list layout Safely
+        for (int32 Z = 0; Z < StartZIdx; ++Z) SF_Densities[Z] = 2.f;  // Solid Solid deep down down down
+        for (int32 Z = EndZIdx; Z < EffSize; ++Z) SF_Densities[Z] = -2.f; // Air Air high up up up
+
+        const int32 Count = EndZIdx - StartZIdx;
+        if (Count > 0)
         {
-            const float WZ0  = WorldOrigin.Z + (Z-1.f)*EffVoxSz;
-            float D0 = LastD;
-            
-            if (Z == 0) // First step exact eval
-            {
-                D0 = -2.f;
-                if (bEnSurface)  D0 = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ0), Ctx, LocalConfig, D0);
-                if (bEnCaves)    D0 = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ0), Ctx, LocalConfig, D0);
-                if (bEnSkylands) D0 = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ0), Ctx, LocalConfig, D0);
-            }
-
-            const int32 EdgeZ = FMath::Min(Z + ZStep, EffSize - 1);
-            const float WZ1  = WorldOrigin.Z + (EdgeZ-1.f)*EffVoxSz;
-            
-            float D1 = -2.f;
-            if (bEnSurface)  D1 = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ1), Ctx, LocalConfig, D1);
-            if (bEnCaves)    D1 = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ1), Ctx, LocalConfig, D1);
-            if (bEnSkylands) D1 = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ1), Ctx, LocalConfig, D1);
-
-            LastD = D1; // Save for next cycle
-
-            const int32 Span = EdgeZ - Z;
-            for (int32 i = 0; i <= Span; ++i)
-            {
-                const int32 CurrZ = Z + i;
-                if (CurrZ >= EffSize) break;
-
-                const int32 CurrIdx = X + Y*EffSize + CurrZ*EffSize*EffSize;
-                float D = FMath::Lerp(D0, D1, (Span > 0) ? (float)i / Span : 0.f);
-
-                if (!DenseHasEdit.IsEmpty() && DenseHasEdit[CurrIdx])
-                {
-                    const float Ov = DenseEditVals[CurrIdx];
-                    D = (Ov < 0.f) ? FMath::Min(D, Ov) : FMath::Max(D, Ov);
-                }
-                Densities[CurrIdx] = D;
-                if (D > 0.f) LocalSolid++; else LocalAir++;
-            }
+            FVoxelNoiseSIMD::EvaluateColumn_Surface_Upsampled_AVX2(
+                WX, WY, 
+                ExactMinZ + StartZIdx * EffVoxSz, EffVoxSz, 
+                Count, &SF_Densities[StartZIdx], 
+                Ctx.SurfaceHeight, LocalConfig.SurfaceGradientScale, SteepW,
+                LocalConfig.SeaLevel, Ctx.CachedSeedOffset,
+                FVoxelNoiseSIMD::GetPermutationTable(),
+                LocalConfig.Overhangs.MaxDistFromSurface, 
+                LocalConfig.Overhangs.Amplitude, 
+                LocalConfig.Overhangs.NoiseFrequency
+            );
         }
-        if (LocalSolid > 0) AtomicSolid += LocalSolid;
-        if (LocalAir > 0)   AtomicAir   += LocalAir;
-    });
 
-    int32 SolidCount = AtomicSolid.Load();
-    int32 AirCount   = AtomicAir.Load();
+        // ── SIMD PHASE 2: CAVES & BEDROCK ───────────────────────────────────
+        // In-place updates SF_Densities by subtracting cave noise values 
+        // parallelly across 8 discrete axis segments segments simultaneously.
+        if (bEnCaves && EffVoxSz <= 1)
+        {
+            const FCaveTunnelsConfig& CVC = LocalConfig.CaveTunnels;
+            // Caves can travel travel deep down down, so start start at index 0.
+            // But skip continuous high Air above EndZIdx setup securely.
+            const int32 CaveCount = EndZIdx; // 0 to EndZIdx
+            
+            if (CaveCount > 0)
+            {
+                FVoxelNoiseSIMD::EvaluateColumn_Caves_AVX2(
+                    WX, WY, 
+                    ExactMinZ, EffVoxSz, 
+                    CaveCount, SF_Densities, 
+                    Ctx.SurfaceHeight, Ctx.BedrockJag,
+                    Ctx.CachedSeedOffset,
+                FVoxelNoiseSIMD::GetPermutationTable(),
+                CVC.Scale, CVC.Threshold, CVC.WobbleAmplitude, CVC.WobbleFrequency, CVC.Strength,
+                CVC.MinDepthBelowSurface, CVC.SurfaceFadeDepth, CVC.BedrockDepth
+            );
+        }
+    }
+
+        // ── SIMD PHASE 3: CRYSTAL CAVERNS ───────────────────────────────────
+        if (bEnCaves)
+        {
+            const FCrystalCavernsConfig& CCC = LocalConfig.CaveCrystals;
+            FVoxelNoiseSIMD::EvaluateColumn_CrystalCaverns_AVX2(
+                WX, WY, 
+                WorldOrigin.Z - EffVoxSz, EffVoxSz, 
+                EffSize, SF_Densities, 
+                Ctx.SurfaceHeight, Ctx.CachedSeedOffset,
+                FVoxelNoiseSIMD::GetPermutationTable(),
+                CCC.DepthStart, CCC.FadeDepth, CCC.ChamberFrequency, CCC.ChamberThreshold, CCC.ChamberStrength,
+                CCC.bEnableConnectingVeins, CCC.VeinPower, CCC.VeinStrength,
+                CCC.CrystalDetailFrequency, CCC.CrystalThreshold, CCC.CrystalAmplitude,
+                LocalConfig.Performance.MaxNoiseOctaves
+            );
+        }
+
+        // ── SIMD PHASE 4: SKYLANDS ──────────────────────────────────────────
+        if (bEnSkylands && Ctx.SkylandCache.bHasSkyland)
+        {
+            FVoxelNoiseSIMD::EvaluateColumn_Skylands_AVX2(
+                WX, WY, 
+                WorldOrigin.Z - EffVoxSz, EffVoxSz, 
+                EffSize, SF_Densities, 
+                Ctx.SkylandCache, Ctx.CachedSeedOffset,
+                FVoxelNoiseSIMD::GetPermutationTable(),
+                LocalConfig
+            );
+        }
+
+        // Cascade upsampling cache is now handled directly by SIMD setup layout securely !!
+        for (int32 CurrZ = 0; CurrZ < EffSize; ++CurrZ)
+        {
+            const int32 CurrIdx = X + Y*EffSize + CurrZ*EffSize*EffSize;
+            float D = SF_Densities[CurrZ];
+
+            if (!DenseHasEdit.IsEmpty() && DenseHasEdit[CurrIdx])
+            {
+                const float Ov = DenseEditVals[CurrIdx];
+                D = (Ov < 0.f) ? FMath::Min(D, Ov) : FMath::Max(D, Ov);
+            }
+            
+            Densities[CurrIdx] = D;
+            if (D > 0.f) LocalSolid++; else LocalAir++;
+        }
+        SolidCount += LocalSolid;
+        AirCount   += LocalAir;
+    }
 
     bIsFullSolid = (SolidCount == TotalSamples);
     bIsFullAir   = (AirCount   == TotalSamples);

@@ -485,6 +485,14 @@ FVector AVoxelWorld::ChunkCoordToWorld(const FIntVector& Coord) const
 void AVoxelWorld::PostEditChangeProperty(FPropertyChangedEvent& Ev)
 {
     Super::PostEditChangeProperty(Ev);
+
+    const FName MemberName = (Ev.MemberProperty != nullptr) ? Ev.MemberProperty->GetFName() : NAME_None;
+    if (MemberName == GET_MEMBER_NAME_CHECKED(AVoxelWorld, ChunkSize))
+    {
+        // Force fully clean fully re-initialise on next generation pass
+        bInitialized = false;
+        ClearWorld(); // Safe cleanup of old mesh sections/actors
+    }
 }
 #endif
 
