@@ -115,7 +115,9 @@ void FVoxelGeneratorTask::PlaceWaterSources()
                 if (SolidNeighbors >= 3)
                 {
                     // Deterministic coordinate lookup hash
-                    const uint32 H = (uint32)(FMath::Abs(WX) * 2654435761u ^ FMath::Abs(WY) * 2246822519u ^ FMath::Abs(WZ) * 3266489917u);
+                    const uint32 H = ((uint32)FMath::Abs(WX) * 2654435761u) ^ 
+                                     ((uint32)FMath::Abs(WY) * 2246822519u) ^ 
+                                     ((uint32)FMath::Abs(WZ) * 3266489917u);
                     const float RandVal = (float)(H % 1000) / 1000.f;
                     if (RandVal < LakeProb)
                     {
