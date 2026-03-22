@@ -1263,7 +1263,7 @@ void EvaluateColumn_Skylands_AVX2(
                 T_Fade = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Fade));
                 __m256 Dominance = _mm256_sub_ps(One, SmoothStep_AVX2(Zero, One, T_Fade));
 
-                OutSurfH = Lerp_AVX2(Dominance, CraterH, OutSurfH);
+                OutSurfH = Lerp_AVX2(Dominance, OutSurfH, CraterH);
             }
         }
     }

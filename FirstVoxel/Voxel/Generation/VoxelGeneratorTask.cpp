@@ -182,13 +182,14 @@ void FVoxelGeneratorTask::BuildDensityField()
     const int32 NumCols = EffSize * EffSize;
     const int32* PermTable = FVoxelNoiseSIMD::GetPermutationTable();
     
-    // Tier 5: Pass-through cache map for O(1) Skyland Skyland Column lookups lookups.
-    TMap<FIntPoint, TArray<FSkylandIslandData>> SkylandCacheMap;
-
-    int32 ColIdx = 0;
-    // ── 8-WIDE SIMD PRE-CALC ───────────────────────────────────────────────
-    for (; ColIdx <= NumCols - 8; ColIdx += 8)
+    const float CenterH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
+        LocalConfig.Craters.ForcedCraterCenter.X, LocalConfig.Craters.ForcedCraterCenter.Y, LocalConfig);
+    
+    ParallelFor(NumCols / 8, [&](int32 idx)
     {
+        TMap<FIntPoint, TArray<FSkylandIslandData>> SkylandCacheMap;
+        const int32 ColIdx = idx * 8;
+        // ── 8-WIDE SIMD PRE-CALC ───────────────────────────────────────────────
         float CX[8], CY[8];
         for (int32 k = 0; k < 8; ++k)
         {
@@ -207,9 +208,6 @@ void FVoxelGeneratorTask::BuildDensityField()
         FVoxelNoiseSIMD::EvaluateColumn_BiomeWeights_AVX2(CX_v, CY_v, LocalConfig, PermTable, Weights_v, Temp_v, Eros_v);
 
         __m256 SurfH_v;
-        const float CenterH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
-            LocalConfig.Craters.ForcedCraterCenter.X, LocalConfig.Craters.ForcedCraterCenter.Y, LocalConfig);
-
         FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(CX_v, CY_v, Weights_v, LocalConfig, PermTable, Temp_v, Eros_v, SurfH_v, CenterH);
 
         float Forest[8], Desert[8], Peaks[8], Cliffs[8], Mesa[8], Craters[8], Ocean[8], SurfH[8], Temp[8], Eros[8];
@@ -256,13 +254,16 @@ void FVoxelGeneratorTask::BuildDensityField()
             
             Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], LocalConfig, Temp[k], Eros[k]);
             Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX[k], CY[k], Item.NeutralH, Item.Weights, LocalConfig, &SkylandCacheMap);
+            
 
             ColumnWeights[curIdx]  = Item.Weights;
             ColumnSurfaceH[curIdx] = Item.SurfH;
         }
-    }
+    });
 
+    int32 ColIdx = (NumCols / 8) * 8;
     // ── REMAINDER FALLBACK ──────────────────────────────────────────────────
+    TMap<FIntPoint, TArray<FSkylandIslandData>> SkylandCacheMap;
     for (; ColIdx < NumCols; ++ColIdx)
     {
         const int32 Y  = ColIdx / EffSize;
