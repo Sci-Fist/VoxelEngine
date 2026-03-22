@@ -50,60 +50,80 @@ void AVoxelWorld::GenerateWorldDeferred()
         UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering on PlayerStart %s"), *CandidatePos.ToString());
     }
 
-    FVoxelGenerationConfig Config = GetEffectiveConfig(); // FIX #30: value copy
-    FVector CraterPos = FindCraterSpawnLocation(CandidatePos, Config);
-    if (CraterPos != CandidatePos)
-    {
-        UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Natural crater at %s"), *CraterPos.ToString());
-        CandidatePos = CraterPos;
-        Config.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y); // UPDATE LOCAL COPY
-        
-        if (BiomePreset != nullptr)
-        {
-            BiomePreset->Config.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
-        }
-        GenerationConfig.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
-    }
-
-#if !WITH_EDITOR
-    {
-        bool bConflict = true; int32 MaxTry = 100;
-        static constexpr float JumpStep = 200000.f;
-        while (bConflict && MaxTry-- > 0)
-        {
-            bConflict = false;
-            for (TActorIterator<AVoxelWorld> It(GetWorld()); It; ++It)
-            {
-                if (!*It || *It == this) continue;
-                if (FVector::Dist2D(CandidatePos, (*It)->GetActorLocation()) < JumpStep)
-                {
-                    CandidatePos.X += JumpStep;
-                    if (FMath::Abs(CandidatePos.X) > 1000000.f) { CandidatePos.X = 0.f; CandidatePos.Y += JumpStep; }
-                    bConflict = true; break;
-                }
-            }
-        }
-    }
-#endif
-
-    if (GetActorLocation() != CandidatePos)
-    {
-        SetActorLocation(CandidatePos);
-        UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Relocated to %s"), *CandidatePos.ToString());
-    }
-    SpawnTargetPos = CandidatePos;
-
     TWeakObjectPtr<AVoxelWorld> WeakThis(this);
-    Async(EAsyncExecution::ThreadPool, [WeakThis]()
+    
+    // ROOT FIX: Push candidate crater search (which samples many vertices) to Async ThreadPool
+    // to avoid freezing the viewport before the load progress bar gets a chance to render.
+    Async(EAsyncExecution::ThreadPool, [WeakThis, CandidatePos]()
     {
         AVoxelWorld* Self = WeakThis.Get();
         if (!Self || Self->bShutdown) return;
-        Self->PerformWorldDiscoveryAndBoundsCalculation();
-        AsyncTask(ENamedThreads::GameThread, [WeakThis]()
+
+        FVoxelGenerationConfig Config = Self->GetEffectiveConfig();
+        FVector CraterPos = Self->FindCraterSpawnLocation(CandidatePos, Config);
+
+        // Relocation, configuration alignment, and conflict checks must remain on the GameThread
+        AsyncTask(ENamedThreads::GameThread, [WeakThis, CraterPos, CandidatePos]()
         {
             AVoxelWorld* Self2 = WeakThis.Get();
             if (!Self2 || Self2->bShutdown) return;
-            Self2->FinalizeGenerationSetup();
+
+            FVector FinalPos = CandidatePos;
+            if (CraterPos != CandidatePos)
+            {
+                UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Natural crater at %s"), *CraterPos.ToString());
+                FinalPos = CraterPos;
+                Self2->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
+                if (Self2->BiomePreset != nullptr)
+                {
+                    Self2->BiomePreset->Config.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
+                }
+            }
+
+#if !WITH_EDITOR
+            {
+                bool bConflict = true; int32 MaxTry = 100;
+                static constexpr float JumpStep = 200000.f;
+                while (bConflict && MaxTry-- > 0)
+                {
+                    bConflict = false;
+                    for (TActorIterator<AVoxelWorld> It(Self2->GetWorld()); It; ++It)
+                    {
+                        if (!*It || *It == Self2) continue;
+                        if (FVector::Dist2D(FinalPos, (*It)->GetActorLocation()) < JumpStep)
+                        {
+                            FinalPos.X += JumpStep;
+                            if (FMath::Abs(FinalPos.X) > 1000000.f) { FinalPos.X = 0.f; FinalPos.Y += JumpStep; }
+                            bConflict = true; break;
+                        }
+                    }
+                }
+            }
+#endif
+
+            if (Self2->GetActorLocation() != FinalPos)
+            {
+                Self2->SetActorLocation(FinalPos);
+                UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Relocated to %s"), *FinalPos.ToString());
+            }
+            Self2->SpawnTargetPos = FinalPos;
+
+            // Continue column discovery on ThreadPool
+            Async(EAsyncExecution::ThreadPool, [WeakThis]()
+            {
+                AVoxelWorld* Self3 = WeakThis.Get();
+                if (!Self3 || Self3->bShutdown) return;
+
+                Self3->PerformWorldDiscoveryAndBoundsCalculation();
+
+                // Finalize on GameThread
+                AsyncTask(ENamedThreads::GameThread, [WeakThis]()
+                {
+                    AVoxelWorld* Self4 = WeakThis.Get();
+                    if (!Self4 || Self4->bShutdown) return;
+                    Self4->FinalizeGenerationSetup();
+                });
+            });
         });
     });
 }
@@ -394,8 +414,8 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
     if (TargetZ > 100000.f || CraterW > 0.3f) TargetZ = Surface + SafeOff;
 
-    UE_LOG(LogVoxelWorld,Warning,TEXT("VoxelWorld: Spawn Pos=(%.0f,%.0f) Surface=%.0f Z=%.0f CraterW=%.2f Sky=%d"),
-        Pos.X,Pos.Y,Surface,TargetZ,CraterW,bSky?1:0);
+    UE_LOG(LogVoxelWorld,Warning,TEXT("VoxelWorld: Spawn Pos=(%.0f,%.0f) Surface=%.0f Z=%.0f CraterW=%.2f Sky=%d CONFIG_DEPTH=%.0f CONFIG_RADIUS=%.0f"),
+        Pos.X,Pos.Y,Surface,TargetZ,CraterW,bSky?1:0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
 
     Pos.Z = TargetZ; TargetCoordsZ = TargetZ + 30000.f; CachedSurfaceHeight = Surface;
     Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
