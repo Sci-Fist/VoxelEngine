@@ -398,12 +398,43 @@ void AVoxelChunk::BuildWaterMeshInternal()
 	for (int32 ly=0;ly<CS;++ly)
 	for (int32 lx=0;lx<CS;++lx)
 	{
-		uint8 Level=GetW(lx,ly,lz);
-		if (Level==WATER_EMPTY) continue;
-		const float WL=(Level==WATER_SOURCE?1.f:(float)Level/(float)WATER_FULL);
-		const float x0=lx*VS,y0=ly*VS,z0=lz*VS,x1=x0+VS,y1=y0+VS,zT=z0+VS*WL;
-		if (!IsSolidLocal(lx,ly,lz+1)&&GetW(lx,ly,lz+1)==WATER_EMPTY)
-			Quad({x0,y0,zT},{x1,y0,zT},{x1,y1,zT},{x0,y1,zT},FVector::UpVector);
+		uint8 Level = GetW(lx, ly, lz);
+		if (Level == WATER_EMPTY) continue;
+
+		const float WL = (Level == WATER_SOURCE ? 1.f : (float)Level / (float)WATER_FULL);
+		const float x0 = lx * VS, y0 = ly * VS, z0 = lz * VS;
+		const float x1 = x0 + VS, y1 = y0 + VS, z1 = z0 + VS;
+		const float zT = z0 + VS * WL;
+
+		// 1. Top Face
+		if (lz + 1 >= CS || (!IsSolidLocal(lx, ly, lz + 1) && GetW(lx, ly, lz + 1) == WATER_EMPTY))
+		{
+			Quad({x0, y0, zT}, {x1, y0, zT}, {x1, y1, zT}, {x0, y1, zT}, FVector::UpVector);
+		}
+
+		// 2. Right Face (+X)
+		if (lx + 1 >= CS || (!IsSolidLocal(lx + 1, ly, lz) && GetW(lx + 1, ly, lz) == WATER_EMPTY))
+		{
+			Quad({x1, y0, z0}, {x1, y1, z0}, {x1, y1, zT}, {x1, y0, zT}, FVector::RightVector);
+		}
+
+		// 3. Left Face (-X)
+		if (lx - 1 < 0 || (!IsSolidLocal(lx - 1, ly, lz) && GetW(lx - 1, ly, lz) == WATER_EMPTY))
+		{
+			Quad({x0, y1, z0}, {x0, y0, z0}, {x0, y0, zT}, {x0, y1, zT}, -FVector::RightVector);
+		}
+
+		// 4. Front Face (+Y)
+		if (ly + 1 >= CS || (!IsSolidLocal(lx, ly + 1, lz) && GetW(lx, ly + 1, lz) == WATER_EMPTY))
+		{
+			Quad({x1, y1, z0}, {x0, y1, z0}, {x0, y1, zT}, {x1, y1, zT}, FVector::ForwardVector);
+		}
+
+		// 5. Back Face (-Y)
+		if (ly - 1 < 0 || (!IsSolidLocal(lx, ly - 1, lz) && GetW(lx, ly - 1, lz) == WATER_EMPTY))
+		{
+			Quad({x0, y0, z0}, {x1, y0, z0}, {x1, y0, zT}, {x0, y0, zT}, -FVector::ForwardVector);
+		}
 	}
 
 	if (V.Num()==0) { WaterMesh->SetVisibility(false); return; }
