@@ -155,30 +155,59 @@ struct FVoxelMeshOutput
 };
 
 // ---------------------------------------------------------------------------
+// FVoxelMeshScratchBuffers — reusable buffers to avoid heap allocations
+// ---------------------------------------------------------------------------
+struct FVoxelMeshScratchBuffers
+{
+    TArray<int32>   VertexIndices;
+    TArray<FVector> CellVertices;
+    TArray<FVector> CellNormals;
+
+    TArray<int32> FlatMap;
+    TArray<int32> SlopeMap;
+    TArray<int32> BackMap;
+    TArray<int32> SlopeBackMap;
+
+    void Reset(int32 S3)
+    {
+        if (VertexIndices.Num() < S3)
+        {
+            VertexIndices.SetNumUninitialized(S3);
+            CellVertices.SetNumUninitialized(S3);
+            CellNormals.SetNumUninitialized(S3);
+            FlatMap.SetNumUninitialized(S3);
+            SlopeMap.SetNumUninitialized(S3);
+            BackMap.SetNumUninitialized(S3);
+            SlopeBackMap.SetNumUninitialized(S3);
+        }
+        
+        FMemory::Memset(VertexIndices.GetData(), 255, S3 * sizeof(int32));
+        FMemory::Memset(FlatMap.GetData(), 255, S3 * sizeof(int32));
+        FMemory::Memset(SlopeMap.GetData(), 255, S3 * sizeof(int32));
+        FMemory::Memset(BackMap.GetData(), 255, S3 * sizeof(int32));
+        FMemory::Memset(SlopeBackMap.GetData(), 255, S3 * sizeof(int32));
+        FMemory::Memset(CellVertices.GetData(), 0, S3 * sizeof(FVector));
+        FMemory::Memset(CellNormals.GetData(), 0, S3 * sizeof(FVector));
+    }
+};
+
+// ---------------------------------------------------------------------------
 // FVoxelMeshGenerator — stateless, thread-safe mesh builder
 // ---------------------------------------------------------------------------
 struct FVoxelMeshGenerator
 {
-	/**
-	 * Run Surface Nets on a density field and fill OutMesh.
-	 *
-	 * @param Densities     Flat array, size = (ChunkSize/StepSize + 3)^3.
-	 *                      Index: X + Y*S + Z*S*S  where S = ChunkSize/StepSize + 3.
-	 * @param InChunkSize   Voxels per axis (e.g. 16 or 32).
-	 * @param InVoxelSize   World-space size of one voxel in cm (e.g. 100).
-	 * @param ChunkOrigin   World position of local voxel [0,0,0].
-	 * @param OutMesh       Receives the generated geometry.
-	 * @param Config        Generation config — SlopeThreshold used for flat/slope split.
-	 * @param InStepSize    LOD step — 1 = full res, 2 = half res, etc.
-	 */
-	static void GenerateMesh(
-		const TArray<float>&          Densities,
-		int32                         InChunkSize,
-		float                         InVoxelSize,
-		const FVector&                ChunkOrigin,
-		FVoxelMeshOutput&             OutMesh,
-		const struct FVoxelGenerationConfig& Config,
-		int32                         InStepSize = 1);
+    /**
+     * Run Surface Nets on a density field and fill OutMesh.
+     */
+    static void GenerateMesh(
+        const TArray<float>&          Densities,
+        int32                         InChunkSize,
+        float                         InVoxelSize,
+        const FVector&                ChunkOrigin,
+        FVoxelMeshOutput&             OutMesh,
+        const struct FVoxelGenerationConfig& Config,
+        int32                         InStepSize = 1,
+        struct FVoxelMeshScratchBuffers* Scratch = nullptr);
 
 
 private:

@@ -33,9 +33,10 @@
 // ============================================================
 float FVoxelDensityGenerator::GetDensity(float X, float Y, float Z, const FVoxelGenerationConfig& Config)
 {
-    const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(X, Y, Config);
-    const float SurfH   = FVoxelBiomeManager::GetSurfaceHeightStatic(X, Y, W, Config);
-    const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(X, Y, Config);
+    float Temp = -999.f, Erosion = -999.f;
+    const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(X, Y, Config, &Temp, &Erosion);
+    const float SurfH   = FVoxelBiomeManager::GetSurfaceHeightStatic(X, Y, W, Config, Temp, Erosion);
+    const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(X, Y, Config, Temp, Erosion);
 
     // Build skyland cache with NEUTRAL height so islands aren't anchored to crater floor
     const FSkylandColumnCache Cache = FVoxelBiomeGenerators::GetSkylandColumnCache(

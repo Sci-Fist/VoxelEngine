@@ -164,8 +164,11 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (!bEnCraters) Item.Weights.SetWeight(EVoxelBiome::Craters, 0.f);
         Item.Weights.Normalize();
 
-        Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, LocalConfig);
-        Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig);
+        float Temp = -999.f, Erosion = -999.f;
+        FVoxelBiomeManager::GetBiomeWeightsStatic(CX, CY, LocalConfig, &Temp, &Erosion);
+
+        Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, LocalConfig, Temp, Erosion);
+        Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig, Temp, Erosion);
 
         Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig);
 
@@ -313,19 +316,50 @@ void FVoxelGeneratorTask::BuildDensityField()
             continue;
         }
 
-        // Per-voxel evaluation
-        for (int32 Z=0; Z<EffSize; ++Z)
+        // Cascade upsampling cache
+        float LastD = -2.f;
+        const int32 ZStep = 2; // 1=Off, 2=Fast, 4=Ultrafast
+
+        for (int32 Z = 0; Z < EffSize; Z += ZStep)
         {
-            const float WZ  = WorldOrigin.Z + (Z-1.f)*EffVoxSz;
-            const int32 Idx = X+Y*EffSize+Z*EffSize*EffSize;
-            float D = -2.f;
-            if (bEnSurface)  D = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, LocalConfig, D);
-            if (bEnCaves)    D = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ), Ctx, LocalConfig, D);
-            if (bEnSkylands) D = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ), Ctx, LocalConfig, D);
-            if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
-            { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
-            Densities[Idx] = D;
-            if (D > 0.f) LocalSolid++; else LocalAir++;
+            const float WZ0  = WorldOrigin.Z + (Z-1.f)*EffVoxSz;
+            float D0 = LastD;
+            
+            if (Z == 0) // First step exact eval
+            {
+                D0 = -2.f;
+                if (bEnSurface)  D0 = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ0), Ctx, LocalConfig, D0);
+                if (bEnCaves)    D0 = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ0), Ctx, LocalConfig, D0);
+                if (bEnSkylands) D0 = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ0), Ctx, LocalConfig, D0);
+            }
+
+            const int32 EdgeZ = FMath::Min(Z + ZStep, EffSize - 1);
+            const float WZ1  = WorldOrigin.Z + (EdgeZ-1.f)*EffVoxSz;
+            
+            float D1 = -2.f;
+            if (bEnSurface)  D1 = SurfacePass.EvaluateVoxel(FVector(WX,WY,WZ1), Ctx, LocalConfig, D1);
+            if (bEnCaves)    D1 = CavePass   .EvaluateVoxel(FVector(WX,WY,WZ1), Ctx, LocalConfig, D1);
+            if (bEnSkylands) D1 = SkylandPass.EvaluateVoxel(FVector(WX,WY,WZ1), Ctx, LocalConfig, D1);
+
+            LastD = D1; // Save for next cycle
+
+            const int32 Span = EdgeZ - Z;
+            for (int32 i = 0; i <= Span; ++i)
+            {
+                const int32 CurrZ = Z + i;
+                if (CurrZ >= EffSize) break;
+
+                const int32 CurrIdx = X + Y*EffSize + CurrZ*EffSize*EffSize;
+                float D = FMath::Lerp(D0, D1, (Span > 0) ? (float)i / Span : 0.f);
+
+                if (!DenseHasEdit.IsEmpty() && DenseHasEdit[CurrIdx])
+                {
+                    const float Ov = DenseEditVals[CurrIdx];
+                    D = (Ov < 0.f) ? FMath::Min(D, Ov) : FMath::Max(D, Ov);
+                }
+                Densities[CurrIdx] = D;
+                if (D > 0.f) LocalSolid++; else LocalAir++;
+            }
         }
         for (int32 i = 0; i < LocalSolid; ++i) SolidCount.IncrementExchange();
         for (int32 i = 0; i < LocalAir; ++i)   AirCount.IncrementExchange();
@@ -345,7 +379,7 @@ void FVoxelGeneratorTask::BuildMesh()
 {
     MeshOutput.Reset();
     FVoxelMeshGenerator::GenerateMesh(
-        Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
+        Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize, &ScratchBuffers);
     UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: [%d,%d,%d] Flat=%d Slope=%d"),
         ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
         MeshOutput.FlatMesh.Vertices.Num(), MeshOutput.SlopeMesh.Vertices.Num()));

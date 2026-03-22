@@ -133,13 +133,14 @@ static void FlattenCellTops(
 
 // ---------------------------------------------------------------------------
 void FVoxelMeshGenerator::GenerateMesh(
-    const TArray<float>& Densities,
-    int32                InChunkSize,
-    float                InVoxelSize,
-    const FVector&       ChunkOrigin,
-    FVoxelMeshOutput&    OutMesh,
+    const TArray<float>&          Densities,
+    int32                         InChunkSize,
+    float                         InVoxelSize,
+    const FVector&                ChunkOrigin,
+    FVoxelMeshOutput&             OutMesh,
     const FVoxelGenerationConfig& Config,
-    int32                InStepSize)
+    int32                         InStepSize,
+    FVoxelMeshScratchBuffers*     Scratch)
 {
     OutMesh.Reset();
 
@@ -150,14 +151,18 @@ void FVoxelMeshGenerator::GenerateMesh(
 
     OutMesh.FlatMesh.ReserveInitial(EffectiveSize * EffectiveSize * 3);
 
-    TArray<int32>   VertexIndices; VertexIndices.Init(-1, S3);
-    TArray<FVector> CellVertices;  CellVertices.Init(FVector::ZeroVector, S3);
-    TArray<FVector> CellNormals;   CellNormals.Init(FVector::ZeroVector, S3);
+    FVoxelMeshScratchBuffers LocalScratch;
+    FVoxelMeshScratchBuffers& S_Buf = Scratch ? *Scratch : LocalScratch;
+    S_Buf.Reset(S3);
 
-    TArray<int32> FlatMap;      FlatMap.Init(-1, S3);
-    TArray<int32> SlopeMap;     SlopeMap.Init(-1, S3);
-    TArray<int32> BackMap;      BackMap.Init(-1, S3);
-    TArray<int32> SlopeBackMap; SlopeBackMap.Init(-1, S3);
+    TArray<int32>&   VertexIndices = S_Buf.VertexIndices;
+    TArray<FVector>& CellVertices  = S_Buf.CellVertices;
+    TArray<FVector>& CellNormals   = S_Buf.CellNormals;
+
+    TArray<int32>& FlatMap      = S_Buf.FlatMap;
+    TArray<int32>& SlopeMap     = S_Buf.SlopeMap;
+    TArray<int32>& BackMap      = S_Buf.BackMap;
+    TArray<int32>& SlopeBackMap = S_Buf.SlopeBackMap;
 
     static const FIntVector CornerOffset[8] = {
         {0,0,0},{1,0,0},{1,1,0},{0,1,0},

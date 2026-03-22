@@ -79,6 +79,8 @@ private:
 
     TArray<FIntVector>            WaterSources;
 
+    FVoxelMeshScratchBuffers      ScratchBuffers;
+
     void BuildDensityField();
     void PostProcessDensities(int32 TotalSamples);
     void BuildMesh();

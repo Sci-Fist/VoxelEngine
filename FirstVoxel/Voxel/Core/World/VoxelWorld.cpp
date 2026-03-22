@@ -186,7 +186,7 @@ void AVoxelWorld::Tick(float DeltaTime)
     else
     {
         SpawnWaitAccum += DeltaTime;
-        const bool bTimedOut = (SpawnWaitAccum > 90.f);
+        const bool bTimedOut = (SpawnWaitAccum > 900.f);
 
         int32 ReadyCount = 0;
         const int32 Total = InitialSpawnCoords.Num();

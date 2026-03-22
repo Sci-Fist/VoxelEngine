@@ -62,7 +62,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         CachedCurvedR = FMath::Pow(RN, 2.0f);
         const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
         const float ShardT  = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TS);
-        const float DecoupledH = FMath::Lerp(15000.f, SH, ShardT);
+        const float DecoupledH = SH;
         CachedSkyAltWorld = DecoupledH + AltBase
             + ShardT * (CachedCurvedH * SC.HeightAltitudeBonus + CachedCurvedR * SC.RoughnessAltitudeBonus);
     }
@@ -78,6 +78,23 @@ void AVoxelWorld::UpdateChunkStreaming()
     const int32 GridDim = 2 * MaxRad + 1;
     const int32 NumCols = GridDim * GridDim;
 
+    const int32 SubStep   = 4;
+    const int32 CoarseRad = FMath::Max(1, MaxRad / SubStep);
+    const int32 CoarseDim = 2 * CoarseRad + 1;
+    const int32 NumCoarse = CoarseDim * CoarseDim;
+
+    TArray<FVoxelBiomeManager::FWeightsAndHeight> CoarseGrid;
+    CoarseGrid.SetNumUninitialized(NumCoarse);
+
+    ParallelFor(NumCoarse, [&](int32 Index)
+    {
+        const int32 cx = -CoarseRad + (Index % CoarseDim);
+        const int32 cy = -CoarseRad + (Index / CoarseDim);
+        const float ColX = (PlayerCoord.X + cx * SubStep + 0.5f) * ChunkWorldSize;
+        const float ColY = (PlayerCoord.Y + cy * SubStep + 0.5f) * ChunkWorldSize;
+        CoarseGrid[Index] = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(ColX, ColY, Config);
+    });
+
     TArray<FVoxelBiomeManager::FWeightsAndHeight> CachedColumns;
     CachedColumns.SetNumUninitialized(NumCols);
 
@@ -85,9 +102,10 @@ void AVoxelWorld::UpdateChunkStreaming()
     {
         const int32 x = -MaxRad + (Index % GridDim);
         const int32 y = -MaxRad + (Index / GridDim);
-        const float ColX = (PlayerCoord.X + x + 0.5f) * ChunkWorldSize;
-        const float ColY = (PlayerCoord.Y + y + 0.5f) * ChunkWorldSize;
-        CachedColumns[Index] = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(ColX, ColY, Config);
+        const int32 cx = FMath::Clamp(FMath::RoundToInt((float)x / (float)SubStep), -CoarseRad, CoarseRad);
+        const int32 cy = FMath::Clamp(FMath::RoundToInt((float)y / (float)SubStep), -CoarseRad, CoarseRad);
+        const int32 CoarseIndex = (cx + CoarseRad) + (cy + CoarseRad) * CoarseDim;
+        CachedColumns[Index] = CoarseGrid[CoarseIndex];
     });
 
     // ── Build desired chunk set ───────────────────────────────────────────

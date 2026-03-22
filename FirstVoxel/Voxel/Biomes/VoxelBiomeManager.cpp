@@ -25,11 +25,16 @@ DEFINE_LOG_CATEGORY(LogVoxelBiome);
 //  GetBiomeWeightsStatic
 // ============================================================
 FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(
-    float X, float Y, const FVoxelGenerationConfig& Config)
+    float X, float Y, const FVoxelGenerationConfig& Config,
+    float* OutTemp, float* OutErosion)
 {
     const FVector Off = Config.GetSeedOffset();
     const float Temp    = GetTemperatureWithSeed(X, Y, Config, Off);
     const float Erosion = GetErosionWithSeed    (X, Y, Config, Off);
+
+    if (OutTemp)   *OutTemp   = Temp;
+    if (OutErosion) *OutErosion = Erosion;
+
     const FBiomeBlendConfig& B = Config.BiomeBlend;
 
     FVoxelBiomeWeightMap Map;
@@ -88,8 +93,9 @@ FVoxelBiomeManager::FWeightsAndHeight FVoxelBiomeManager::GetWeightsAndSurfaceHe
     float X, float Y, const FVoxelGenerationConfig& Config)
 {
     FWeightsAndHeight Out;
-    Out.Weights = GetBiomeWeightsStatic(X, Y, Config);
-    Out.SurfaceHeight = GetSurfaceHeightStatic(X, Y, Out.Weights, Config);
+    float Temp = -999.f, Erosion = -999.f;
+    Out.Weights = GetBiomeWeightsStatic(X, Y, Config, &Temp, &Erosion);
+    Out.SurfaceHeight = GetSurfaceHeightStatic(X, Y, Out.Weights, Config, Temp, Erosion);
     return Out;
 }
 
@@ -100,11 +106,12 @@ FVoxelBiomeManager::FWeightsAndHeight FVoxelBiomeManager::GetWeightsAndSurfaceHe
 //  Use GetNeutralSurfaceHeightStatic() to get pre-crater terrain.
 // ============================================================
 float FVoxelBiomeManager::GetSurfaceHeightStatic(
-    float X, float Y, const FVoxelBiomeWeightMap& W, const FVoxelGenerationConfig& Config)
+    float X, float Y, const FVoxelBiomeWeightMap& W, const FVoxelGenerationConfig& Config,
+    float InTemp, float InErosion)
 {
     const FVector Off = Config.GetSeedOffset();
-    const float Temp    = GetTemperatureWithSeed(X, Y, Config, Off);
-    const float Erosion = GetErosionWithSeed    (X, Y, Config, Off);
+    const float Temp    = (InTemp > -900.f) ? InTemp : GetTemperatureWithSeed(X, Y, Config, Off);
+    const float Erosion = (InErosion > -900.f) ? InErosion : GetErosionWithSeed(X, Y, Config, Off);
     const FBiomeBlendConfig& B = Config.BiomeBlend;
 
     float ForestW = FMath::SmoothStep(0.0f,0.6f,1.0f-Erosion)*FMath::SmoothStep(0.0f,1.0f,1.5f-Temp);
@@ -145,11 +152,12 @@ float FVoxelBiomeManager::GetSurfaceHeightStatic(
 //  GetCraterHeight() call at the end is omitted.
 // ============================================================
 float FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
-    float X, float Y, const FVoxelGenerationConfig& Config)
+    float X, float Y, const FVoxelGenerationConfig& Config,
+    float InTemp, float InErosion)
 {
     const FVector Off = Config.GetSeedOffset();
-    const float Temp    = GetTemperatureWithSeed(X, Y, Config, Off);
-    const float Erosion = GetErosionWithSeed    (X, Y, Config, Off);
+    const float Temp    = (InTemp > -900.f) ? InTemp : GetTemperatureWithSeed(X, Y, Config, Off);
+    const float Erosion = (InErosion > -900.f) ? InErosion : GetErosionWithSeed(X, Y, Config, Off);
     const FBiomeBlendConfig& B = Config.BiomeBlend;
 
     float ForestW = FMath::SmoothStep(0.0f,0.6f,1.0f-Erosion)*FMath::SmoothStep(0.0f,1.0f,1.5f-Temp);

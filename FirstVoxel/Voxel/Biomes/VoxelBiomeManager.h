@@ -51,13 +51,15 @@ public:
     FVoxelBiomeManager() = default;
 
     static FVoxelBiomeWeightMap GetBiomeWeightsStatic(
-        float X, float Y, const FVoxelGenerationConfig& Config);
+        float X, float Y, const FVoxelGenerationConfig& Config,
+        float* OutTemp = nullptr, float* OutErosion = nullptr);
 
     /** Returns surface height INCLUDING crater overlay. */
     static float GetSurfaceHeightStatic(
         float X, float Y,
         const FVoxelBiomeWeightMap& Weights,
-        const FVoxelGenerationConfig& Config);
+        const FVoxelGenerationConfig& Config,
+        float InTemp = -999.f, float InErosion = -999.f);
 
     /**
      * FIX ROOT BUG: Returns BASE terrain height WITHOUT crater overlay.
@@ -67,7 +69,8 @@ public:
      *   - Skyland SkyLB threshold (so rim doesn't suppress nearby islands)
      */
     static float GetNeutralSurfaceHeightStatic(
-        float X, float Y, const FVoxelGenerationConfig& Config);
+        float X, float Y, const FVoxelGenerationConfig& Config,
+        float InTemp = -999.f, float InErosion = -999.f);
 
     struct FWeightsAndHeight { FVoxelBiomeWeightMap Weights; float SurfaceHeight = 0.f; };
     static FWeightsAndHeight GetWeightsAndSurfaceHeightStatic(
