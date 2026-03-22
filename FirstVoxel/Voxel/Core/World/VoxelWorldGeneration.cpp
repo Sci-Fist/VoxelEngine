@@ -302,9 +302,7 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
         // Force maximum LOD 1 for high elevations so they retain 3D mesh overhangs instead of flat fits
         if (Coord.Z >= 4) TargetLOD = FMath::Min(TargetLOD, 1);
 
-        if (bWaitingForInitialSpawn && InitialSpawnCoords.Contains(Coord))
-            TargetLOD = 0;
-        else if (DistSq < (ChunkSize * VoxelSize * 3.2f) * (ChunkSize * VoxelSize * 3.2f))
+        if (DistSq < (ChunkSize * VoxelSize * 3.2f) * (ChunkSize * VoxelSize * 3.2f))
             TargetLOD = 0; // Safeguard
 
         Chunk->LOD = TargetLOD;
@@ -465,20 +463,21 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     auto AddToCollision = [&](const FIntVector& C) { SpawnSet.Add(C); };
     auto AddToVisual    = [&](const FIntVector& C) { VisualSet.Add(C); };
 
-    // 1. Immediate Crater Zone depth volume sizing
+    // 1. Immediate Crater Zone depth volume sizing (COLLISION REQUIRED)
     // Inner radius uses shallow loads to prevent CPU overload; deep layers load async later.
-    for (int32 x=-18; x<=18; x++) for (int32 y2=-18; y2<=18; y2++) for (int32 z2=-4; z2<=2; z2++)
+    for (int32 x=-8; x<=8; x++) for (int32 y2=-8; y2<=8; y2++) for (int32 z2=-4; z2<=2; z2++)
     {
          AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
     }
  
-    // 2. Wide Visual Zone Radius sizing
-    for (int32 x=-32; x<=32; x++) for (int32 y2=-32; y2<=32; y2++)
+    // 2. Wide Visual Zone Radius sizing (VISUAL HORIZON)
+    for (int32 x=-40; x<=40; x++) for (int32 y2=-40; y2<=40; y2++)
     {
-         const bool bIsCenter = (FMath::Abs(x) <= 18 && FMath::Abs(y2) <= 18);
+         // Exclude inner collision core
+         const bool bIsCenter = (FMath::Abs(x) <= 8 && FMath::Abs(y2) <= 8);
          if (bIsCenter) continue;
  
-         for (int32 z2=0; z2<=0; z2++)
+         for (int32 z2=-4; z2<=4; z2++)
          {
               AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
          }
