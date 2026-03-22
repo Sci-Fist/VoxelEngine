@@ -93,9 +93,9 @@ public:
     int32 SkylandsRenderDistanceZ = 8;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Performance",
-        meta=(ClampMin="4", ClampMax="64",
-              ToolTip="Parallel chunk generation slots. Increase for faster streaming fill at cost of CPU spikes. 24 recommended for Valheim-style fill-in."))
-    int32 MaxConcurrentGenerations = 24;
+        meta=(ClampMin="4", ClampMax="128",
+              ToolTip="Parallel chunk generation slots. Increase for faster streaming fill at cost of CPU spikes. 48 recommended for heavy parallel workloads."))
+    int32 MaxConcurrentGenerations = 48;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD",
         meta=(ToolTip="World distance (cm) at which LOD 0 transitions to LOD 1. 40000 = 400m (Zone A/B boundary)."))
