@@ -144,7 +144,7 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
         // Zone 3: rim crest — slight additional peak, then descends to outer rim
         // Sin curve: 0 at WallEnd (=RimH), peaks 1/3 through, back to RimH at RimPeak
         const float CrestT  = (S.NormDist - WallEnd) / (RimPeak - WallEnd);  // 0→1
-        const float CrestExtra = FMath::Sin(CrestT * 3.14159f) * S.RimHeight * 0.12f;
+        const float CrestExtra = FMath::Sin(CrestT * 3.14159f) * S.RimHeight * 0.35f;
         H = RimH + CrestExtra;
     }
     else if (S.NormDist < RimEnd)

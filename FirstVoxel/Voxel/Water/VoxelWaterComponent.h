@@ -31,7 +31,7 @@ public:
     bool bEnableOcean = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water", meta=(ClampMin="100.0"))
-    float OceanPlaneScale = 10000.f;
+    float OceanPlaneScale = 2000000.f;
 
     virtual void TickComponent(float DeltaTime, ELevelTick TickType,
                                FActorComponentTickFunction* ThisTickFunction) override;

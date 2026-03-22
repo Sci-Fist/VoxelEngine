@@ -18,6 +18,7 @@
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "Async/ParallelFor.h"
+#include <atomic>
 #include "Voxel/Biomes/VoxelBiomeManager.h"
 #include "Voxel/Config/VoxelGenerationConfig.h"
 #include "Voxel/Core/VoxelChunk.h"
@@ -130,9 +131,45 @@ void AVoxelWorld::UpdateChunkStreaming()
         if (x*x + y*y <= RenderDistanceXY*RenderDistanceXY)
             Desired.Add(PlayerCoord + FIntVector(x, y, z));
 
-    // Skylands band — cylinder covering the full island altitude
-    const int32 SkyZMin = FMath::FloorToInt((SkyAltWorld - HalfThickCm * 2.f) / ChunkWorldSize);
-    const int32 SkyZMax = FMath::CeilToInt ((SkyAltWorld + HalfThickCm * 2.f) / ChunkWorldSize);
+    // ── PASS 1B: Aggregate Skylands ranges for loading bounds ──────────
+    std::atomic<float> GlobalSkyAltMin(1000000.f);
+    std::atomic<float> GlobalSkyAltMax(-1000000.f);
+
+    ParallelFor(NumCols, [&](int32 Index)
+    {
+        const int32 x = -MaxRad + (Index % GridDim);
+        const int32 y = -MaxRad + (Index / GridDim);
+        if (x*x + y*y > SkylandsRenderDistanceXY*SkylandsRenderDistanceXY) return; // skip for far horizon
+
+        const float ColX = (PlayerCoord.X + x + 0.5f) * ChunkWorldSize;
+        const float ColY = (PlayerCoord.Y + y + 0.5f) * ChunkWorldSize;
+        const FVoxelBiomeManager::FWeightsAndHeight Wh =
+            FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(ColX, ColY, Config);
+
+        // Approximate Skyland altitude lookup for this column footprint
+        const float CH     = Wh.SurfaceHeight;
+        const float HN     = FMath::Clamp(CH/SC.MaxTerrainReference, 0.f, 1.f);
+        const float RN     = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);
+        const float TS     = FMath::Clamp(HN*1.5f + RN*0.8f, 0.f, 1.f);
+        const float ShardT = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TS);
+        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
+        
+        float SkyAlt = CH + AltBase + ShardT*(FMath::Pow(HN,2.5f)*SC.HeightAltitudeBonus + FMath::Pow(RN,2.f)*SC.RoughnessAltitudeBonus);
+        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain + HalfThickCm);
+
+        float CurrentMin = GlobalSkyAltMin.load();
+        while (SkyAlt < CurrentMin && !GlobalSkyAltMin.compare_exchange_weak(CurrentMin, SkyAlt));
+        float CurrentMax = GlobalSkyAltMax.load();
+        while (SkyAlt > CurrentMax && !GlobalSkyAltMax.compare_exchange_weak(CurrentMax, SkyAlt));
+    });
+
+    // Expand bounds with local min/max calculated from terrain peaks
+    const float FilteredSkyMin = FMath::Min(SkyAltWorld - HalfThickCm*2.f, GlobalSkyAltMin.load() - HalfThickCm*2.f);
+    const float FilteredSkyMax = FMath::Max(SkyAltWorld + HalfThickCm*2.f, GlobalSkyAltMax.load() + HalfThickCm*2.f);
+
+    const int32 SkyZMin = FMath::FloorToInt(FilteredSkyMin / ChunkWorldSize);
+    const int32 SkyZMax = FMath::CeilToInt (FilteredSkyMax / ChunkWorldSize);
+
     for (int32 z = SkyZMin; z <= SkyZMax + SkylandsRenderDistanceZ; ++z)
     for (int32 y = -SkylandsRenderDistanceXY; y <= SkylandsRenderDistanceXY; ++y)
     for (int32 x = -SkylandsRenderDistanceXY; x <= SkylandsRenderDistanceXY; ++x)

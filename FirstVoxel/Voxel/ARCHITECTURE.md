@@ -306,6 +306,12 @@ Skylands use a two-type blend controlled by `CellShardT` (0 = shard/rock, 1 = is
 | **BreakUp strength** | 0.10 | up to 2.80 × HeightNorm |
 | **Size scaling** | by altitude gap above terrain | fixed by HeightSizeBonus |
 
+#### Negative Altitude Scaling (CH < 0)
+To create dynamic volume contrast inside low valleys and craters, shape dimensions scale down proportionally:
+*   **Probability**: Multiplicative linear decay below Sea Level reaching 0 at depth -150m.
+*   **Size**: Shrinkage up to 70% reduction at maximum depth calculation.
+*   **Altitude Hover Gap**: Air clearance threshold shrinks from default (e.g., 120m) down to 25m above floor directly, keeping shards floating tight to the crater terrain.
+
 `GetSkylandColumnCache()` runs once per XY column (9-cell grid neighbourhood), caches `SkyAlt`, `HalfThick`, `ShardT`, `Freq`, `Threshold`.  
 `GetSkylandDensityFromCache()` runs per voxel using the cache — only evaluates shape noise + falloff.
 
@@ -329,8 +335,13 @@ Two independent subsystems coexist:
 `UVoxelWorldWaterComponent` ticks the simulator at `Water.SimStepInterval` seconds, then calls `RebuildWaterMesh()` on each dirty chunk.
 
 ### Water source detection
+ 
+*   **Below SeaLevel**: Automatically places source origins in ocean biomes or low hollow depressions.
+*   **Above SeaLevel**: `FVoxelGeneratorTask::PlaceWaterSources()` scans for air voxels sitting on solid ground with $\ge 3$ solid cardinal horizontal neighbours (hollow/basin detection) deterministically relative to `FVoxelBiomeWaterConfig::LakeSpawnProbability`. 
 
-`FVoxelGeneratorTask::PlaceWaterSources()` scans for air voxels sitting on solid ground with ≥2 solid cardinal horizontal neighbours (enclosure check). Probability is gated per biome via `FVoxelBiomeWaterConfig::LakeSpawnProbability`. Results are passed to `AVoxelWorld` via `AVoxelChunk::OnChunkWaterReady`.
+### Water Mesh Generation
+
+To support continuous waterfalls and cascading streams across height changes instead of floating "stepping stones", `AVoxelChunk::BuildWaterMeshInternal()` generates **Top, Left, Right, Front, and Back faces** for each simulated water voxel node that touches an Air boundary. Flow silhouettes now remain continuous smoothly down slopes and cliffs.
 
 ---
 

@@ -23,7 +23,7 @@ UVoxelWaterComponent::UVoxelWaterComponent()
     PrimaryComponentTick.bCanEverTick = true;
     bTickInEditor = false;
     SeaLevel       = 0.f;
-    OceanPlaneScale = 1000.f;
+    OceanPlaneScale = 2000000.f;
     bEnableOcean   = true;
 }
 

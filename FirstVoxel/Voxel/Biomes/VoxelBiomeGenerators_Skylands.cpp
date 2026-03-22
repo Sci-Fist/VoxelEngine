@@ -109,7 +109,9 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
         const float cnX2 = CX2+Off.X, cnY2 = CY2+Off.Y;
         const float HP   = (BG_Noise(cnX2*0.002f, cnY2*0.002f, 200.f)+1.f)*0.5f;
-        const float SpawnProb = ComputeIslandSpawnProbability(HN, RN, SC);
+        float SpawnProb = ComputeIslandSpawnProbability(HN, RN, SC);
+        // RULE: Lower terrain (CH < 0) = Less Probability (Linear decay below Sea Level)
+        if (CH < 0.f) SpawnProb *= FMath::Clamp(1.f + CH / 15000.f, 0.f, 1.f);
         if (HP > SpawnProb) continue;
 
         const float SMN = FMath::Max(0.20f, SC.ShardMinScale);
@@ -117,6 +119,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float NR  = FMath::Lerp(0.5f, 0.25f, CST);
         float IS = FMath::Lerp(SC.BaseIslandSize*SMN, SC.BaseIslandSize+SC.HeightSizeBonus, CST);
         IS = FMath::Clamp(IS*((1.f-NR)+NR*SF*2.f), 150.f, GridSize*0.48f);
+        // RULE: Lower terrain (CH < 0) = Smaller island size
+        if (CH < 0.f) IS *= FMath::Clamp(1.f + CH / 15000.f, 0.30f, 1.f);
         if (Dist > IS) continue;
 
         // Base altitude - Fixed absolute height above sea level to clear high mountain tops
@@ -140,8 +144,10 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float ET  = FMath::Lerp(FMath::Lerp(0.12f,0.25f,HA2), SC.ThicknessRatio, CST);
         float HT = FMath::Min(IS*ET, IS*FMath::Lerp(0.75f, SC.MaxThicknessRatio, CST));
 
-        // Removed the absolute sea level override that was burying islands in mountains.
-        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain + HT);
+        // RULE: Lower terrain (CH < 0) = Lower altitude (hover closer to floor)
+        float LocalMinAlt = SC.MinAltitudeAboveTerrain;
+        if (CH < 0.f) LocalMinAlt = FMath::Lerp(2500.f, LocalMinAlt, FMath::Clamp(1.f + CH / 15000.f, 0.f, 1.f));
+        SkyAlt = FMath::Max(SkyAlt, CH + LocalMinAlt + HT);
 
         float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST)
                   + FMath::Lerp(0.20f, 0.f, CST);
