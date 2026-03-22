@@ -263,7 +263,7 @@ void FVoxelSkylandPass::PrepareColumn(float WorldX, float WorldY,
     // New: SkyLB uses NeutralSurfaceHeight (pre-crater = 9840cm) → SkyLB = 16240cm
     //      → only chunks above 16240cm generate skylands → islands float above rim.
     const float NeutralH = OutContext.NeutralSurfaceHeight;
-    const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.02f
+    const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.25f
                       - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
 
     if (OutContext.MaxWorldZ < SkyLB)

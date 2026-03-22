@@ -467,17 +467,17 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
     // 1. Immediate Crater Zone depth volume sizing
     // Inner radius uses shallow loads to prevent CPU overload; deep layers load async later.
-    for (int32 x=-10; x<=10; x++) for (int32 y2=-10; y2<=10; y2++) for (int32 z2=-4; z2<=2; z2++)
+    for (int32 x=-18; x<=18; x++) for (int32 y2=-18; y2<=18; y2++) for (int32 z2=-4; z2<=2; z2++)
     {
          AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
     }
-
+ 
     // 2. Wide Visual Zone Radius sizing
-    for (int32 x=-25; x<=25; x++) for (int32 y2=-25; y2<=25; y2++)
+    for (int32 x=-32; x<=32; x++) for (int32 y2=-32; y2<=32; y2++)
     {
-         const bool bIsCenter = (FMath::Abs(x) <= 10 && FMath::Abs(y2) <= 10);
+         const bool bIsCenter = (FMath::Abs(x) <= 18 && FMath::Abs(y2) <= 18);
          if (bIsCenter) continue;
-
+ 
          for (int32 z2=0; z2<=0; z2++)
          {
               AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));

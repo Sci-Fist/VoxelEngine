@@ -263,7 +263,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             //      → chunks covering 8240-16240cm got skylands → buried in wall.
             // New: uses NeutralH (~9840cm) → SkyLB = ~16240cm
             //      → only chunks above 16240cm get skylands → visible above rim.
-            const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.02f
+            const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.25f
                               - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
 
             if (MaxWZ < SkyLB)
@@ -275,7 +275,7 @@ void FVoxelGeneratorTask::BuildDensityField()
 
             // Early-out for pure-air columns well below the skyland band
             const float OvH     = LocalConfig.Performance.bEnableOverhangs ? LocalConfig.Overhangs.MaxDistFromSurface : 0.f;
-            const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain * 0.02f
+            const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain * 0.25f
                                 - SC.BaseIslandSize * SC.ThicknessRatio - 400.f;
             if (MinWZ > SurfH + OvH + 200.f && MaxWZ < SkyLB2)
             {

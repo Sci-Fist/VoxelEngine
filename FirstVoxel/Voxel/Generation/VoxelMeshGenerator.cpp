@@ -170,7 +170,7 @@ void FVoxelMeshGenerator::GenerateMesh(
     };
 
     // ── PASS 1: vertex placement ──────────────────────────────────────────
-    for (int32 Z = 0; Z < EffectiveSize + 2; ++Z)
+    ParallelFor(EffectiveSize + 2, [&](int32 Z)
     {
         for (int32 Y = 0; Y <= EffectiveSize + 1; ++Y)
         for (int32 X = 0; X <= EffectiveSize + 1; ++X)
@@ -186,7 +186,7 @@ void FVoxelMeshGenerator::GenerateMesh(
                 if (D[i] > 0.f) CubeIndex |= (1 << i);
             }
             if (CubeIndex == 0 || CubeIndex == 255) continue;
-
+ 
             FVector CellPos  = FVector::ZeroVector;
             int32   EdgeCount = 0;
             for (int32 e = 0; e < 12; ++e)
@@ -198,17 +198,17 @@ void FVoxelMeshGenerator::GenerateMesh(
                     ++EdgeCount;
                 }
             }
-
+ 
             // FIX #12: guard against degenerate cells with zero cut edges
             if (EdgeCount < 1) continue;
-
+ 
             CellPos /= (float)EdgeCount;
             const int32 CI    = Idx(X, Y, Z, S);
             CellVertices[CI]  = CellPos;
             CellNormals[CI]   = ComputeNormal(Densities, X, Y, Z, EffectiveSize);
             VertexIndices[CI] = 1;
         }
-    }
+    });
 
     // FIX #3: Disabled to eliminate interior degenerate collapses causing concentric slot gaps.
     // FlattenCellTops(EffVoxelSize, CellVertices, CellNormals, VertexIndices, S);
@@ -216,7 +216,7 @@ void FVoxelMeshGenerator::GenerateMesh(
     // ── ColumnColors — FIX #7: parallelized (was serial, 1225 Perlin calls) ──
     TArray<FColor> ColumnColors;
     ColumnColors.SetNumUninitialized(S * S);
-    for (int32 FlatIdx = 0; FlatIdx < S * S; ++FlatIdx)
+    ParallelFor(S * S, [&](int32 FlatIdx)
     {
         const int32 CX = FlatIdx % S;
         const int32 CY = FlatIdx / S;
@@ -225,7 +225,7 @@ void FVoxelMeshGenerator::GenerateMesh(
         const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(WX, WY, Config);
         FLinearColor C(W.Forest, W.Desert, W.Peaks + W.Cliffs, W.Craters + W.Mesa);
         ColumnColors[FlatIdx] = C.ToFColor(false);
-    }
+    });
 
     auto GetQuadColor = [&](int32 qX, int32 qY) -> const FColor&
     {
