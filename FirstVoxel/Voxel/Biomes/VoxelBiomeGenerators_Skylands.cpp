@@ -119,27 +119,22 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         IS = FMath::Clamp(IS*((1.f-NR)+NR*SF*2.f), 150.f, GridSize*0.48f);
         if (Dist > IS) continue;
 
-        // Base altitude - Fixed absolute height to fit inside chunk loading ranges
+        // Base altitude - Fixed absolute height above sea level to clear high mountain tops
         const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
         const float CuH = FMath::Pow(FMath::Max(0.f,HN), 2.5f);
         const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
-        
-        // Use absolute coordinate instead of CH + offset
+
+        // Absolute height anchor coordinates (e.g., config values should be absolute offsets above sea level)
         float SkyAlt = AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
 
         // Size/altitude coupling
         {
             const float AG = FMath::Max(0.f, SkyAlt-CH);
             IS = FMath::Clamp(IS*FMath::Lerp(FMath::Clamp(AG/FMath::Max(1.f,SC.MinAltitudeAboveTerrain),0.4f,3.f),1.f,CST),150.f,GridSize*0.48f);
-            const float HA = AltBase * FMath::Lerp(0.3f,1.f,CST);
-            if (CST < 0.3f)
-                SkyAlt = HA*FMath::Lerp(0.2f,0.7f,CST) + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
-            else
-                SkyAlt = HA + CST*(CuH*SC.HeightAltitudeBonus+CuR*SC.RoughnessAltitudeBonus);
-            
-            const float NoiseRange = FMath::Lerp(5000.f, 1500.f, CST);
-            SkyAlt += BG_Noise(cnX2*0.006f, cnY2*0.006f, 500.f) * NoiseRange;
         }
+
+        const float NoiseRange = FMath::Lerp(5000.f, 1500.f, CST);
+        SkyAlt += BG_Noise(cnX2*0.006f, cnY2*0.006f, 500.f) * NoiseRange;
 
         const float HA2 = (BG_Noise(cnX2*0.005f, cnY2*0.005f, 300.f)+1.f)*0.5f;
         const float ET  = FMath::Lerp(FMath::Lerp(0.12f,0.25f,HA2), SC.ThicknessRatio, CST);

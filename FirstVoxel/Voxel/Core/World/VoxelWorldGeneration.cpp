@@ -376,7 +376,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     const float HN  = FMath::Clamp(Surface/SC.MaxTerrainReference,0.f,1.f);
     const float RN  = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference,0.f,1.f);
     const float TS  = FMath::Clamp(HN*1.5f+RN*0.8f,0.f,1.f);
-    const float SkyAlt = Surface + FMath::Lerp(SC.MinAltitudeAboveTerrain,SC.BaseAltitudeAboveTerrain,TS) + HN*SC.HeightAltitudeBonus + RN*SC.RoughnessAltitudeBonus;
+    const float SkyAlt = FMath::Lerp(SC.MinAltitudeAboveTerrain,SC.BaseAltitudeAboveTerrain,TS) + HN*SC.HeightAltitudeBonus + RN*SC.RoughnessAltitudeBonus;
     const float IHT = (SC.BaseIslandSize+HN*SC.HeightSizeBonus+RN*SC.RoughnessSizeBonus)*SC.ThicknessRatio;
 
     bool bSky = false;
@@ -410,7 +410,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     // 1. Surrounding concentric 13x13 area of player spawn (Cinematic Crater Bounds)
     for (int32 x=-32; x<=32; x++) for (int32 y2=-32; y2<=32; y2++) for (int32 z2=-2; z2<=2; z2++)
     {
-        const bool bInner = (FMath::Abs(x) <= 6 && FMath::Abs(y2) <= 6);
+        const bool bInner = (FMath::Abs(x) <= 12 && FMath::Abs(y2) <= 12);
         if (bInner) AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
         else        AddToVisual   (FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
     }
@@ -420,7 +420,7 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     {
         for (int32 x=-32; x<=32; x++) for (int32 y2=-32; y2<=32; y2++)
         {
-            const bool bInner = (FMath::Abs(x) <= 6 && FMath::Abs(y2) <= 6);
+            const bool bInner = (FMath::Abs(x) <= 12 && FMath::Abs(y2) <= 12);
             if (bInner)
             {
                 AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));

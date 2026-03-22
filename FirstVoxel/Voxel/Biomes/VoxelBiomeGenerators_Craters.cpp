@@ -199,6 +199,7 @@ static void ApplyRimRoughness(float& H, const FCraterSetup& S, const FCraterBiom
 // ── Central uplift peak (Meteor only) ────────────────────────────────────────
 static void ApplyMeteorUplift(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
+#if 0
     if (CRC.CraterStyle != ECraterStyle::Meteor || !CRC.bEnableCentralUplift) return;
     if (S.NormDist >= CRC.UpliftRadiusFraction) return;
 
@@ -209,6 +210,7 @@ static void ApplyMeteorUplift(float& H, const FCraterSetup& S, const FCraterBiom
         FMath::Pow(tUp, CRC.UpliftShapeExponent) * FMath::Abs(S.EffectiveDepth) * CRC.UpliftHeightFraction,
         MaxUplift);
     H += UpliftH + BG_Noise(S.nX * 0.005f, S.nY * 0.005f, 100.f) * CRC.UpliftNoiseAmplitude * tUp;
+#endif
 }
 
 // ── Floor texture (impact melt sheet) ────────────────────────────────────────

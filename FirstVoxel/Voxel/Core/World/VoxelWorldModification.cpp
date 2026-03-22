@@ -185,13 +185,13 @@ FVector AVoxelWorld::FindCraterSpawnLocation(
 
     if (BestWeight < MinWeight) return StartPos;
 
-    // FIX N5: return the centroid of the high-weight plateau, not just BestPos
-    if (CentroidN > 1)
-    {
-        FVector Centroid = CentroidSum / (float)CentroidN;
-        Centroid.Z       = StartPos.Z; // preserve Z for later terrain height lookup
-        return Centroid;
-    }
+    // // FIX N5: return the centroid of the high-weight plateau, not just BestPos
+    // if (CentroidN > 1)
+    // {
+    //     FVector Centroid = CentroidSum / (float)CentroidN;
+    //     Centroid.Z       = StartPos.Z; // preserve Z for later terrain height lookup
+    //     return Centroid;
+    // }
     return BestPos;
 }
 

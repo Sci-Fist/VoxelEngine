@@ -27,6 +27,7 @@ struct FColumnContext
 
     FVoxelBiomeWeightMap BiomeWeights;
     FSkylandColumnCache  SkylandCache;
+    float BedrockJag           = 0.f; 
 
     // FIX #14: SeedOffset cached once per PrepareColumn call.
     // Previously EvaluateVoxel called Config.GetSeedOffset() per voxel,

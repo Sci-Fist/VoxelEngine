@@ -66,7 +66,7 @@ float FVoxelDensityGenerator::GetDensityFull(
     const float X = WorldPos.X, Y = WorldPos.Y, Z = WorldPos.Z;
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
 
-    if (SurfaceHeight < Z - 4000.f) return -1.f;
+    // if (SurfaceHeight < Z - 4000.f) return -1.f;
 
     const FVector SeedOff = Config.GetSeedOffset();
 
@@ -208,15 +208,14 @@ void FVoxelCavePass::PrepareColumn(float WorldX, float WorldY,
                                     const FVoxelGenerationConfig& Config,
                                     FColumnContext& OutContext) const
 {
-    // ROOT FIX: GetNeutralSurfaceHeightStatic omits the crater overlay.
-    // Old approach (zeroing crater weights) was silently broken because
-    // GetSurfaceHeightStatic ignores its weight parameter and always calls
-    // GetCraterHeight(). GetNeutralSurfaceHeightStatic genuinely skips it.
     OutContext.NeutralSurfaceHeight = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
         WorldX, WorldY, Config);
 
     if (OutContext.CachedSeedOffset == FVector::ZeroVector)
         OutContext.CachedSeedOffset = Config.GetSeedOffset();
+
+    const FCaveTunnelsConfig& CVC = Config.CaveTunnels;
+    OutContext.BedrockJag = FMath::PerlinNoise3D(FVector(WorldX*CVC.BedrockJagFrequency, WorldY*CVC.BedrockJagFrequency, 0.f)) * CVC.BedrockJagAmplitude;
 }
 
 float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos,
@@ -233,7 +232,7 @@ float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos,
         if (DepthBelow > EffMinDepth)
         {
             const float SF = FMath::Clamp((DepthBelow-CVC.MinDepthBelowSurface)/CVC.SurfaceFadeDepth, 0.f,1.f);
-            const float BJ = FMath::PerlinNoise3D(FVector(WorldPos.X*CVC.BedrockJagFrequency,WorldPos.Y*CVC.BedrockJagFrequency,0.f))*CVC.BedrockJagAmplitude;
+            const float BJ = Context.BedrockJag;
             const float BF = FMath::Clamp((WorldPos.Z-(CVC.BedrockDepth+BJ))/1000.f, 0.f,1.f);
             const float CF = SF*BF;
             if (CF > 0.f)
