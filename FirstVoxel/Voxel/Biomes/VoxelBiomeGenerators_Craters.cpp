@@ -135,9 +135,9 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
     }
     else if (S.NormDist < WallEnd)
     {
-        // Zone 2: steep inner wall — SmoothStep so slope at both ends = 0
-        const float SmoothT = FMath::SmoothStep(FloorEnd, WallEnd, S.NormDist);
-        H = FMath::Lerp(WallBaseH, RimH, SmoothT);
+        // Zone 2: steep inner wall — linear ramp to make it steep and sharp absolute
+        const float SmoothT = (S.NormDist - FloorEnd) / (WallEnd - FloorEnd);
+        H = FMath::Lerp(WallBaseH, RimH, FMath::Clamp(SmoothT, 0.f, 1.f));
     }
     else if (S.NormDist < RimPeak)
     {

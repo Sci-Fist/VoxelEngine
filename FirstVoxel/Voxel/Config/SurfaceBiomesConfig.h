@@ -131,15 +131,15 @@ struct FCraterBiomeConfig
     // ── Dimensions ────────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
         meta=(ClampMin="5000.0", ToolTip="Config radius. S.CraterRadius = this * 0.5. 40000 gives 200m actual radius."))
-    float CentralCraterRadius = 40000.f;
+    float CentralCraterRadius = 60000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
         meta=(ToolTip="Bowl floor depth below terrain surface (negative cm). Raised to -12000 for deep floors."))
-    float CentralCraterDepth = -12000.f;
+    float CentralCraterDepth = -25000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
         meta=(ClampMin="0.0", ToolTip="Rim height above terrain (cm). Raised to 5000 for tall ridgelines."))
-    float CentralCraterRimHeight = 5000.f;
+    float CentralCraterRimHeight = 12000.f;
 
     // ── Rim ──────────────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim", meta=(ClampMin="0.0", ClampMax="1.0"))

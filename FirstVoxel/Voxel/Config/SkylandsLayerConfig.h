@@ -43,7 +43,7 @@ struct FSkylandsLayerConfig
     // ── Probability ───────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",
         meta=(ToolTip="Base probability over flat ground (0-1). Raised for denser coverage over plains."))
-    float BaseProbability = 0.35f;
+    float BaseProbability = 0.55f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability")
     float HeightProbabilityBonus = 0.65f;
