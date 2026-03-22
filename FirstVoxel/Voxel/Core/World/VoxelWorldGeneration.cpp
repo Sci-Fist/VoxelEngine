@@ -194,9 +194,33 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 #endif
 
     if (bWaitingForInitialSpawn)
+    {
+        TArray<FIntVector> TempQueue;
+        TempQueue.Reserve(InitialSpawnCoords.Num() + InitialSpawnCoords_Visual.Num());
+        
         for (const FIntVector& C : InitialSpawnCoords)
+        {
             if (!LoadedChunks.Contains(C) && !QSet.Contains(C))
-            { QSet.Add(C); GenerationQueue.Insert(C,0); }
+            {
+                QSet.Add(C);
+                TempQueue.Add(C);
+            }
+        }
+
+        for (const FIntVector& C : InitialSpawnCoords_Visual)
+        {
+            if (!LoadedChunks.Contains(C) && !QSet.Contains(C))
+            {
+                QSet.Add(C);
+                TempQueue.Add(C);
+            }
+        }
+
+        if (TempQueue.Num() > 0)
+        {
+            GenerationQueue.Insert(TempQueue, 0); // O(N) single shift prepends efficiently!
+        }
+    }
 
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d chunks."), GenerationQueue.Num());
 }
@@ -438,12 +462,23 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     auto AddToCollision = [&](const FIntVector& C) { SpawnSet.Add(C); };
     auto AddToVisual    = [&](const FIntVector& C) { VisualSet.Add(C); };
 
-    // 1. Surrounding concentric area of player spawn (Cinematic Crater Bounds)
-    for (int32 x=-35; x<=35; x++) for (int32 y2=-35; y2<=35; y2++) for (int32 z2=-8; z2<=4; z2++)
+    // 1. Immediate Crater Zone depth volume sizing
+    // Inner radius uses shallow loads to prevent CPU overload; deep layers load async later.
+    for (int32 x=-20; x<=20; x++) for (int32 y2=-20; y2<=20; y2++) for (int32 z2=-4; z2<=2; z2++)
     {
-        const bool bInner = (FMath::Abs(x) <= 20 && FMath::Abs(y2) <= 20);
-        if (bInner) AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
-        else        AddToVisual   (FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
+         AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
+    }
+
+    // 2. Wide Visual Zone Radius sizing
+    for (int32 x=-35; x<=35; x++) for (int32 y2=-35; y2<=35; y2++)
+    {
+         const bool bIsCenter = (FMath::Abs(x) <= 20 && FMath::Abs(y2) <= 20);
+         if (bIsCenter) continue;
+
+         for (int32 z2=0; z2<=0; z2++)
+         {
+              AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
+         }
     }
 
     // 2. Add ground layer strictly beneath player if they spawn in the sky
@@ -461,8 +496,6 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
             else
             {
                 AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
-                AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z + 1));
-                AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z - 1));
             }
         }
     }

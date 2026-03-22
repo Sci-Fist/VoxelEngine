@@ -210,8 +210,8 @@ void FVoxelMeshGenerator::GenerateMesh(
         }
     });
 
-    // FIX #3: Re-enabled with interior-only snapping to prevent chunk-boundary cracks
-    FlattenCellTops(EffVoxelSize, CellVertices, CellNormals, VertexIndices, S);
+    // FIX #3: Disabled to eliminate interior degenerate collapses causing concentric slot gaps.
+    // FlattenCellTops(EffVoxelSize, CellVertices, CellNormals, VertexIndices, S);
 
     // ── ColumnColors — FIX #7: parallelized (was serial, 1225 Perlin calls) ──
     TArray<FColor> ColumnColors;
