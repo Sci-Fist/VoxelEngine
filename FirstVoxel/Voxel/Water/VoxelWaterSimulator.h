@@ -62,5 +62,6 @@ private:
 
     // FIX #33: accepts SrcData so SimCell can maintain WaterCellCount
     bool SimCell(const FIntVector& WV, uint8* SrcCell,
-                 FVoxelWaterData* SrcData, TSet<FIntVector>& DirtyChunks);
+                 FVoxelWaterData* SrcData, TSet<FIntVector>& DirtyChunks,
+                 int32 x, int32 y, int32 z);
 };

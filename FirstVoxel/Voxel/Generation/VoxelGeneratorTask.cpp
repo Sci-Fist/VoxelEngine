@@ -245,7 +245,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             Item.SurfH = SurfH[k];
             
             // Tier 4 fallback: If any unsupported biome is active, re-calculate scalar.
-            const float MissingWeights = Cliffs[k] + Mesa[k] + Craters[k] + Ocean[k];
+            const float MissingWeights = Cliffs[k] + Craters[k] + Ocean[k];
             if (MissingWeights > 0.001f || Item.SurfH == 0.f)
             {
                 Item.SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, LocalConfig, Temp[k], Eros[k]);

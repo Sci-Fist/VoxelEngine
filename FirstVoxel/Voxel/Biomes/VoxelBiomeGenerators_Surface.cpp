@@ -90,15 +90,6 @@ float FVoxelBiomeGenerators::GetMesaHeight(float X, float Y, const FVoxelGenerat
     const float EdgeBlend = FMath::SmoothStep(0.f, 1.f, (CombinedProfile-Plateau)*(MC.EdgeSharpness+4.f));
     Height += (Plateau + FMath::Pow(EdgeBlend,2.f)/StepS) * (MC.HeightMax-MC.HeightBase);
 
-    const float PillarN = BG_Noise(nX*MC.PillarFrequency, nY*MC.PillarFrequency, 60.f);
-    if (PillarN > 0.65f)
-    {
-        const float I = (PillarN-0.65f)/0.35f;
-        float PH = FMath::Lerp(MC.PillarHeightMin, MC.PillarHeightMax, I);
-        PH *= FMath::Pow(1.f-FMath::Clamp(1.f-I,0.f,1.f)*MC.PillarConicalFactor, 1.5f);
-        if (I > 0.85f) PH += 500.f;
-        Height = FMath::Max(Height, BasePlains+PH);
-    }
 
     const float RidgedCh = 1.f - FMath::Abs(BG_Noise(nX*MC.ChannelFrequency, nY*MC.ChannelFrequency, 80.f));
     if (RidgedCh > 0.75f)

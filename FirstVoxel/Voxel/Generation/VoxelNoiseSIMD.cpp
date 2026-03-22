@@ -1091,7 +1091,122 @@ void EvaluateColumn_Skylands_AVX2(
             }
         }
 
-        // Cliffs, Mesa can run run scalar fallback fallback if Weights > 0 list layout layout Safely securely !!
-        // Wait! Ocean = 0 for now !!
+        // 4. Cliffs
+        {
+            __m256 Mask = _mm256_cmp_ps(Weights.Cliffs, _mm256_set1_ps(0.001f), _CMP_GT_OQ);
+            if (_mm256_movemask_ps(Mask))
+            {
+                const FCliffsBiomeConfig& CC = Config.Cliffs;
+                __m256 nXf = _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(CC.NoiseFrequency));
+                __m256 nYf = _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(CC.NoiseFrequency));
+                __m256 Base = FBM_AVX2(nXf, nYf, _mm256_set1_ps(15.f), CC.Octaves, 2.1f, 0.55f, Config.Performance.MaxNoiseOctaves, PermTable);
+                
+                __m256 AbsBase = _mm256_and_ps(Base, _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF)));
+                __m256 Shaped = AbsBase;
+                if (CC.Sharpness == 2.0f) Shaped = _mm256_mul_ps(AbsBase, AbsBase);
+                Shaped = _mm256_max_ps(_mm256_min_ps(Shaped, One), Zero);
+
+                if (CC.TerraceSteps > 0 && CC.TerraceFactor > 0.001f)
+                {
+                    __m256 S_v = _mm256_set1_ps((float)CC.TerraceSteps);
+                    __m256 Fl = _mm256_div_ps(_mm256_floor_ps(_mm256_mul_ps(Shaped, S_v)), S_v);
+                    __m256 TF = _mm256_set1_ps(CC.TerraceFactor);
+                    Shaped = _mm256_add_ps(_mm256_mul_ps(Shaped, _mm256_sub_ps(One, TF)), _mm256_mul_ps(Fl, TF));
+                }
+
+                __m256 Range = _mm256_set1_ps(CC.HeightMax - CC.HeightMin);
+                __m256 CH = _mm256_add_ps(_mm256_add_ps(SeaLevel, _mm256_set1_ps(CC.HeightMin)), _mm256_mul_ps(Range, Shaped));
+                
+                __m256 dXf = _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(CC.NoiseFrequency * 6.f));
+                __m256 dYf = _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(CC.NoiseFrequency * 6.f));
+                __m256 Detail = _mm256_mul_ps(Noise2D_AVX2(dXf, dYf, PermTable), _mm256_set1_ps(CC.DetailAmplitude));
+                CH = _mm256_add_ps(CH, Detail);
+
+                OutSurfH = _mm256_fmadd_ps(CH, Weights.Cliffs, OutSurfH);
+            }
+        }
+
+        // 5. Mesa
+        {
+            __m256 Mask = _mm256_cmp_ps(Weights.Mesa, _mm256_set1_ps(0.001f), _CMP_GT_OQ);
+            if (_mm256_movemask_ps(Mask))
+            {
+                const FMesaBiomeConfig& MC = Config.Mesa;
+                __m256 BasePlains = _mm256_add_ps(SeaLevel, _mm256_set1_ps(MC.HeightBase));
+                __m256 Height = BasePlains;
+ 
+                __m256 MesaN = FBM_AVX2(_mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(MC.MesaFrequency)), 
+                                        _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(MC.MesaFrequency)), 
+                                        _mm256_set1_ps(20.f), 4, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves, PermTable);
+                                        
+                __m256 ButteN = FBM_AVX2(_mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(MC.ButteFrequency)), 
+                                         _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(MC.ButteFrequency)), 
+                                         _mm256_set1_ps(40.f), 3, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves, PermTable);
+ 
+                __m256 Comb = _mm256_max_ps(
+                    _mm256_mul_ps(_mm256_add_ps(MesaN, One), _mm256_set1_ps(0.5f)),
+                    _mm256_mul_ps(_mm256_add_ps(ButteN, One), _mm256_set1_ps(0.5f))
+                );
+ 
+                __m256 StepS = _mm256_set1_ps((float)MC.PlateauSteps);
+                __m256 Plateau = _mm256_div_ps(_mm256_floor_ps(_mm256_mul_ps(Comb, StepS)), StepS);
+                
+                __m256 Delta = _mm256_mul_ps(_mm256_sub_ps(Comb, Plateau), _mm256_set1_ps(MC.EdgeSharpness + 4.f));
+                __m256 EdgeBlend = SmoothStep_AVX2(Zero, One, Delta);
+ 
+                __m256 EdgeSq = _mm256_mul_ps(EdgeBlend, EdgeBlend);
+                __m256 Term = _mm256_add_ps(Plateau, _mm256_div_ps(EdgeSq, StepS));
+                Height = _mm256_add_ps(Height, _mm256_mul_ps(Term, _mm256_set1_ps(MC.HeightMax - MC.HeightBase)));
+ 
+                // Channel
+                __m256 ChanN = Noise2D_AVX2(_mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(MC.ChannelFrequency)), 
+                                            _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(MC.ChannelFrequency)), PermTable);
+                __m256 AbsChan = _mm256_and_ps(ChanN, _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF)));
+                __m256 RidgedCh = _mm256_sub_ps(One, AbsChan);
+                __m256 C_Mask = _mm256_cmp_ps(RidgedCh, _mm256_set1_ps(0.75f), _CMP_GT_OQ);
+                if (_mm256_movemask_ps(C_Mask))
+                {
+                     __m256 C_Delta = _mm256_div_ps(_mm256_sub_ps(RidgedCh, _mm256_set1_ps(0.75f)), _mm256_set1_ps(0.25f));
+                     __m256 C_Smooth = SmoothStep_AVX2(Zero, One, C_Delta);
+                     Height = _mm256_blendv_ps(Height, _mm256_sub_ps(Height, _mm256_mul_ps(C_Smooth, _mm256_set1_ps(MC.ChannelDepth))), C_Mask);
+                }
+ 
+                // Layers (Sin approx)
+                __m256 MC_Thick = _mm256_set1_ps(MC.LayerThickness);
+                __m256 Div = _mm256_div_ps(Height, MC_Thick);
+                __m256 Frac = _mm256_sub_ps(Div, _mm256_floor_ps(Div));
+                __m256 L_Mask = _mm256_cmp_ps(Frac, _mm256_set1_ps(MC.LayerHardness), _CMP_GT_OQ);
+                __m256 MC_Hard = _mm256_set1_ps(MC.LayerHardness);
+ 
+                __m256 Sin_X = _mm256_mul_ps(_mm256_div_ps(_mm256_sub_ps(Frac, MC_Hard), _mm256_sub_ps(One, MC_Hard)), _mm256_set1_ps(3.14159265f));
+                __m256 PiMinusX = _mm256_sub_ps(_mm256_set1_ps(3.14159265f), Sin_X);
+                __m256 X_Pi_X = _mm256_mul_ps(Sin_X, PiMinusX);
+                __m256 Numerator = _mm256_mul_ps(_mm256_set1_ps(16.f), X_Pi_X);
+                __m256 Denominator = _mm256_sub_ps(_mm256_set1_ps(5.f * 3.14159265f * 3.14159265f), _mm256_mul_ps(_mm256_set1_ps(4.f), X_Pi_X));
+                __m256 Sin_Val = _mm256_div_ps(Numerator, Denominator);
+ 
+                __m256 If_True = _mm256_mul_ps(Sin_Val, _mm256_set1_ps(200.f * MC.LayerVariation));
+                __m256 If_False = _mm256_set1_ps(100.f * MC.LayerVariation);
+                Height = _mm256_add_ps(Height, _mm256_blendv_ps(If_False, If_True, L_Mask));
+ 
+                // Talus
+                __m256 Tal_Mask = _mm256_and_ps(
+                    _mm256_cmp_ps(Height, _mm256_add_ps(BasePlains, _mm256_set1_ps(2000.f)), _CMP_GT_OQ),
+                    _mm256_cmp_ps(Comb, _mm256_set1_ps(0.3f), _CMP_LT_OQ)
+                );
+                if (_mm256_movemask_ps(Tal_Mask))
+                {
+                     __m256 TalN = Noise2D_AVX2(_mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(MC.TalusFrequency)), 
+                                                _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(MC.TalusFrequency)), PermTable);
+                     __m256 Talus = _mm256_mul_ps(_mm256_add_ps(TalN, One), _mm256_set1_ps(400.f * MC.TalusSpread));
+                     Height = _mm256_blendv_ps(Height, _mm256_add_ps(Height, Talus), Tal_Mask);
+                }
+ 
+                __m256 FinalN = Noise2D_AVX2(_mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(0.008f)), _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(0.008f)), PermTable);
+                Height = _mm256_add_ps(Height, _mm256_mul_ps(FinalN, _mm256_set1_ps(160.f)));
+ 
+                OutSurfH = _mm256_fmadd_ps(Height, Weights.Mesa, OutSurfH);
+            }
+        }
     }
 } // namespace FVoxelNoiseSIMD

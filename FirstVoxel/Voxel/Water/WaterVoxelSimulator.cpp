@@ -154,7 +154,7 @@ const TArray<FIntVector>& FVoxelWaterSimulator::Step()
         for (int32 x = 0; x < ChunkSize; ++x)
         {
             const int32 Index = LocalIdx(FIntVector(x, y, z));
-            if (SimCell(Base + FIntVector(x, y, z), &D->Cells[Index], D, DirtySet))
+            if (SimCell(Base + FIntVector(x, y, z), &D->Cells[Index], D, DirtySet, x, y, z))
                 DirtySet.Add(Pair.Key);
         }
 
@@ -181,19 +181,39 @@ const TArray<FIntVector>& FVoxelWaterSimulator::Step()
 // ---------------------------------------------------------------------------
 bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell,
                                     FVoxelWaterData* SrcData,
-                                    TSet<FIntVector>& DirtyChunks)
+                                    TSet<FIntVector>& DirtyChunks,
+                                    int32 x, int32 y, int32 z)
 {
     if (!SrcCell || *SrcCell == WATER_EMPTY) return false;
-
+ 
     const bool  bIsSource = (*SrcCell == WATER_SOURCE);
     const uint8 MyLevel   = bIsSource ? WATER_FULL : *SrcCell;
     bool        bChanged  = false;
-
+ 
+    const int32 S  = ChunkSize;
+    const int32 S2 = S * S;
+ 
+    auto GetLevelLocal = [&](int32 lx, int32 ly, int32 lz, const FIntVector& Abs) -> uint8 {
+        if (lx>=0&&lx<S&&ly>=0&&ly<S&&lz>=0&&lz<S && SrcData) 
+            return (SrcData->Cells[lx+ly*S+lz*S2] == WATER_SOURCE) ? WATER_FULL : SrcData->Cells[lx+ly*S+lz*S2];
+        return GetLevel(Abs);
+    };
+    auto IsSolidLocal = [&](int32 lx, int32 ly, int32 lz, const FIntVector& Abs) -> bool {
+        if (lx>=0&&lx<S&&ly>=0&&ly<S&&lz>=0&&lz<S && SrcData) 
+            return SrcData->SolidCells[lx+ly*S+lz*S2];
+        return IsSolidAt(Abs);
+    };
+    auto GetCellLocal = [&](int32 lx, int32 ly, int32 lz, const FIntVector& Abs) -> uint8* {
+        if (lx>=0&&lx<S&&ly>=0&&ly<S&&lz>=0&&lz<S && SrcData) 
+            return &SrcData->Cells[lx+ly*S+lz*S2];
+        return CellPtr(Abs);
+    };
+ 
     // ---- GRAVITY ----
     const FIntVector Below(WV.X, WV.Y, WV.Z - 1);
-    if (!IsSolidAt(Below) && GetLevel(Below) < WATER_FULL)
+    if (!IsSolidLocal(x, y, z - 1, Below) && GetLevelLocal(x, y, z - 1, Below) < WATER_FULL)
     {
-        uint8* BC = CellPtr(Below);
+        uint8* BC = GetCellLocal(x, y, z - 1, Below);
         if (BC)
         {
             const uint8 BelowLevel = (*BC == WATER_SOURCE) ? WATER_FULL : *BC;
@@ -201,8 +221,15 @@ bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell,
             const uint8 Transfer   = FMath::Min(MyLevel, Space);
             if (Transfer > 0)
             {
-                // Track WaterCellCount for below chunk
-                if (FChunkEntry* BE = ChunkMap.Find(ToChunkCoord(Below)))
+                if (z > 0)
+                {
+                    const bool bBelowWasEmpty = (*BC == WATER_EMPTY);
+                    if (*BC != WATER_SOURCE)
+                        *BC = FMath::Min((int32)(*BC) + Transfer, (int32)WATER_FULL);
+                    if (bBelowWasEmpty && *BC != WATER_EMPTY && SrcData)
+                        SrcData->WaterCellCount++;
+                }
+                else if (FChunkEntry* BE = ChunkMap.Find(ToChunkCoord(Below)))
                 {
                     const bool bBelowWasEmpty = (*BC == WATER_EMPTY);
                     if (*BC != WATER_SOURCE)
@@ -211,6 +238,7 @@ bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell,
                     if (bBelowWasEmpty && *BC != WATER_EMPTY)
                         BE->Data->WaterCellCount++;
                 }
+ 
                 if (!bIsSource)
                 {
                     const bool bWasNonEmpty = (*SrcCell != WATER_EMPTY);
@@ -223,45 +251,59 @@ bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell,
         }
         if (!bIsSource && *SrcCell == WATER_EMPTY) return bChanged;
     }
-
+ 
     // ---- LATERAL SPREAD ----
     const uint8 CurrentLevel = bIsSource ? WATER_FULL : *SrcCell;
     if (CurrentLevel == WATER_EMPTY) return bChanged;
-
-    const bool bBelowBlocked = IsSolidAt(Below) || GetLevel(Below) >= WATER_FULL || !CellPtr(Below);
+ 
+    const bool bBelowBlocked = IsSolidLocal(x, y, z - 1, Below) || GetLevelLocal(x, y, z - 1, Below) >= WATER_FULL || !GetCellLocal(x, y, z - 1, Below);
     if (!bBelowBlocked) return bChanged;
-
+ 
     const FIntVector Neighbours[4] = {
         {WV.X+1,WV.Y,WV.Z},{WV.X-1,WV.Y,WV.Z},
         {WV.X,WV.Y+1,WV.Z},{WV.X,WV.Y-1,WV.Z},
     };
-
-    // FIX #40: hash voxel position to shuffle neighbour order each step
-    // This eliminates the X+1 directional bias in symmetric scenarios (e.g. crater lakes)
+    const int32 NeighCoords[4][2] = {
+        {x+1, y}, {x-1, y}, {x, y+1}, {x, y-1}
+    };
+ 
     int32 Order[4] = {0, 1, 2, 3};
     {
         const uint32 H = (uint32)(WV.X * 2654435761u ^ WV.Y * 2246822519u ^ WV.Z * 3266489917u);
-        // Two Fisher-Yates swaps using different hash bits
         const int32 A = H & 3;
         const int32 B = (H >> 2) & 3;
         Swap(Order[A], Order[3]);
         Swap(Order[B], Order[2]);
     }
-
+ 
     for (int32 i = 0; i < 4; ++i)
     {
-        const FIntVector& NV = Neighbours[Order[i]];
-        if (IsSolidAt(NV)) continue;
-        if (GetLevel(NV) >= CurrentLevel) continue;
-        uint8* NC = CellPtr(NV);
+        const int32 idx = Order[i];
+        const FIntVector& NV = Neighbours[idx];
+        const int32 nx = NeighCoords[idx][0], ny = NeighCoords[idx][1];
+ 
+        if (IsSolidLocal(nx, ny, z, NV)) continue;
+        if (GetLevelLocal(nx, ny, z, NV) >= CurrentLevel) continue;
+ 
+        uint8* NC = GetCellLocal(nx, ny, z, NV);
         if (!NC) continue;
-        if (FChunkEntry* NE = ChunkMap.Find(ToChunkCoord(NV)))
+ 
+        const bool bInChunk = (nx >= 0 && nx < S && ny >= 0 && ny < S);
+        if (bInChunk)
+        {
+            const bool bNWasEmpty = (*NC == WATER_EMPTY);
+            if (*NC != WATER_SOURCE) *NC += 1;
+            if (bNWasEmpty && *NC != WATER_EMPTY && SrcData) 
+                SrcData->WaterCellCount++;
+        }
+        else if (FChunkEntry* NE = ChunkMap.Find(ToChunkCoord(NV)))
         {
             const bool bNWasEmpty = (*NC == WATER_EMPTY);
             if (*NC != WATER_SOURCE) *NC += 1;
             DirtyChunks.Add(ToChunkCoord(NV));
             if (bNWasEmpty && *NC != WATER_EMPTY) NE->Data->WaterCellCount++;
         }
+ 
         if (!bIsSource)
         {
             const bool bWasNonEmpty = (*SrcCell != WATER_EMPTY);
@@ -272,7 +314,7 @@ bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell,
         }
         if (!bIsSource && *SrcCell == WATER_EMPTY) break;
     }
-
+ 
     return bChanged;
 }
 
