@@ -151,13 +151,46 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
         MinCoord.X, MinCoord.Y, MinCoord.Z, MaxCoord.X, MaxCoord.Y, MaxCoord.Z);
 
     TArray<TPair<int32,FIntVector>> Sorted;
-    for (int32 z=MinCoord.Z; z<=MaxCoord.Z; ++z)
+    const FVoxelGenerationConfig Cfg = GetEffectiveConfig();
+    const float GridSize = ChunkSize * VoxelSize;
+
     for (int32 y=MinCoord.Y; y<=MaxCoord.Y; ++y)
     for (int32 x=MinCoord.X; x<=MaxCoord.X; ++x)
     {
-        const FIntVector C(x,y,z);
-        if (!LoadedChunks.Contains(C))
-            Sorted.Add({FMath::Max3(FMath::Abs(x-Center.X),FMath::Abs(y-Center.Y),FMath::Abs(z-Center.Z)),C});
+        const float WX = (x + 0.5f) * GridSize;
+        const float WY = (y + 0.5f) * GridSize;
+
+        const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WX, WY, Cfg);
+        const float Surface = Wh.SurfaceHeight;
+        const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
+
+        const FSkylandsLayerConfig& SC = Cfg.SkylandsLayer;
+        const float HN  = FMath::Clamp(Surface/SC.MaxTerrainReference,0.f,1.f);
+        const float RN  = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference,0.f,1.f);
+        const float TS  = FMath::Clamp(HN*1.5f+RN*0.8f,0.f,1.f);
+        
+        const float SkyAlt = Surface + FMath::Lerp(SC.MinAltitudeAboveTerrain,SC.BaseAltitudeAboveTerrain,TS) + HN*SC.HeightAltitudeBonus + RN*SC.RoughnessAltitudeBonus;
+        const float IHT    = (SC.BaseIslandSize+HN*SC.HeightSizeBonus+RN*SC.RoughnessSizeBonus)*SC.ThicknessRatio;
+
+        const int32 SkyZ_Min = FMath::FloorToInt((SkyAlt - IHT - 1000.f) / GridSize);
+        const int32 SkyZ_Max = FMath::FloorToInt((SkyAlt + IHT + 1000.f) / GridSize);
+
+        for (int32 z=MinCoord.Z; z<=MaxCoord.Z; ++z)
+        {
+            const FIntVector C(x,y,z);
+            if (LoadedChunks.Contains(C)) continue;
+
+            bool bValid = false;
+            // A) Zone A Ground: GroundZ - 2 to GroundZ + 2
+            if (z >= GroundZ - 2 && z <= GroundZ + 2) bValid = true;
+            // B) Skylands zone: SkyZ_Min to SkyZ_Max
+            else if (z >= SkyZ_Min && z <= SkyZ_Max) bValid = true;
+
+            if (bValid)
+            {
+                Sorted.Add({FMath::Max3(FMath::Abs(x-Center.X),FMath::Abs(y-Center.Y),FMath::Abs(z-Center.Z)),C});
+            }
+        }
     }
     Sorted.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key<B.Key; });
 
