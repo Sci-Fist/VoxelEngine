@@ -79,16 +79,50 @@ FVoxelGeneratorTask::~FVoxelGeneratorTask()
 void FVoxelGeneratorTask::Execute()
 {
     if (bCancelled) return;
+    
+    double T0 = FPlatformTime::Seconds();
     BuildDensityField();
-    if (bCancelled || bIsFullSolid || bIsFullAir) return;
+    double T1 = FPlatformTime::Seconds();
+
+    if (bCancelled || bIsFullSolid || bIsFullAir)
+    {
+        if (bIsFullAir || bIsFullSolid)
+        {
+            float TDense = (T1 - T0) * 1000.f;
+            if (TDense > 20.0f) // Only log noticeable ones to prevent spam
+            {
+                UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("Task [%d,%d,%d] Done (Empty/Solid). Density=%.2fms"),
+                    ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, TDense));
+            }
+        }
+        return;
+    }
+
     BuildMesh();
+    double T2 = FPlatformTime::Seconds();
+
+    ComputeWaterColumns(); 
     if (bCancelled) return;
-    ComputeWaterColumns(); // OPT-4: pre-bake water column data on background thread
-    if (bCancelled) return;
-    if (StepSize > 1) return; // Skip foliage and water on distant silhouette chunks
+
+    if (StepSize > 1) return; 
+
     CalculateFoliage();
-    if (bCancelled) return;
+    double T3 = FPlatformTime::Seconds();
+    
     PlaceWaterSources();
+    double T4 = FPlatformTime::Seconds();
+
+    float TDense  = (T1 - T0) * 1000.f;
+    float TMesh   = (T2 - T1) * 1000.f;
+    float TFoli   = (T3 - T2) * 1000.f;
+    float TWater  = (T4 - T3) * 1000.f;
+    float TTotal  = (T4 - T0) * 1000.f;
+
+    if (TTotal > 100.0f) // Only log slow chunks to find hotspots
+    {
+        UE_LOG(LogTemp, Log, TEXT("Chunk [%d,%d,%d] LOD%d: Total=%.1fms (Dense=%.1fms, Mesh=%.1fms, Foliage=%.1fms, Water=%.1fms)"),
+            ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, StepSize - 1, TTotal, TDense, TMesh, TFoli, TWater);
+    }
 }
 
 // ============================================================

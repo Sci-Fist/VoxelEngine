@@ -137,8 +137,18 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float HP   = (BG_Noise(cnX2*0.002f, cnY2*0.002f, 200.f)+1.f)*0.5f;
         float SpawnProb = ComputeIslandSpawnProbability(HN, RN, SC);
 
-        // Crater probability boost
-        if (CraterW > 0.4f) SpawnProb = FMath::Min(1.0f, SpawnProb + 0.35f);
+        // Crater adjustments: Reduce chances for larger islands, keep shards
+        if (CraterW > 0.4f)
+        {
+            if (CST > 0.4f) // If transitioning into large islands
+            {
+                SpawnProb *= 0.25f; // 4x less likely for large skylands
+            }
+            else
+            {
+                SpawnProb = FMath::Min(1.0f, SpawnProb + 0.35f); // Keep small shards boosted
+            }
+        }
 
         // RULE: Lower terrain (CH < 0) = Less Probability
         if (CH < 0.f && CraterW < 0.4f) SpawnProb *= FMath::Clamp(1.f + CH / 15000.f, 0.20f, 1.f);
@@ -266,7 +276,7 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
             SD = BG_Noise(QX*Isl.Freq*0.6f, QY*Isl.Freq*0.6f, WZ*Isl.Freq*ZFS)
                * FMath::Lerp(0.55f, 0.25f, Isl.ShardT);
 
-        const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves,2), 1, Config.Performance.MaxNoiseOctaves);
+        const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves,4), 1, Config.Performance.MaxNoiseOctaves);
         const float SZ = (Isl.ShardT < 0.5f) ? WZ*Isl.Freq : 0.f;
         const float Shape = BG_FBM(QX*Isl.Freq, QY*Isl.Freq, SZ, Oct2D, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves) + SD;
 

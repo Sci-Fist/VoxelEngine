@@ -301,17 +301,6 @@ float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos,
         SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(
             Context.SkylandCache, X_orig, Y_orig, WorldPos.Z, Config, Context.StepSize);
     }
-    else
-    {
-        // Fallback uses NeutralSurfaceHeight for the same reason as PrepareColumn
-        const float NeutralH = Context.NeutralSurfaceHeight;
-        const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain
-                          - SC.BaseIslandSize * SC.ThicknessRatio - 400.f;
-        if (WorldPos.Z >= SkyLB)
-            SkyD = FVoxelBiomeGenerators::GetSkylandDensity(
-                WorldPos.X, WorldPos.Y, WorldPos.Z,
-                NeutralH, Context.BiomeWeights, Config, Context.StepSize);
-    }
 
     return FMath::Max(SkyD, CurrentDensity);
 }

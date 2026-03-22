@@ -121,8 +121,10 @@ void AVoxelWorld::UpdateChunkStreaming()
 
         if (radSq <= RenderDistanceXY * RenderDistanceXY)
         {
-            // Zone A: full detail, full vertical range (caves + sky)
-            for (int32 z = -RenderDistanceZ; z <= RenderDistanceZ; ++z)
+            // Zone A: full detail, caves + surface
+            // PERF: Only up to 2 chunks above surface (covers trees/overhangs).
+            // Skip the pure air atmosphere between surface and skylands layer.
+            for (int32 z = -RenderDistanceZ; z <= 2; ++z)
                 Desired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ+z));
         }
         else if (radSq <= MidRenderDistanceXY * MidRenderDistanceXY)
@@ -141,12 +143,12 @@ void AVoxelWorld::UpdateChunkStreaming()
     }
 
     // Guarantee walkable ground centred on player altitude
-    for (int32 z = -RenderDistanceZ; z <= RenderDistanceZ; ++z)
+    // PERF: Capped from ±16 down to ±2 to prevent flooding air grids
+    for (int32 z = -2; z <= 2; ++z)
     for (int32 y = -RenderDistanceXY; y <= RenderDistanceXY; ++y)
     for (int32 x = -RenderDistanceXY; x <= RenderDistanceXY; ++x)
         if (x*x + y*y <= RenderDistanceXY*RenderDistanceXY)
             Desired.Add(PlayerCoord + FIntVector(x, y, z));
-
     // ── PASS 1B: Aggregate Skylands ranges for loading bounds ──────────
     std::atomic<float> GlobalSkyAltMin(1000000.f);
     std::atomic<float> GlobalSkyAltMax(-1000000.f);
