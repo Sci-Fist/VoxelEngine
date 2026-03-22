@@ -221,6 +221,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         if (bIsSkylandZ)
         {
             if (rSq > RenderDistanceXY * RenderDistanceXY) LOD = FMath::Max(LOD, 1);
+            LOD = FMath::Min(LOD, 1); // PREVENT flattening to LOD 2 continuous heightmaps
         }
         else
         {

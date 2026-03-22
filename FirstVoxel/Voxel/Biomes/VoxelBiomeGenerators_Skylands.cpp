@@ -123,8 +123,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         if (CH < 0.f) IS *= FMath::Clamp(1.f + CH / 15000.f, 0.30f, 1.f);
         if (Dist > IS) continue;
 
-        // Base altitude - Fixed absolute height above sea level to clear high mountain tops
-        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
+        // Base altitude - Scale down based on Size (CST) to let small shards hover lower
+        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS) * FMath::Lerp(0.15f, 1.0f, CST);
         const float CuH = FMath::Pow(FMath::Max(0.f,HN), 2.5f);
         const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
 
@@ -145,8 +145,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         float HT = FMath::Min(IS*ET, IS*FMath::Lerp(0.75f, SC.MaxThicknessRatio, CST));
 
         // RULE: Lower terrain (CH < 0) = Lower altitude (hover closer to floor)
-        float LocalMinAlt = SC.MinAltitudeAboveTerrain;
-        if (CH < 0.f) LocalMinAlt = FMath::Lerp(2500.f, LocalMinAlt, FMath::Clamp(1.f + CH / 15000.f, 0.f, 1.f));
+        float LocalMinAlt = SC.MinAltitudeAboveTerrain * FMath::Lerp(0.15f, 1.0f, CST);
+        if (CH < 0.f) LocalMinAlt = FMath::Lerp(2500.f * FMath::Lerp(0.15f, 1.0f, CST), LocalMinAlt, FMath::Clamp(1.f + CH / 15000.f, 0.f, 1.f));
         SkyAlt = FMath::Max(SkyAlt, CH + LocalMinAlt + HT);
 
         float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST)

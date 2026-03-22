@@ -53,7 +53,7 @@ namespace
 static constexpr float FloorEnd = 0.74f;
 static constexpr float WallEnd  = 0.88f;
 static constexpr float RimPeak  = 0.93f;
-static constexpr float RimEnd   = 1.00f;
+static constexpr float RimEnd   = 1.22f; // WAS 1.00f — expanded to flatten outer slope dropoff gentle
 
 // ── Setup (anchor fixed, multiplier stack removed) ────────────────────────────
 struct FCraterSetup
@@ -96,7 +96,7 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
 
     const float EF = (C.Craters.CraterStyle == ECraterStyle::Weathered)
                      ? (1.f - C.Craters.RimErosion * 0.6f) : 1.f;
-    S.EffectiveDepth = C.Craters.CentralCraterDepth * EF;  // stays negative
+    S.EffectiveDepth = C.Craters.CentralCraterDepth * EF * 1.25f;  // stays negative
     S.SeaLevel       = C.SeaLevel;
 
     // FIX: NO MinRimH override, NO 1.5x, NO 1.2x Meteor multiplier.
@@ -128,9 +128,9 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
     // Depth Seal Clamp: prevent crater depths from plunging indefinitely below Sea Level.
     // Ensure floor height remains dry for cinematic aesthetics unless config explicitly allows oceans.
     float SafeFloorH = FloorH;
-    if (SafeFloorH < S.SeaLevel + 500.f) 
+    if (SafeFloorH < S.SeaLevel + 100.f) 
     {
-        SafeFloorH = S.SeaLevel + 500.f;
+        SafeFloorH = S.SeaLevel + 100.f;
     }
 
     const float WallBaseH = SafeFloorH + FMath::Abs(S.EffectiveDepth) * 0.12f; // wall base is slightly higher than floor
@@ -151,9 +151,10 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
     }
     else if (S.NormDist < WallEnd)
     {
-        // Zone 2: steep inner wall — linear ramp to make it steep and sharp absolute
+        // Zone 2: concave inner wall — Power curve to make it scoop inward and steep up!
         const float SmoothT = (S.NormDist - FloorEnd) / (WallEnd - FloorEnd);
-        H = FMath::Lerp(WallBaseH, RimH, FMath::Clamp(SmoothT, 0.f, 1.f));
+        const float CurveT  = FMath::Pow(SmoothT, 1.75f); // conciliatory scoop curvature
+        H = FMath::Lerp(WallBaseH, RimH, FMath::Clamp(CurveT, 0.f, 1.f));
     }
     else if (S.NormDist < RimPeak)
     {
@@ -197,9 +198,11 @@ static void ApplyRimRoughness(float& H, const FCraterSetup& S, const FCraterBiom
         RimFade = 1.0f - FMath::SmoothStep(RimPeak, RimEnd + 0.05f, S.NormDist);
 
 
-    // Low-frequency angular bumps (realistic rim irregularity)
-    const float AngBump = BG_Noise(S.nX * 0.003f, S.nY * 0.003f, 0.f);
-    H += AngBump * CRC.RimNoiseAmplitude * RimFade;
+    // Low-frequency angular bumps (ridged for sharp edgy rock slabs looks)
+    const float AngN = BG_Noise(S.nX * 0.003f, S.nY * 0.003f, 0.f);
+    const float Ridge = 1.0f - FMath::Abs(AngN);
+    const float EdgySlabs = Ridge * Ridge; // crisp slab sharpening 
+    H += EdgySlabs * CRC.RimNoiseAmplitude * 2.2f * RimFade; // multiplied for "longer" height specs
 
     // Subtle directional scarps (2-4 per circumference)
     if (CRC.CraterStyle == ECraterStyle::Meteor || CRC.CraterStyle == ECraterStyle::Fresh)

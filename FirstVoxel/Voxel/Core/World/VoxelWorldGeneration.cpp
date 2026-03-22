@@ -467,15 +467,15 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
     // 1. Immediate Crater Zone depth volume sizing
     // Inner radius uses shallow loads to prevent CPU overload; deep layers load async later.
-    for (int32 x=-20; x<=20; x++) for (int32 y2=-20; y2<=20; y2++) for (int32 z2=-4; z2<=2; z2++)
+    for (int32 x=-10; x<=10; x++) for (int32 y2=-10; y2<=10; y2++) for (int32 z2=-4; z2<=2; z2++)
     {
          AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
     }
 
     // 2. Wide Visual Zone Radius sizing
-    for (int32 x=-35; x<=35; x++) for (int32 y2=-35; y2<=35; y2++)
+    for (int32 x=-25; x<=25; x++) for (int32 y2=-25; y2<=25; y2++)
     {
-         const bool bIsCenter = (FMath::Abs(x) <= 20 && FMath::Abs(y2) <= 20);
+         const bool bIsCenter = (FMath::Abs(x) <= 10 && FMath::Abs(y2) <= 10);
          if (bIsCenter) continue;
 
          for (int32 z2=0; z2<=0; z2++)
@@ -487,9 +487,9 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     // 2. Add ground layer strictly beneath player if they spawn in the sky
     if (FMath::Abs(SpawnCoord.Z - GroundCoord.Z) > 1)
     {
-        for (int32 x=-35; x<=35; x++) for (int32 y2=-35; y2<=35; y2++)
+        for (int32 x=-25; x<=25; x++) for (int32 y2=-25; y2<=25; y2++)
         {
-            const bool bInner = (FMath::Abs(x) <= 20 && FMath::Abs(y2) <= 20);
+            const bool bInner = (FMath::Abs(x) <= 10 && FMath::Abs(y2) <= 10);
             if (bInner)
             {
                 AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
@@ -526,18 +526,18 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
         InitialSpawnCoords.Add(C); 
         if (!LoadedChunks.Contains(C)) 
         {
-            bool bSync = (C.X == GroundCoord.X && C.Y == GroundCoord.Y && C.Z <= GroundCoord.Z && C.Z >= GroundCoord.Z - 2);
-            SpawnChunk(C, bSync); 
+            const bool bSync = (C.X == GroundCoord.X && C.Y == GroundCoord.Y && C.Z <= GroundCoord.Z && C.Z >= GroundCoord.Z - 2);
+            if (bSync)
+            {
+                SpawnChunk(C, true); 
+            }
         }
     }
 
     for (const FIntVector& C : VisualCoords)
     {
         InitialSpawnCoords_Visual.Add(C);
-        if (!LoadedChunks.Contains(C))
-        {
-            SpawnChunk(C, false); // Visual only never blocks synchronously
-        }
+        // Defer spawning to normal tick flow to keep the game thread fully responsive
     }
 
     UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Waiting for %d spawn chunks."),InitialSpawnCoords.Num());

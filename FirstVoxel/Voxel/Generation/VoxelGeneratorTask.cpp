@@ -135,34 +135,45 @@ void FVoxelGeneratorTask::BuildDensityField()
     const bool bEnCaves    = LocalConfig.Performance.bEnableCaves;
     const bool bEnSkylands = LocalConfig.Performance.bEnableSkylands;
 
+    struct FColumnCacheItem
+    {
+        FVoxelBiomeWeightMap Weights;
+        float SurfH;
+        float NeutralH;
+        FSkylandColumnCache SkylandCache;
+    };
+    TArray<FColumnCacheItem> PrecalcColumns;
+    PrecalcColumns.SetNumUninitialized(EffCS * EffCS);
+
     ColumnWeights .SetNumUninitialized(EffCS * EffCS);
     ColumnSurfaceH.SetNumUninitialized(EffCS * EffCS);
-    SkylandColumnCaches.SetNum(ChunkSize * ChunkSize);
 
-    // ── Per-column pre-compute ────────────────────────────────────────────
-    // ROOT FIX: pass NeutralSH (pre-crater terrain) to GetSkylandColumnCache,
-    // not SH (crater-modified). Islands must float above neutral terrain,
-    // not above the crater floor (which may be 8000cm below the terrain).
-    ParallelFor(ChunkSize * ChunkSize, [&](int32 Idx)
+    ParallelFor(EffCS * EffCS, [&](int32 Idx)
     {
-        const int32 i  = Idx / ChunkSize;
-        const int32 j  = Idx % ChunkSize;
-        const float CX = WorldOrigin.X + i * VoxelSize;
-        const float CY = WorldOrigin.Y + j * VoxelSize;
+        const int32 Y  = Idx / EffCS;
+        const int32 X  = Idx % EffCS;
+        const float CX = FMath::RoundToFloat(WorldOrigin.X + (X - 1.f) * EffVoxSz);
+        const float CY = FMath::RoundToFloat(WorldOrigin.Y + (Y - 1.f) * EffVoxSz);
 
-        FVoxelBiomeWeightMap W = Provider->GetBiomeWeights(CX, CY, LocalConfig);
-        if (!bEnForest)  W.SetWeight(EVoxelBiome::Forest,  0.f);
-        if (!bEnDesert)  W.SetWeight(EVoxelBiome::Desert,  0.f);
-        if (!bEnPeaks)   W.SetWeight(EVoxelBiome::Peaks,   0.f);
-        if (!bEnCliffs)  W.SetWeight(EVoxelBiome::Cliffs,  0.f);
-        if (!bEnMesa)    W.SetWeight(EVoxelBiome::Mesa,    0.f);
-        if (!bEnCraters) W.SetWeight(EVoxelBiome::Craters, 0.f);
-        W.Normalize();
+        FColumnCacheItem& Item = PrecalcColumns[Idx];
 
-        // ROOT FIX: use neutral (pre-crater) height for skyland altitude reference
-        const float NeutralSH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig);
-        SkylandColumnCaches[i * ChunkSize + j] =
-            FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, NeutralSH, W, LocalConfig);
+        Item.Weights = Provider->GetBiomeWeights(CX, CY, LocalConfig);
+        if (!bEnForest)  Item.Weights.SetWeight(EVoxelBiome::Forest,  0.f);
+        if (!bEnDesert)  Item.Weights.SetWeight(EVoxelBiome::Desert,  0.f);
+        if (!bEnPeaks)   Item.Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
+        if (!bEnCliffs)  Item.Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
+        if (!bEnMesa)    Item.Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
+        if (!bEnCraters) Item.Weights.SetWeight(EVoxelBiome::Craters, 0.f);
+        Item.Weights.Normalize();
+
+        Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, LocalConfig);
+        Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig);
+
+        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig);
+
+        // Backward compatibility
+        ColumnWeights[Idx]  = Item.Weights;
+        ColumnSurfaceH[Idx] = Item.SurfH;
     });
 
     // ── DataMap edit arrays ────────────────────────────────────────────────
@@ -220,22 +231,10 @@ void FVoxelGeneratorTask::BuildDensityField()
         const float WX = FMath::RoundToFloat(WorldOrigin.X + (X-1.f)*EffVoxSz);
         const float WY = FMath::RoundToFloat(WorldOrigin.Y + (Y-1.f)*EffVoxSz);
 
-        FVoxelBiomeWeightMap Weights = Provider->GetBiomeWeights(WX, WY, LocalConfig);
-        if (!bEnForest)  Weights.SetWeight(EVoxelBiome::Forest,  0.f);
-        if (!bEnDesert)  Weights.SetWeight(EVoxelBiome::Desert,  0.f);
-        if (!bEnPeaks)   Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
-        if (!bEnCliffs)  Weights.SetWeight(EVoxelBiome::Cliffs,  0.f);
-        if (!bEnMesa)    Weights.SetWeight(EVoxelBiome::Mesa,    0.f);
-        if (!bEnCraters) Weights.SetWeight(EVoxelBiome::Craters, 0.f);
-        Weights.Normalize();
-
-        const float SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(WX, WY, Weights, LocalConfig);
-        // ROOT FIX: get the pre-crater neutral height for skyland altitude reference
-        const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(WX, WY, LocalConfig);
-
-        const int32 LX = X-1, LY2 = Y-1;
-        if (LX>=0&&LX<EffCS&&LY2>=0&&LY2<EffCS)
-        { ColumnWeights[LX+LY2*EffCS]=Weights; ColumnSurfaceH[LX+LY2*EffCS]=SurfH; }
+        const FColumnCacheItem& Item = PrecalcColumns[FlatXY];
+        const FVoxelBiomeWeightMap Weights = Item.Weights;
+        const float SurfH    = Item.SurfH;
+        const float NeutralH = Item.NeutralH;
 
         const float MaxWZ = WorldOrigin.Z + (EffSize+1)*EffVoxSz;
         const float MinWZ = WorldOrigin.Z - EffVoxSz;
@@ -246,6 +245,8 @@ void FVoxelGeneratorTask::BuildDensityField()
         Ctx.BiomeWeights         = Weights;
         Ctx.MaxWorldZ            = MaxWZ;
         Ctx.CachedSeedOffset     = LocalConfig.GetSeedOffset();
+
+        Ctx.SkylandCache = Item.SkylandCache;
 
         if (bEnSurface) SurfacePass.PrepareColumn(WX, WY, LocalConfig, Ctx);
         // CavePass.PrepareColumn sets NeutralSurfaceHeight via GetNeutralSurfaceHeightStatic
@@ -261,24 +262,19 @@ void FVoxelGeneratorTask::BuildDensityField()
             //      → chunks covering 8240-16240cm got skylands → buried in wall.
             // New: uses NeutralH (~9840cm) → SkyLB = ~16240cm
             //      → only chunks above 16240cm get skylands → visible above rim.
-            const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain
+            const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.15f
                               - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
 
             if (MaxWZ < SkyLB)
                 Ctx.SkylandCache.bHasSkyland = false;
             else
             {
-                const int32 AX = (X-1)*StepSize, AY = (Y-1)*StepSize;
-                // Pre-built cache (built with NeutralSH above) — use directly.
-                // Fallback (border columns): build now with NeutralH.
-                Ctx.SkylandCache = (AX>=0&&AX<ChunkSize&&AY>=0&&AY<ChunkSize)
-                    ? SkylandColumnCaches[AX*ChunkSize+AY]
-                    : FVoxelBiomeGenerators::GetSkylandColumnCache(WX, WY, NeutralH, Weights, LocalConfig);
+                // Already assigned from Item.SkylandCache
             }
 
             // Early-out for pure-air columns well below the skyland band
             const float OvH     = LocalConfig.Performance.bEnableOverhangs ? LocalConfig.Overhangs.MaxDistFromSurface : 0.f;
-            const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain
+            const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain * 0.15f
                                 - SC.BaseIslandSize * SC.ThicknessRatio - 400.f;
             if (MinWZ > SurfH + OvH + 200.f && MaxWZ < SkyLB2)
             {
