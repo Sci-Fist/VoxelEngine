@@ -670,7 +670,7 @@ struct FVoxelGenerationConfig
     FVoxelPerformanceConfig Performance;
 
     // --- Global Water ---
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Water",
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water",
         meta=(ShowOnlyInnerProperties,
               ToolTip="World-wide water settings: ocean, rivers, swimming. Per-biome water tuning lives in the WaterBiome sections below."))
     FVoxelGlobalWaterConfig Water;
