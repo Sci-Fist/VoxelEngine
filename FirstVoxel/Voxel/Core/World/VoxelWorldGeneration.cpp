@@ -404,13 +404,16 @@ void AVoxelWorld::DrainGenerationQueue()
     // (SpawnActor + configure + AsyncTask launch). 128/frame was consuming the
     // entire frame budget and causing 2.5 FPS during initial generation.
     // 8/frame keeps the GameThread fed without starving rendering.
-    const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : 8;
+    const bool bFastDrain = bWaitingForInitialSpawn;
+    const int32 Limit = bFastDrain ? GenerationQueue.Num() : (!GetWorld()->IsGameWorld() ? 4 : 8);
+    const int32 MaxConc = bFastDrain ? 2048 : MaxConcurrentGenerations;
+
     // PERF-4: compute once per drain cycle — ConfigureChunk reads by const-ref.
     CachedEffectiveConfig = GetEffectiveConfig();
     int32 N = 0;
     while (N < Limit && QueueHead < GenerationQueue.Num())
     {
-        if ((int32)ActiveGenerations >= MaxConcurrentGenerations) break;
+        if ((int32)ActiveGenerations >= MaxConc) break;
         SpawnChunk(GenerationQueue[QueueHead++]);
         N++;
     }

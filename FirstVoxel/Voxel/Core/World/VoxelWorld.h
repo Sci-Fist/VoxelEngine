@@ -285,8 +285,8 @@ private:
     TArray<FIntVector> InitialSpawnCoords_Visual;
     // PERF Fix #3: Counters incremented by OnGenerationComplete to avoid O(N)
     // per-frame scan of InitialSpawnCoords (up to 6900 entries × every frame).
-    int32 InitialSpawnCollisionReadyCount = 0;
-    int32 InitialSpawnVisualReadyCount    = 0;
+    TAtomic<int32> InitialSpawnCollisionReadyCount{0};
+    TAtomic<int32> InitialSpawnVisualReadyCount{0};
     float TargetCoordsZ       = 0.f;
     bool  bSkylandFoundBackup = false;
     float CachedSurfaceHeight = 0.f;

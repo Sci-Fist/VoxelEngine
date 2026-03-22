@@ -330,41 +330,45 @@ namespace FVoxelNoiseSIMD
         const int32* PermTable,
         float MaxDist, float Amplitude, float NoiseFrequency)
     {
+        if (Count <= 0) return;
+
         __m256 WX_vec = _mm256_set1_ps(WX);
         __m256 WY_vec = _mm256_set1_ps(WY);
 
-        float LowRes[16] = {0};
         const int32 Stride = 4;
-        
-        // 1. Evaluate 8 space-spaced node nodes
-        __m256 Z_vec = _mm256_set_ps(
-            StartZ + (0 + 7*4)*StepZ, StartZ + (0 + 6*4)*StepZ,
-            StartZ + (0 + 5*4)*StepZ, StartZ + (0 + 4*4)*StepZ,
-            StartZ + (0 + 3*4)*StepZ, StartZ + (0 + 2*4)*StepZ,
-            StartZ + (0 + 1*4)*StepZ, StartZ + (0 + 0*4)*StepZ
-        );
+        const int32 NumNodes = (Count + Stride - 1) / Stride + 1;
+        float LowRes[128] = {0}; 
 
-        __m256 D = EvaluateSurface_AVX2(
-            Z_vec, SurfaceHeight, GradientScale, SteepWeight, 
-            WX_vec, WY_vec, SeaLevel, SeedOffset, PermTable,
-            MaxDist, Amplitude, NoiseFrequency);
+        int32 n = 0;
+        for (; n <= NumNodes - 8; n += 8)
+        {
+            __m256 Z_vec = _mm256_set_ps(
+                StartZ + (n + 7*Stride)*StepZ, StartZ + (n + 6*Stride)*StepZ,
+                StartZ + (n + 5*Stride)*StepZ, StartZ + (n + 4*Stride)*StepZ,
+                StartZ + (n + 3*Stride)*StepZ, StartZ + (n + 2*Stride)*StepZ,
+                StartZ + (n + 1*Stride)*StepZ, StartZ + (n + 0*Stride)*StepZ
+            );
+            __m256 D = EvaluateSurface_AVX2(
+                Z_vec, SurfaceHeight, GradientScale, SteepWeight, 
+                WX_vec, WY_vec, SeaLevel, SeedOffset, PermTable,
+                MaxDist, Amplitude, NoiseFrequency);
+            _mm256_storeu_ps(&LowRes[n], D);
+        }
 
-        _mm256_storeu_ps(LowRes, D); // lowres 0..7
+        for (; n < NumNodes; ++n)
+        {
+            const float z = StartZ + (n * Stride) * StepZ;
+            __m256 Z_single = _mm256_set1_ps(z);
+            __m256 D_single = EvaluateSurface_AVX2(
+                Z_single, SurfaceHeight, GradientScale, SteepWeight, 
+                WX_vec, WY_vec, SeaLevel, SeedOffset, PermTable,
+                MaxDist, Amplitude, NoiseFrequency);
+            float Temp[8];
+            _mm256_storeu_ps(Temp, D_single);
+            LowRes[n] = Temp[0];
+        }
 
-        // Last point node
-        const float lastZ = StartZ + (Count - 1) * StepZ;
-        __m256 Z_single = _mm256_set1_ps(lastZ);
-        __m256 D_single = EvaluateSurface_AVX2(
-            Z_single, SurfaceHeight, GradientScale, SteepWeight, 
-            WX_vec, WY_vec, SeaLevel, SeedOffset, PermTable,
-            MaxDist, Amplitude, NoiseFrequency);
-
-        float Temp[8];
-        _mm256_storeu_ps(Temp, D_single);
-        LowRes[8] = Temp[0]; // (Count-1)
-
-        // 2. Linear Interpolation linear linear cascades cascades !!
-        for (int32 j = 0; j < 8; ++j)
+        for (int32 j = 0; j < NumNodes - 1; ++j)
         {
             const float V0 = LowRes[j];
             const float V1 = LowRes[j+1];
