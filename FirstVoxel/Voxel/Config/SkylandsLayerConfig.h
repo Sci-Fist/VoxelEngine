@@ -24,21 +24,21 @@ struct FSkylandsLayerConfig
     // ── Altitude ──────────────────────────────────────────────────────────────
     // TUNED: raised so islands don't spawn at terrain level, keeping inside 160m load bound
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Minimum sky-gap between terrain surface and island bottom (cm). 12000 = 120m minimum."))
-    float MinAltitudeAboveTerrain = 12000.f;
+        meta=(ToolTip="Minimum sky-gap between terrain surface and island bottom (cm). 300 = 3m minimum."))
+    float MinAltitudeAboveTerrain = 300.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Average altitude over mid-height terrain (cm). 18000 = 180m base height."))
-    float BaseAltitudeAboveTerrain = 18000.f;
+        meta=(ToolTip="Average altitude over mid-height terrain (cm). 700 = 7m base height."))
+    float BaseAltitudeAboveTerrain = 700.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
-    float HeightAltitudeBonus = 20000.f;
+    float HeightAltitudeBonus = 1200.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
-    float RoughnessAltitudeBonus = 8000.f;
+    float RoughnessAltitudeBonus = 500.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
-    float LowTerrainAltitudeBoost = 3000.f;
+    float LowTerrainAltitudeBoost = 400.f;
 
     // ── Probability ───────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",

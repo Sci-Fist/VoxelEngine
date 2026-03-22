@@ -60,7 +60,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         const float TS = FMath::Clamp(HN*1.5f + RN*0.8f, 0.f, 1.f);
         CachedCurvedH = FMath::Pow(HN, 2.5f);
         CachedCurvedR = FMath::Pow(RN, 2.0f);
-        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain * 0.25f, SC.BaseAltitudeAboveTerrain, TS);
+        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
         const float ShardT  = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TS);
         const float DecoupledH = FMath::Lerp(15000.f, SH, ShardT);
         CachedSkyAltWorld = DecoupledH + AltBase
@@ -152,7 +152,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain * 0.25f, SC.BaseAltitudeAboveTerrain, TS);
         
         float SkyAlt = CH + AltBase + ShardT*(FMath::Pow(HN,2.5f)*SC.HeightAltitudeBonus + FMath::Pow(RN,2.f)*SC.RoughnessAltitudeBonus);
-        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain * 0.25f + HalfThickCm);
+        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain + HalfThickCm);
 
         float CurrentMin = GlobalSkyAltMin.load();
         while (SkyAlt < CurrentMin && !GlobalSkyAltMin.compare_exchange_weak(CurrentMin, SkyAlt));

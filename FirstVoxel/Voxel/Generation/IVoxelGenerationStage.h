@@ -30,11 +30,10 @@ struct FColumnContext
     float BedrockJag           = 0.f; 
 
     // FIX #14: SeedOffset cached once per PrepareColumn call.
-    // Previously EvaluateVoxel called Config.GetSeedOffset() per voxel,
-    // which runs 3 LCG multiplications each time.
-    // PrepareColumn (called once per XY column) caches the result here;
-    // all EvaluateVoxel calls for that column reuse it at zero extra cost.
     FVector CachedSeedOffset = FVector::ZeroVector;
+
+    // SC-LOD: Supports density evaluations based on LOD skips
+    int32 StepSize = 1;
 };
 
 // ---------------------------------------------------------------------------

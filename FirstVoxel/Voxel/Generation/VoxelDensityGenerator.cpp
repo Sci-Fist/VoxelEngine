@@ -184,7 +184,7 @@ float FVoxelSurfacePass::EvaluateVoxel(const FVector& WorldPos,
 {
     float D = FVoxelBiomeManager::GetBaseSurfaceDensity(WorldPos.Z, Context.SurfaceHeight, Config);
 
-    if (Config.Performance.bEnableOverhangs)
+    if (Config.Performance.bEnableOverhangs && Context.StepSize <= 1)
     {
         const FOverhangConfig& OC = Config.Overhangs;
         const float Dist   = FMath::Abs(WorldPos.Z - Context.SurfaceHeight);
@@ -235,7 +235,7 @@ float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos,
             const float BJ = Context.BedrockJag;
             const float BF = FMath::Clamp((WorldPos.Z-(CVC.BedrockDepth+BJ))/1000.f, 0.f,1.f);
             const float CF = SF*BF;
-            if (CF > 0.f)
+            if (CF > 0.f && Context.StepSize <= 1)
             {
                 const float T = FVoxelDensityGenerator::SampleCaveNoise(
                     WorldPos, Context.CachedSeedOffset, Config) * CF;
@@ -263,7 +263,7 @@ void FVoxelSkylandPass::PrepareColumn(float WorldX, float WorldY,
     // New: SkyLB uses NeutralSurfaceHeight (pre-crater = 9840cm) → SkyLB = 16240cm
     //      → only chunks above 16240cm generate skylands → islands float above rim.
     const float NeutralH = OutContext.NeutralSurfaceHeight;
-    const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.25f
+    const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain
                       - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
 
     if (OutContext.MaxWorldZ < SkyLB)
@@ -298,7 +298,7 @@ float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos,
         const float X_orig = Context.SkylandCache.WX_base - Off.X;
         const float Y_orig = Context.SkylandCache.WY_base - Off.Y;
         SkyD = FVoxelBiomeGenerators::GetSkylandDensityFromCache(
-            Context.SkylandCache, X_orig, Y_orig, WorldPos.Z, Config, 1);
+            Context.SkylandCache, X_orig, Y_orig, WorldPos.Z, Config, Context.StepSize);
     }
     else
     {
@@ -309,7 +309,7 @@ float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos,
         if (WorldPos.Z >= SkyLB)
             SkyD = FVoxelBiomeGenerators::GetSkylandDensity(
                 WorldPos.X, WorldPos.Y, WorldPos.Z,
-                NeutralH, Context.BiomeWeights, Config, 1);
+                NeutralH, Context.BiomeWeights, Config, Context.StepSize);
     }
 
     return FMath::Max(SkyD, CurrentDensity);
