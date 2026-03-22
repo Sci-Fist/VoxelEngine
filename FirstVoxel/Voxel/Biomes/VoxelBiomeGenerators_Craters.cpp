@@ -102,7 +102,7 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
     // FIX: NO MinRimH override, NO 1.5x, NO 1.2x Meteor multiplier.
     // RimHeight is the config value directly, plus a small per-seed variation.
     const float RimVar = BG_Noise(S.nX * 0.0004f, S.nY * 0.0004f, 0.f) * 0.15f;
-    S.RimHeight = C.Craters.CentralCraterRimHeight * (1.f + RimVar);
+    S.RimHeight = C.Craters.CentralCraterRimHeight * (1.f + RimVar) * 1.8f; // WAS 1.0f — raised for dramatic effects
     S.SeaLevel = C.SeaLevel;
 
 
@@ -202,7 +202,7 @@ static void ApplyRimRoughness(float& H, const FCraterSetup& S, const FCraterBiom
     const float AngN = BG_Noise(S.nX * 0.003f, S.nY * 0.003f, 0.f);
     const float Ridge = 1.0f - FMath::Abs(AngN);
     const float EdgySlabs = Ridge * Ridge; // crisp slab sharpening 
-    H += EdgySlabs * CRC.RimNoiseAmplitude * 2.2f * RimFade; // multiplied for "longer" height specs
+    H += EdgySlabs * CRC.RimNoiseAmplitude * 3.8f * RimFade; // multiplied for intense "longer" height specs
 
     // Subtle directional scarps (2-4 per circumference)
     if (CRC.CraterStyle == ECraterStyle::Meteor || CRC.CraterStyle == ECraterStyle::Fresh)

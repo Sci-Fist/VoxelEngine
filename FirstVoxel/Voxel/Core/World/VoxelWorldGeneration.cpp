@@ -350,7 +350,7 @@ void AVoxelWorld::DrainGenerationQueue()
 {
     if (!GetWorld()) return;
     // Raised limits: Spawning is faster now without Editor labeling bottlenecks.
-    const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : (bWaitingForInitialSpawn ? 128 : 8);
+    const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : (bWaitingForInitialSpawn ? 128 : 24);
     int32 N = 0;
     while (N < Limit && QueueHead < GenerationQueue.Num())
     {

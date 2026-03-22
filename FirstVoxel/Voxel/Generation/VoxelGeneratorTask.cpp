@@ -143,15 +143,13 @@ void FVoxelGeneratorTask::BuildDensityField()
         FSkylandColumnCache SkylandCache;
     };
     TArray<FColumnCacheItem> PrecalcColumns;
-    PrecalcColumns.SetNumUninitialized(EffCS * EffCS);
-
-    ColumnWeights .SetNumUninitialized(EffCS * EffCS);
-    ColumnSurfaceH.SetNumUninitialized(EffCS * EffCS);
-
-    ParallelFor(EffCS * EffCS, [&](int32 Idx)
+    PrecalcColumns.SetNum(EffSize * EffSize);
+    ColumnWeights .SetNum(EffSize * EffSize);
+    ColumnSurfaceH.SetNum(EffSize * EffSize);
+    for (int32 Idx = 0; Idx < EffSize * EffSize; ++Idx)
     {
-        const int32 Y  = Idx / EffCS;
-        const int32 X  = Idx % EffCS;
+        const int32 Y  = Idx / EffSize;
+        const int32 X  = Idx % EffSize;
         const float CX = FMath::RoundToFloat(WorldOrigin.X + (X - 1.f) * EffVoxSz);
         const float CY = FMath::RoundToFloat(WorldOrigin.Y + (Y - 1.f) * EffVoxSz);
 
@@ -174,7 +172,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         // Backward compatibility
         ColumnWeights[Idx]  = Item.Weights;
         ColumnSurfaceH[Idx] = Item.SurfH;
-    });
+    }
 
     // ── DataMap edit arrays ────────────────────────────────────────────────
     TArray<bool>  DenseHasEdit;
@@ -223,9 +221,12 @@ void FVoxelGeneratorTask::BuildDensityField()
     TAtomic<int32> SolidCount{0};
     TAtomic<int32> AirCount  {0};
 
-    ParallelFor(EffSize * EffSize, [&](int32 FlatXY)
+    for (int32 FlatXY = 0; FlatXY < EffSize * EffSize; ++FlatXY)
     {
         if (bCancelled) return;
+        int32 LocalSolid = 0;
+        int32 LocalAir   = 0;
+
         const int32 Y  = FlatXY / EffSize;
         const int32 X  = FlatXY % EffSize;
         const float WX = FMath::RoundToFloat(WorldOrigin.X + (X-1.f)*EffVoxSz);
@@ -262,7 +263,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             //      → chunks covering 8240-16240cm got skylands → buried in wall.
             // New: uses NeutralH (~9840cm) → SkyLB = ~16240cm
             //      → only chunks above 16240cm get skylands → visible above rim.
-            const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.15f
+            const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.02f
                               - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
 
             if (MaxWZ < SkyLB)
@@ -274,7 +275,7 @@ void FVoxelGeneratorTask::BuildDensityField()
 
             // Early-out for pure-air columns well below the skyland band
             const float OvH     = LocalConfig.Performance.bEnableOverhangs ? LocalConfig.Overhangs.MaxDistFromSurface : 0.f;
-            const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain * 0.15f
+            const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain * 0.02f
                                 - SC.BaseIslandSize * SC.ThicknessRatio - 400.f;
             if (MinWZ > SurfH + OvH + 200.f && MaxWZ < SkyLB2)
             {
@@ -285,9 +286,12 @@ void FVoxelGeneratorTask::BuildDensityField()
                     if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
                     { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
                     Densities[Idx] = D;
-                    if (D > 0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
+                    Densities[Idx] = D;
+                    if (D > 0.f) LocalSolid++; else LocalAir++;
                 }
-                return;
+                for (int32 i = 0; i < LocalSolid; ++i) SolidCount.IncrementExchange();
+                for (int32 i = 0; i < LocalAir; ++i)   AirCount.IncrementExchange();
+                continue;
             }
         }
 
@@ -301,9 +305,12 @@ void FVoxelGeneratorTask::BuildDensityField()
                 if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
                 { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
                 Densities[Idx] = D;
-                if (D > 0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
+                Densities[Idx] = D;
+                if (D > 0.f) LocalSolid++; else LocalAir++;
             }
-            return;
+            for (int32 i = 0; i < LocalSolid; ++i) SolidCount.IncrementExchange();
+            for (int32 i = 0; i < LocalAir; ++i)   AirCount.IncrementExchange();
+            continue;
         }
 
         // Per-voxel evaluation
@@ -318,9 +325,11 @@ void FVoxelGeneratorTask::BuildDensityField()
             if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
             { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
             Densities[Idx] = D;
-            if (D > 0.f) SolidCount.IncrementExchange(); else AirCount.IncrementExchange();
+            if (D > 0.f) LocalSolid++; else LocalAir++;
         }
-    });
+        for (int32 i = 0; i < LocalSolid; ++i) SolidCount.IncrementExchange();
+        for (int32 i = 0; i < LocalAir; ++i)   AirCount.IncrementExchange();
+    }
 
     bIsFullSolid = ((int32)SolidCount == TotalSamples);
     bIsFullAir   = ((int32)AirCount   == TotalSamples);

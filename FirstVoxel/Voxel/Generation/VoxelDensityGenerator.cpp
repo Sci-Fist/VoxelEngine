@@ -77,7 +77,7 @@ float FVoxelDensityGenerator::GetDensityFull(
     {
         const FOverhangConfig& OC = Config.Overhangs;
         const float Dist  = FMath::Abs(Z - SurfaceHeight);
-        const float SteepW = Weights.Cliffs + Weights.Peaks;
+        const float SteepW = Weights.Cliffs + Weights.Peaks + Weights.Craters * 1.5f;
         if (Z > Config.SeaLevel && Dist < OC.MaxDistFromSurface && SteepW > 0.05f)
         {
             const float Near = FMath::Clamp(1.f - Dist/OC.MaxDistFromSurface, 0.f, 1.f);
@@ -263,7 +263,7 @@ void FVoxelSkylandPass::PrepareColumn(float WorldX, float WorldY,
     // New: SkyLB uses NeutralSurfaceHeight (pre-crater = 9840cm) → SkyLB = 16240cm
     //      → only chunks above 16240cm generate skylands → islands float above rim.
     const float NeutralH = OutContext.NeutralSurfaceHeight;
-    const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain
+    const float SkyLB = NeutralH + SC.MinAltitudeAboveTerrain * 0.02f
                       - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
 
     if (OutContext.MaxWorldZ < SkyLB)

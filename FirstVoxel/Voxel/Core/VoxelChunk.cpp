@@ -274,15 +274,22 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		const FVector ChunkOrigin = GetActorLocation();
 
 		// Build ocean biome weight cache (O(N²) not O(N³))
-		TArray<float, TInlineAllocator<32*32>> OceanWeights;
-		OceanWeights.SetNumZeroed(ChunkSize * ChunkSize);
+		TArray<float> OceanWeights;  OceanWeights.SetNumZeroed(ChunkSize * ChunkSize);
+		TArray<float> CraterWeights; CraterWeights.SetNumZeroed(ChunkSize * ChunkSize);
+		TArray<float> NeutralHeights; NeutralHeights.SetNumZeroed(ChunkSize * ChunkSize);
+		TArray<float> SurfaceHeights; SurfaceHeights.SetNumZeroed(ChunkSize * ChunkSize);
+		
 		for (int32 ly=0; ly<ChunkSize; ++ly)
 		for (int32 lx=0; lx<ChunkSize; ++lx)
 		{
 			const float ColX = ChunkOrigin.X + lx * VoxelSize;
 			const float ColY = ChunkOrigin.Y + ly * VoxelSize;
 			const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(ColX, ColY, GenerationConfig);
-			OceanWeights[lx + ly * ChunkSize] = W.GetWeight(EVoxelBiome::Ocean);
+			const int32 ColIdx = lx + ly * ChunkSize;
+			OceanWeights[ColIdx] = W.GetWeight(EVoxelBiome::Ocean);
+			CraterWeights[ColIdx] = W.GetWeight(EVoxelBiome::Craters);
+			NeutralHeights[ColIdx] = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(ColX, ColY, GenerationConfig);
+			SurfaceHeights[ColIdx] = FVoxelBiomeManager::GetSurfaceHeightStatic(ColX, ColY, W, GenerationConfig);
 		}
 
 		for (int32 lz=0; lz<ChunkSize; ++lz)
@@ -299,20 +306,34 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 			const bool bSolid = (Dens[DIdx] > 0.f);
 			WaterData.SolidCells[WIdx] = bSolid;
 
+			const int32 ColIdx = lx + ly * ChunkSize;
 			if (GenerationConfig.Water.bUseVoxelOcean && !bSolid)
 			{
 				const float WorldZ = ChunkOrigin.Z + lz * VoxelSize;
 				if (WorldZ <= GenerationConfig.SeaLevel)
 				{
-					const float OceanWeight = OceanWeights[lx + ly * ChunkSize];
+					const float OceanWeight = OceanWeights[ColIdx];
 					if (OceanWeight > 0.49f)
 					{
 						WaterData.Cells[WIdx] = WATER_SOURCE;
-						// FIX-N2: maintain WaterCellCount so HasAnyWater() is O(1)
-						// Previously this counter was never incremented for ocean voxels,
-						// making HasAnyWater() always return false for ocean chunks.
 						WaterData.WaterCellCount++;
 					}
+				}
+			}
+
+			// Procedural Crater Lakes — independent of SeaLevel
+			if (!bSolid && CraterWeights[ColIdx] > 0.5f)
+			{
+				const float WorldZ = ChunkOrigin.Z + lz * VoxelSize;
+				const float NH = NeutralHeights[ColIdx];
+				const float SH = SurfaceHeights[ColIdx];
+				
+				// Lake level is 85% of depth from bottom up to original ground level (NeutralH)
+				const float TargetLakeZ = SH + (NH - SH) * 0.85f;
+				if (WorldZ <= TargetLakeZ && WorldZ > SH + 150.f)
+				{
+					WaterData.Cells[WIdx] = WATER_SOURCE;
+					WaterData.WaterCellCount++;
 				}
 			}
 		}

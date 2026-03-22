@@ -60,7 +60,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         const float TS = FMath::Clamp(HN*1.5f + RN*0.8f, 0.f, 1.f);
         CachedCurvedH = FMath::Pow(HN, 2.5f);
         CachedCurvedR = FMath::Pow(RN, 2.0f);
-        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
+        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain * 0.02f, SC.BaseAltitudeAboveTerrain, TS);
         const float ShardT  = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TS);
         const float DecoupledH = FMath::Lerp(15000.f, SH, ShardT);
         CachedSkyAltWorld = DecoupledH + AltBase
@@ -78,8 +78,8 @@ void AVoxelWorld::UpdateChunkStreaming()
     const int32 GridDim = 2 * MaxRad + 1;
     const int32 NumCols = GridDim * GridDim;
 
-    TArray<int32> GroundZCenters;
-    GroundZCenters.SetNumZeroed(NumCols);
+    TArray<FVoxelBiomeManager::FWeightsAndHeight> CachedColumns;
+    CachedColumns.SetNumUninitialized(NumCols);
 
     ParallelFor(NumCols, [&](int32 Index)
     {
@@ -87,9 +87,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         const int32 y = -MaxRad + (Index / GridDim);
         const float ColX = (PlayerCoord.X + x + 0.5f) * ChunkWorldSize;
         const float ColY = (PlayerCoord.Y + y + 0.5f) * ChunkWorldSize;
-        const FVoxelBiomeManager::FWeightsAndHeight Wh =
-            FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(ColX, ColY, Config);
-        GroundZCenters[Index] = FMath::RoundToInt(Wh.SurfaceHeight / ChunkWorldSize);
+        CachedColumns[Index] = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(ColX, ColY, Config);
     });
 
     // ── Build desired chunk set ───────────────────────────────────────────
@@ -101,7 +99,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         const int32 x     = -MaxRad + (Index % GridDim);
         const int32 y     = -MaxRad + (Index / GridDim);
         const int32 radSq = x*x + y*y;
-        const int32 GZ    = GroundZCenters[Index];
+        const int32 GZ    = FMath::RoundToInt(CachedColumns[Index].SurfaceHeight / ChunkWorldSize);
 
         if (radSq <= RenderDistanceXY * RenderDistanceXY)
         {
@@ -143,8 +141,7 @@ void AVoxelWorld::UpdateChunkStreaming()
 
         const float ColX = (PlayerCoord.X + x + 0.5f) * ChunkWorldSize;
         const float ColY = (PlayerCoord.Y + y + 0.5f) * ChunkWorldSize;
-        const FVoxelBiomeManager::FWeightsAndHeight Wh =
-            FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(ColX, ColY, Config);
+        const FVoxelBiomeManager::FWeightsAndHeight& Wh = CachedColumns[Index];
 
         // Approximate Skyland altitude lookup for this column footprint
         const float CH     = Wh.SurfaceHeight;
@@ -152,10 +149,10 @@ void AVoxelWorld::UpdateChunkStreaming()
         const float RN     = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);
         const float TS     = FMath::Clamp(HN*1.5f + RN*0.8f, 0.f, 1.f);
         const float ShardT = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TS);
-        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
+        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain * 0.02f, SC.BaseAltitudeAboveTerrain, TS);
         
         float SkyAlt = CH + AltBase + ShardT*(FMath::Pow(HN,2.5f)*SC.HeightAltitudeBonus + FMath::Pow(RN,2.f)*SC.RoughnessAltitudeBonus);
-        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain + HalfThickCm);
+        SkyAlt = FMath::Max(SkyAlt, CH + SC.MinAltitudeAboveTerrain * 0.02f + HalfThickCm);
 
         float CurrentMin = GlobalSkyAltMin.load();
         while (SkyAlt < CurrentMin && !GlobalSkyAltMin.compare_exchange_weak(CurrentMin, SkyAlt));
