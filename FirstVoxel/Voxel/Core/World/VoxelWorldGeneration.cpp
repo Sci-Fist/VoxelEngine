@@ -50,15 +50,14 @@ void AVoxelWorld::GenerateWorldDeferred()
         UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Centering on PlayerStart %s"), *CandidatePos.ToString());
     }
 
-    const FVoxelGenerationConfig Config = GetEffectiveConfig(); // FIX #30: value copy
+    FVoxelGenerationConfig Config = GetEffectiveConfig(); // FIX #30: value copy
     FVector CraterPos = FindCraterSpawnLocation(CandidatePos, Config);
     if (CraterPos != CandidatePos)
     {
         UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Natural crater at %s"), *CraterPos.ToString());
         CandidatePos = CraterPos;
+        Config.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y); // UPDATE LOCAL COPY
         
-        // ROOT FIX overlay offset: Force the world density generator 
-        // to render its central bowl math center aligned on the player spawn coord.
         if (BiomePreset != nullptr)
         {
             BiomePreset->Config.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
