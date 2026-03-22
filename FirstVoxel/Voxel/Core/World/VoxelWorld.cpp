@@ -194,24 +194,12 @@ void AVoxelWorld::Tick(float DeltaTime)
 
         if (!bTimedOut)
         {
-            bAllReady = true;
-            for (const FIntVector& C : InitialSpawnCoords)
-            {
-                AVoxelChunk** P = LoadedChunks.Find(C);
-                if (!P || !(*P)->IsCollisionReady()) { bAllReady = false; break; }
-            }
-
-            if (bAllReady)
-            {
-                for (const FIntVector& C : InitialSpawnCoords_Visual)
-                {
-                    if (AVoxelChunk** P = LoadedChunks.Find(C))
-                    {
-                        if (!(*P)->IsReady()) { bAllReady = false; break; }
-                    }
-                    else { bAllReady = false; break; }
-                }
-            }
+            // PERF Fix #3: O(1) counter check instead of O(N) scan of up to 6900 entries.
+        // InitialSpawnCollisionReadyCount is incremented in OnGenerationComplete.
+        const int32 CollisionTotal = InitialSpawnCoords.Num();
+        const int32 VisualTotal    = InitialSpawnCoords_Visual.Num();
+        bAllReady = (InitialSpawnCollisionReadyCount >= CollisionTotal) &&
+                    (InitialSpawnVisualReadyCount    >= VisualTotal);
 
             // --- GRACE DELAY CUSHION ---
             if (bAllReady)

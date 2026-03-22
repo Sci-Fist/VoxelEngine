@@ -304,8 +304,9 @@ void FVoxelMeshGenerator::GenerateMesh(
         if ((GeoNormal | OutwardNormal) < 0.f) GeoNormal = -GeoNormal;
 
         const bool bIsFlat = FMath::Abs(GeoNormal.Z) >= Config.SlopeThreshold;
-        FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh   : OutMesh.SlopeMesh;
-        TArray<int32>&  Map      = bIsFlat ? FlatMap             : SlopeMap;
+        // Tier 1 Merge: Force everything into section 0 (FlatMesh) to save GameThreadCreate Section calls.
+        FVoxelMeshData& Dest     = OutMesh.FlatMesh;
+        TArray<int32>&  Map      = FlatMap;
         const FColor&   VC       = GetQuadColor(ColX, ColY);
 
         // Splitting the quad along the shortest diagonal prevents

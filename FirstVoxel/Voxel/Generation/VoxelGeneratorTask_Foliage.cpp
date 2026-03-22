@@ -82,16 +82,20 @@ void FVoxelGeneratorTask::CalculateFoliage()
         const TArray<int32>&   Tris    = MeshOutput.FlatMesh.Triangles;
         const TArray<FVector>& Normals = MeshOutput.FlatMesh.Normals;
 
-        for (int32 ti = 0; ti + 2 < Tris.Num(); ti += 3)
+        FCriticalSection FoliageLock;
+        const int32 TriCount = Tris.Num() / 3;
+
+        ParallelFor(TriCount, [&](int32 TriIdx)
         {
             if (bCancelled) return;
 
+            const int32 ti = TriIdx * 3;
             const int32 i0 = Tris[ti], i1 = Tris[ti+1], i2 = Tris[ti+2];
-            if (!Normals.IsValidIndex(i0)) continue;
+            if (!Normals.IsValidIndex(i0)) return;
 
             const FVector N = Normals[i0];
             // Only place foliage on upward-facing surfaces
-            if (N.Z < 0.5f) continue;
+            if (N.Z < 0.5f) return;
 
             const FVector V0 = Verts[i0] + WorldOrigin;
             const FVector V1 = Verts[i1] + WorldOrigin;
@@ -100,6 +104,14 @@ void FVoxelGeneratorTask::CalculateFoliage()
             const FVector Centroid = (V0+V1+V2) / 3.f;
             const FVoxelBiomeWeightMap W = LookupColumnWeights(
                 Centroid.X, Centroid.Y, WorldOrigin, EffVS, EffCS, ColumnWeights, Config);
+
+            FRandomStream TriRNG = MakeFoliageRNG(ChunkCoord, Config.Seed + ti);
+            auto SampleTriangleLocal = [&](const FVector& V0_l, const FVector& V1_l, const FVector& V2_l) -> FVector
+            {
+                float U = TriRNG.GetFraction(), V = TriRNG.GetFraction();
+                if (U + V > 1.f) { U = 1.f - U; V = 1.f - V; }
+                return V0_l + (V1_l-V0_l)*U + (V2_l-V0_l)*V;
+            };
 
             for (int32 SlotIdx = 0; SlotIdx < FoliageSlots.Num(); ++SlotIdx)
             {
@@ -118,35 +130,33 @@ void FVoxelGeneratorTask::CalculateFoliage()
                 // Slope check
                 if (N.Z < E.MinSlopeAlignment) continue;
 
-                // Spawn attempts
                 const int32 Attempts = FMath::Max(1, E.SpawnAttemptsPerTriangle);
                 for (int32 a = 0; a < Attempts; ++a)
                 {
-                    if (RNG.GetFraction() > E.SpawnChance * FoliageDensity) continue;
+                    if (TriRNG.GetFraction() > E.SpawnChance * FoliageDensity) continue;
 
-                    FVector SpawnPos = SampleTriangle(V0, V1, V2);
+                    FVector SpawnPos = SampleTriangleLocal(V0, V1, V2);
                     SpawnPos.Z += E.HeightOffset;
 
-                    // Height range
                     if (SpawnPos.Z < E.MinWorldZ || SpawnPos.Z > E.MaxWorldZ) continue;
 
-                    // Scale
-                    const float Scale = FMath::Lerp(E.ScaleMin, E.ScaleMax, RNG.GetFraction());
+                    const float Scale = FMath::Lerp(E.ScaleMin, E.ScaleMax, TriRNG.GetFraction());
 
                     FRotator Rot = FRotator::ZeroRotator;
                     if (E.bAlignToSurface)
                     {
-                        // Align Y-up to surface normal
                         Rot = FRotationMatrix::MakeFromZX(N, FVector::ForwardVector).Rotator();
                     }
-                    if (E.bRandomYaw) Rot.Yaw += RNG.GetFraction() * 360.f;
+                    if (E.bRandomYaw) Rot.Yaw += TriRNG.GetFraction() * 360.f;
                     else              Rot.Yaw += E.FixedYaw;
 
-                    PerFoliageTransforms[SlotIdx].Add(
-                        FTransform(Rot, SpawnPos, FVector(Scale)));
+                    {
+                        FScopeLock Lock(&FoliageLock);
+                        PerFoliageTransforms[SlotIdx].Add(FTransform(Rot, SpawnPos, FVector(Scale)));
+                    }
                 }
             }
-        }
+        });
 
         TrimFoliageToCap(4096);
     }
@@ -157,13 +167,19 @@ void FVoxelGeneratorTask::CalculateFoliage()
         const TArray<int32>&   Tris    = MeshOutput.FlatMesh.Triangles;
         const TArray<FVector>& Normals = MeshOutput.FlatMesh.Normals;
 
-        for (int32 ti = 0; ti + 2 < Tris.Num(); ti += 3)
+        FCriticalSection LegacyFoliageLock;
+        const int32 LegacyTriCount = Tris.Num() / 3;
+
+        ParallelFor(LegacyTriCount, [&](int32 TriIdx)
         {
             if (bCancelled) return;
-            const int32 i0=Tris[ti], i1=Tris[ti+1], i2=Tris[ti+2];
-            if (!Normals.IsValidIndex(i0)) continue;
+
+            const int32 ti = TriIdx * 3;
+            const int32 i0 = Tris[ti], i1 = Tris[ti+1], i2 = Tris[ti+2];
+            if (!Normals.IsValidIndex(i0)) return;
+
             const FVector N = Normals[i0];
-            if (N.Z < MaxFoliageSlope) continue;
+            if (N.Z < MaxFoliageSlope) return;
 
             const FVector V0 = Verts[i0]+WorldOrigin;
             const FVector V1 = Verts[i1]+WorldOrigin;
@@ -172,8 +188,19 @@ void FVoxelGeneratorTask::CalculateFoliage()
             const FVoxelBiomeWeightMap W = LookupColumnWeights(
                 C.X, C.Y, WorldOrigin, EffVS, EffCS, ColumnWeights, Config);
 
-            ProcessLegacyFoliage(C, N.Z, W, SampleTriangle(V0,V1,V2));
-        }
+            FRandomStream TriRNG = MakeFoliageRNG(ChunkCoord, Config.Seed + ti);
+            auto SampleTriangleLocal = [&](const FVector& V0_l, const FVector& V1_l, const FVector& V2_l) -> FVector
+            {
+                float U = TriRNG.GetFraction(), V = TriRNG.GetFraction();
+                if (U + V > 1.f) { U = 1.f - U; V = 1.f - V; }
+                return V0_l + (V1_l-V0_l)*U + (V2_l-V0_l)*V;
+            };
+
+            {
+                FScopeLock Lock(&LegacyFoliageLock);
+                ProcessLegacyFoliage(C, N.Z, W, SampleTriangleLocal(V0,V1,V2));
+            }
+        });
     }
 }
 

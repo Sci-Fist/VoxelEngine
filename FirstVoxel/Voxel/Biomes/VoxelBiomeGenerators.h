@@ -27,15 +27,20 @@
 //  GetSkylandDensity()          Convenience wrapper that builds the cache on
 //                              the fly. Use only when no column cache exists.
 //
-//  SHARD vs ISLAND (Cache.ShardT):
-//    ShardT=0  sky-shard (boulder):  EffThickness=0.65, spherical falloff,
-//                                    high Z-noise freq (0.50x), low breakup
-//                                    (0.10), size scales with altitude gap.
-//    ShardT=1  skyland (platform):   EffThickness=ThicknessRatio, flat-top
-//                                    falloff (35% plateau), low Z-noise (0.05x),
-//                                    high breakup (up to 2.80 x HeightNorm).
-//    All per-voxel properties are linearly blended by Cache.ShardT so the
-//    transition from shard field to skyland is smooth and continuous.
+//  SHARD vs ISLAND (Cache.ShardT / CST):
+//    CST ≈ 0 (SHARDS over low terrain):
+//       - Tiny radius (ShardMinScale default 0.08 → ~3.2m diameter min).
+//       - Near-spherical boulder shape (ShardThicknessRatio = 0.80).
+//       - Hover close to ground (ShardAltitudeAboveTerrain).
+//       - Tight altitude jitter band so they don't break high silhouette.
+//
+//    CST ≈ 1 (ISLANDS over mountains):
+//       - Massive radii (BaseIslandSize + HeightAltitudeBonus).
+//       - Flat-top pancake profile (ThicknessRatio = 0.15).
+//       - Soaring lofty elevations (HeightAltitudeBonus coefficients).
+//       - High random jitter for scenic variation.
+//
+//    All size, altitude, and roundness properties smoothly interpolate via CST.
 //
 //  WINDING / CLEARANCE NOTES:
 //    The 200 cm clearance buffers (HalfThick clamp and post-selection SkyAlt

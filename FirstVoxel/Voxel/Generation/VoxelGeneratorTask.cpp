@@ -97,7 +97,7 @@ void FVoxelGeneratorTask::Execute()
 void FVoxelGeneratorTask::BuildDensityField()
 {
     const int32 EffCS        = ChunkSize / StepSize;
-    const int32 EffSize      = EffCS + 3;
+    this->EffSize            = EffCS + 3;  // PERF-2: write to member so ComputeWaterColumns can use it
     const int32 TotalSamples = EffSize * EffSize * EffSize;
     const float EffVoxSz     = VoxelSize * (float)StepSize;
 
@@ -137,9 +137,8 @@ void FVoxelGeneratorTask::BuildDensityField()
     const bool bEnCaves    = LocalConfig.Performance.bEnableCaves;
     const bool bEnSkylands = LocalConfig.Performance.bEnableSkylands;
 
-    // PERF-2: FColumnCacheItem is now a member struct; PrecalcColumns is a member TArray.
-    // ComputeWaterColumns() will read directly from it after BuildDensityField returns.
-    EffSize = EffCS + 3;
+    // PERF-2: PrecalcColumns is a member TArray; EffSize is a member set above.
+    // ComputeWaterColumns() will read directly from them after BuildDensityField returns.
     PrecalcColumns.SetNum(EffSize * EffSize);
     ColumnWeights .SetNum(EffSize * EffSize);
     ColumnSurfaceH.SetNum(EffSize * EffSize);
@@ -229,10 +228,10 @@ void FVoxelGeneratorTask::BuildDensityField()
     // ── Main density loop ─────────────────────────────────────────────────
     // PERF-3: plain int32 — the loop is serial, TAtomic<int32> added lock-prefix
     // overhead (lock xadd per increment) with zero thread-safety benefit here.
-    int32 SolidCount = 0;
-    int32 AirCount   = 0;
+    TAtomic<int32> AtomicSolid(0);
+    TAtomic<int32> AtomicAir(0);
 
-    for (int32 FlatXY = 0; FlatXY < EffSize * EffSize; ++FlatXY)
+    ParallelFor(EffSize * EffSize, [&](int32 FlatXY)
     {
         if (bCancelled) return;
         int32 LocalSolid = 0;
@@ -299,9 +298,9 @@ void FVoxelGeneratorTask::BuildDensityField()
                     Densities[Idx] = D;
                     if (D > 0.f) LocalSolid++; else LocalAir++;
                 }
-                for (int32 i = 0; i < LocalSolid; ++i) SolidCount++;
-                for (int32 i = 0; i < LocalAir;   ++i) AirCount++;
-                continue;
+                if (LocalSolid > 0) AtomicSolid += LocalSolid;
+                if (LocalAir > 0)   AtomicAir   += LocalAir;
+                return;
             }
         }
 
@@ -315,12 +314,11 @@ void FVoxelGeneratorTask::BuildDensityField()
                 if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
                 { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
                 Densities[Idx] = D;
-                Densities[Idx] = D;
                 if (D > 0.f) LocalSolid++; else LocalAir++;
             }
-            SolidCount += LocalSolid;
-            AirCount   += LocalAir;
-            continue;
+            if (LocalSolid > 0) AtomicSolid += LocalSolid;
+            if (LocalAir > 0)   AtomicAir   += LocalAir;
+            return;
         }
 
         // Cascade upsampling cache
@@ -368,9 +366,12 @@ void FVoxelGeneratorTask::BuildDensityField()
                 if (D > 0.f) LocalSolid++; else LocalAir++;
             }
         }
-        SolidCount += LocalSolid;
-        AirCount   += LocalAir;
-    }
+        if (LocalSolid > 0) AtomicSolid += LocalSolid;
+        if (LocalAir > 0)   AtomicAir   += LocalAir;
+    });
+
+    int32 SolidCount = AtomicSolid.Load();
+    int32 AirCount   = AtomicAir.Load();
 
     bIsFullSolid = (SolidCount == TotalSamples);
     bIsFullAir   = (AirCount   == TotalSamples);

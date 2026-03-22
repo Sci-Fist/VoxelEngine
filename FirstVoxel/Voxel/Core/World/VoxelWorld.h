@@ -94,8 +94,8 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Performance",
         meta=(ClampMin="4", ClampMax="128",
-              ToolTip="Parallel chunk generation slots. Increase for faster streaming fill at cost of CPU spikes. 48 recommended for heavy parallel workloads."))
-    int32 MaxConcurrentGenerations = 48;
+              ToolTip="Parallel chunk generation slots. 12 recommended — reduces memory contention and cache thrashing vs 48. Fewer concurrent tasks = faster individual completion."))
+    int32 MaxConcurrentGenerations = 12;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD",
         meta=(ToolTip="World distance (cm) at which LOD 0 transitions to LOD 1. 40000 = 400m (Zone A/B boundary)."))
@@ -283,6 +283,10 @@ private:
     bool  bWaitingForInitialSpawn = false;
     TArray<FIntVector> InitialSpawnCoords;
     TArray<FIntVector> InitialSpawnCoords_Visual;
+    // PERF Fix #3: Counters incremented by OnGenerationComplete to avoid O(N)
+    // per-frame scan of InitialSpawnCoords (up to 6900 entries × every frame).
+    int32 InitialSpawnCollisionReadyCount = 0;
+    int32 InitialSpawnVisualReadyCount    = 0;
     float TargetCoordsZ       = 0.f;
     bool  bSkylandFoundBackup = false;
     float CachedSurfaceHeight = 0.f;

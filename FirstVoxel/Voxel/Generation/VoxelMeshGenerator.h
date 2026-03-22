@@ -102,6 +102,7 @@
 
 #include "CoreMinimal.h"
 #include "ProceduralMeshComponent.h"
+#include "Biomes/VoxelBiome.h"   // PERF-1: FVoxelBiomeWeightMap needed for PrecomputedColumnWeights param
 
 // ---------------------------------------------------------------------------
 // FVoxelMeshData — geometry for one ProceduralMesh section

@@ -322,6 +322,16 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
             // FIX-1: Feed the pending-set so CheckCloseRangeVisibility only
             // iterates chunks that JUST became ready, not all loaded chunks.
             S->ChunksNeedingVisibilityCheck.Add(ChunkCoord);
+
+            // PERF Fix #3: Increment readiness counters so Tick() can check
+            // O(1) instead of scanning the entire InitialSpawnCoords array.
+            if (S->bWaitingForInitialSpawn)
+            {
+                if (S->InitialSpawnCoords.Contains(ChunkCoord))
+                    ++S->InitialSpawnCollisionReadyCount;
+                else if (S->InitialSpawnCoords_Visual.Contains(ChunkCoord))
+                    ++S->InitialSpawnVisualReadyCount;
+            }
         }
     };
     if (WaterSystemComponent) WaterSystemComponent->InitChunkWater(Chunk);
@@ -357,8 +367,11 @@ void AVoxelWorld::DestroyChunk(const FIntVector& Coord)
 void AVoxelWorld::DrainGenerationQueue()
 {
     if (!GetWorld()) return;
-    // Raised limits: Spawning is faster now without Editor labeling bottlenecks.
-    const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : (bWaitingForInitialSpawn ? 128 : 24);
+    // PERF: Strict per-frame cap — SpawnChunk is expensive on the GameThread
+    // (SpawnActor + configure + AsyncTask launch). 128/frame was consuming the
+    // entire frame budget and causing 2.5 FPS during initial generation.
+    // 8/frame keeps the GameThread fed without starving rendering.
+    const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : 8;
     // PERF-4: compute once per drain cycle — ConfigureChunk reads by const-ref.
     CachedEffectiveConfig = GetEffectiveConfig();
     int32 N = 0;
@@ -473,6 +486,8 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
 
     if (bWaitingForInitialSpawn) return;
     InitialSpawnCoords.Empty();
+    InitialSpawnCollisionReadyCount = 0; // PERF Fix #3: reset for new spawn cycle
+    InitialSpawnVisualReadyCount    = 0;
     bWaitingForInitialSpawn = true;
 
     const FIntVector SpawnCoord  = WorldToChunkCoord(FVector(Pos.X,Pos.Y,TargetZ));

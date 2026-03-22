@@ -223,10 +223,9 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
 		LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
 
-	// ── Mesh upload ───────────────────────────────────────────────────────
-	// Backface upload removed to fix Z-fighting
-	UploadSection(0, Out.FlatMesh,      FlatMat,  TEXT("Flat"),       nullptr);
-	UploadSection(1, Out.SlopeMesh,     SlopeMat, TEXT("Slope"),      nullptr);
+	// Tier 1 Merge: SlopeMesh always empty — section 0 holds all geometry.
+	// UploadSection(1, SlopeMesh) removed to eliminate useless ClearMeshSection GPU call.
+	UploadSection(0, Out.FlatMesh, FlatMat, TEXT("Flat"), nullptr);
 
 	// ── Per-biome foliage ─────────────────────────────────────────────────
 	const TArray<TArray<FTransform>>& PFT = CompletedTask->GetPerFoliageTransforms();
@@ -384,7 +383,7 @@ void AVoxelChunk::UploadSection(int32 Idx, const FVoxelMeshData& Data,
 	UProceduralMeshComponent* M = Target ? Target : ProceduralMesh;
 	if (!IsValid(M)) return;
 	if (Data.Vertices.Num() == 0) { M->ClearMeshSection(Idx); return; } // FIX-3
-	const bool bCol = (M == ProceduralMesh) && (LOD <= 1);
+	const bool bCol = (M == ProceduralMesh) && (LOD == 0);
 	M->ClearMeshSection(Idx); // Force instant PhysX buffer flush before rewrite
 	M->CreateMeshSection(Idx, Data.Vertices, Data.Triangles, Data.Normals,
 	                     Data.UVs, Data.VertexColors, Data.Tangents, bCol);

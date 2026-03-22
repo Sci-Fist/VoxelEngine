@@ -1,16 +1,28 @@
 // SkylandsLayerConfig.h
 //
-// TUNED DEFAULTS — Skylands altitude fix.
+// TERRAIN-HEIGHT-RESPONSIVE SKYLANDS
 //
-// Problem in screenshot: islands appeared as ground-level pillars because
-// MinAltitudeAboveTerrain = 200 cm (2 meters above terrain). Islands formed
-// right on the terrain surface, indistinguishable from Mesa buttes.
+// Desired behaviour (driven by CST = terrain-score-to-shard/island transition):
 //
-// Fix: MinAltitudeAboveTerrain = 8000 (80m), BaseAltitudeAboveTerrain = 15000 (150m).
-// Islands now float clearly above terrain with visible sky gap beneath them.
+//   LOW terrain   (CST ≈ 0)  →  tiny ROUND sky-shards, hovering just above the
+//                               ground (ShardAltitudeAboveTerrain).  Very little
+//                               altitude jitter so they cluster in a low band.
 //
-// Also increased BaseIslandSize for better island-to-thickness ratio.
-// Reduced MaxThicknessRatio so islands are wide and flat, not tower-shaped.
+//   HIGH terrain  (CST ≈ 1)  →  large FLAT-TOP sky-islands soaring far above
+//                               the peaks (BaseAltitudeAboveTerrain + HeightAltitudeBonus).
+//                               Large jitter for scenic variation.
+//
+// Size:     Lerp(BaseIslandSize * ShardMinScale,  BaseIslandSize + HeightSizeBonus,  CST)
+//           ShardMinScale = 0.08 → shards are 8% of base (≈320 cm radius min)
+//
+// Altitude: Lerp(ShardAltitudeAboveTerrain, BaseAltitudeAboveTerrain, CST)
+//           + CST*(HeightAltitudeBonus*CuH + RoughnessAltitudeBonus*CuR)
+//
+// Jitter:   Lerp(ShardAltitudeJitter, IslandAltitudeJitter, CST)
+//           Shards get low jitter (tight band), islands get high jitter.
+//
+// Shape:    Thickness ratio Lerp(ShardThicknessRatio, ThicknessRatio, CST)
+//           ShardThicknessRatio ≈ 0.80 → near-sphere; ThicknessRatio ≈ 0.15 → flat pancake
 
 #pragma once
 #include "CoreMinimal.h"
@@ -22,20 +34,38 @@ struct FSkylandsLayerConfig
     GENERATED_BODY()
 
     // ── Altitude ──────────────────────────────────────────────────────────────
-    // TUNED: raised so islands don't spawn at terrain level, keeping inside 160m load bound
+    // Base altitude above terrain for SHARDS (CST≈0, low/flat terrain).
+    // Shards hover very close to the ground — they are small boulders in the sky.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Minimum sky-gap between terrain surface and island bottom (cm). 300 = 3m minimum."))
-    float MinAltitudeAboveTerrain = 300.f;
+        meta=(ToolTip="Altitude above terrain for sky-shards (CST=0, low terrain). Small shards hover close to the ground."))
+    float ShardAltitudeAboveTerrain = 150.f;
 
+    // Base altitude above terrain for ISLANDS (CST≈1, high/rough terrain).
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Average altitude over mid-height terrain (cm). 700 = 7m base height."))
+        meta=(ToolTip="Average altitude above terrain for full sky-islands (CST=1, high terrain)."))
     float BaseAltitudeAboveTerrain = 700.f;
+
+    // Legacy floor clamp — island bottom never goes below this gap.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
+        meta=(ToolTip="Hard floor: island bottom is never closer than this to neutral terrain."))
+    float MinAltitudeAboveTerrain = 300.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
     float HeightAltitudeBonus = 1200.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
     float RoughnessAltitudeBonus = 500.f;
+
+    // Altitude random jitter for SHARDS — kept small so shards cluster in a
+    // tight low band rather than being scattered all over the sky.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
+        meta=(ToolTip="Max random altitude offset for shards (CST=0). Low value keeps shards in a tight low band."))
+    float ShardAltitudeJitter = 400.f;
+
+    // Altitude random jitter for ISLANDS — large for scenic artistic variation.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
+        meta=(ToolTip="Max random altitude offset for islands (CST=1). Large value gives scenic height variation."))
+    float IslandAltitudeJitter = 6000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
     float LowTerrainAltitudeBoost = 400.f;
@@ -80,16 +110,23 @@ struct FSkylandsLayerConfig
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size")
     float RoughnessSizeBonus = 8000.f;
 
-    // TUNED: was 0.2 → 0.15 for flatter (less tower-like) aspect ratio
+    // TUNED: was 0.15 → kept; large islands stay flat-top (pancake shape).
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
-        meta=(ToolTip="Island thickness = IslandSize * ThicknessRatio. 0.15 = flat pancake shape."))
+        meta=(ToolTip="Island thickness ratio for full sky-islands (CST=1). 0.15 = flat pancake."))
     float ThicknessRatio = 0.15f;
+
+    // Thickness ratio for SHARDS (CST=0). Near-sphere (0.80) makes them look
+    // like rounded boulders rather than flat discs — the smaller, the rounder.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
+        meta=(ClampMin="0.3", ClampMax="1.0",
+              ToolTip="Shard thickness ratio (CST=0). 0.80 = near-sphere; blends toward ThicknessRatio as terrain rises."))
+    float ShardThicknessRatio = 0.80f;
 
     // TUNED: was 0.3 → 0.20 to prevent tall tower artifacts
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
         meta=(ClampMin="0.1", ClampMax="0.5",
-              ToolTip="Max thickness ratio. 0.20 prevents pillar artifacts. Keep below ThicknessRatio*2."))
-    float MaxThicknessRatio = 0.20f;
+              ToolTip="Max thickness ratio (safety cap). Keep at or above ThicknessRatio."))
+    float MaxThicknessRatio = 0.80f;
 
     // ── Shape ─────────────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shape") float ShapeFrequency = 0.0003f;
@@ -118,12 +155,16 @@ struct FSkylandsLayerConfig
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="References") float RoughnessReference  = 0.8f;
 
-    // TUNED: was 0.25 → 0.40 for more substantial shards
+    // ShardMinScale = 0.08 → shards over low terrain are 8% of BaseIslandSize.
+    // At BaseIslandSize=4000 cm this is 320 cm radius — a small floating rock.
+    // High-terrain islands reach BaseIslandSize + HeightSizeBonus = 20 000 cm radius.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
         meta=(ClampMin="0.01", ClampMax="0.9",
-              ToolTip="Minimum shard size fraction. Raised to 0.60 to prevent flatline size scaling."))
-    float ShardMinScale = 0.60f;
+              ToolTip="Shard size as fraction of BaseIslandSize (CST=0, low terrain). 0.08 = tiny boulder."))
+    float ShardMinScale = 0.08f;
 
+    // ShardTransitionStrength controls how quickly the shard→island transition happens
+    // as terrain score (TS) rises. Lower = slower transition (more shards over hills).
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Size",
         meta=(ClampMin="0.1", ClampMax="0.9"))
     float ShardTransitionStrength = 0.45f;

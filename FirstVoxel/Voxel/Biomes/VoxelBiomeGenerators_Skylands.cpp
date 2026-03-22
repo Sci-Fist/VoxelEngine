@@ -144,16 +144,21 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         if (CH < 0.f && CraterW < 0.4f) SpawnProb *= FMath::Clamp(1.f + CH / 15000.f, 0.20f, 1.f);
         if (HP > SpawnProb) continue;
 
-        const float SMN = FMath::Max(0.20f, SC.ShardMinScale);
+        // --- Size -----------------------------------------------------------
+        // Lower terrain (CST ≈ 0) = tiny shapes; Higher terrain (CST ≈ 1) = massive islands.
         const float SF  = (BG_FBM(cnX2*0.00008f, cnY2*0.00008f, 50.f, 2, 2.f, 0.5f, 2)+1.f)*0.5f;
         const float NR  = FMath::Lerp(0.5f, 0.25f, CST);
-        float IS = FMath::Lerp(SC.BaseIslandSize*SMN, SC.BaseIslandSize+SC.HeightSizeBonus, CST);
+        
+        float IS = FMath::Lerp(SC.BaseIslandSize * SC.ShardMinScale, SC.BaseIslandSize + SC.HeightSizeBonus, CST);
         IS = FMath::Clamp(IS*((1.f-NR)+NR*SF*2.f), 150.f, GridSize*0.48f);
 
         if (CH < 0.f && CraterW < 0.4f) IS *= FMath::Clamp(1.f + CH / 15000.f, 0.30f, 1.f);
 
-        // Base altitude - Scale down based on Size (CST) to let small shards hover lower
-        const float AltBase = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS);
+        // --- Altitude --------------------------------------------------------
+        // SKYL_BEHAVIOR:
+        //   Shards over flat/low terrain (CST≈0) hover very low (ShardAltitudeAboveTerrain).
+        //   Islands over peaks (CST≈1) scale up using altitude bonuses.
+        const float AltBase = FMath::Lerp(SC.ShardAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, CST);
         const float CuH = FMath::Pow(FMath::Max(0.f,HN), 2.5f);
         const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
 
@@ -166,12 +171,16 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             IS = FMath::Clamp(IS*FMath::Lerp(FMath::Clamp(AG/FMath::Max(1.f,SC.MinAltitudeAboveTerrain),0.4f,3.f),1.f,CST),150.f,GridSize*0.48f);
         }
 
-        const float NoiseRange = FMath::Lerp(5000.f, 1500.f, CST);
+        // --- Jitter ----------------------------------------------------------
+        // Low shards stay in a tight cluster band; High islands spread up/down.
+        const float NoiseRange = FMath::Lerp(SC.ShardAltitudeJitter, SC.IslandAltitudeJitter, CST);
         SkyAlt += BG_Noise(cnX2*0.006f, cnY2*0.006f, 500.f) * NoiseRange;
 
-        const float HA2 = (BG_Noise(cnX2*0.005f, cnY2*0.005f, 300.f)+1.f)*0.5f;
-        const float ET  = FMath::Lerp(FMath::Lerp(0.12f,0.25f,HA2), SC.ThicknessRatio, CST);
-        float HT = FMath::Min(IS*ET, IS*FMath::Lerp(0.75f, SC.MaxThicknessRatio, CST));
+        // --- Shape & Roundness -----------------------------------------------
+        // Low shards (CST≈0) use ShardThicknessRatio (near-sphere: ~0.80) to look like round boulders.
+        // High islands (CST≈1) use ThicknessRatio (pancake: ~0.15) for plateau profiles.
+        const float ET = FMath::Lerp(SC.ShardThicknessRatio, SC.ThicknessRatio, CST);
+        float HT = IS * ET;
 
         // RULE: Lower terrain (CH < 0) = Lower altitude
         float LocalMinAlt = SC.MinAltitudeAboveTerrain;
