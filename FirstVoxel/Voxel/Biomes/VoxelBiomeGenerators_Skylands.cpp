@@ -111,7 +111,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float HP   = (BG_Noise(cnX2*0.002f, cnY2*0.002f, 200.f)+1.f)*0.5f;
         float SpawnProb = ComputeIslandSpawnProbability(HN, RN, SC);
         // RULE: Lower terrain (CH < 0) = Less Probability (Linear decay below Sea Level)
-        if (CH < 0.f) SpawnProb *= FMath::Clamp(1.f + CH / 15000.f, 0.f, 1.f);
+        if (CH < 0.f) SpawnProb *= FMath::Clamp(1.f + CH / 15000.f, 0.20f, 1.f);
         if (HP > SpawnProb) continue;
 
         const float SMN = FMath::Max(0.20f, SC.ShardMinScale);

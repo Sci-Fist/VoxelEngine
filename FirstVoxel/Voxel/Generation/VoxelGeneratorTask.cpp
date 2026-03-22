@@ -108,6 +108,13 @@ void FVoxelGeneratorTask::BuildDensityField()
     }
     Densities.SetNumUninitialized(TotalSamples);
 
+    // Speedup Tier 3: Disable sub-voxel overhangs and caves on distant high-LOD chunks (silhouette only)
+    if (StepSize > 1)
+    {
+        const_cast<bool&>(Config.Performance.bEnableCaves) = false;
+        const_cast<bool&>(Config.Performance.bEnableOverhangs) = false;
+    }
+
     static FVoxelDensityGenerator FallbackGen;
     IVoxelDensityProvider* Provider = DensityProvider ? DensityProvider : &FallbackGen;
 

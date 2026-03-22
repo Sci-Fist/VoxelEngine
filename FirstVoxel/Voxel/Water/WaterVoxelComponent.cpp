@@ -76,12 +76,30 @@ void UVoxelWaterComponent::BeginPlay()
 
     if (OceanMaterial)
         OceanComponent->SetMaterial(0, OceanMaterial);
+    
+    OceanComponentBottom = NewObject<UStaticMeshComponent>(Owner, TEXT("ImplicitOceanComponentBottom"));
+    if (OceanComponentBottom)
+    {
+        OceanComponentBottom->SetupAttachment(Owner->GetRootComponent());
+        OceanComponentBottom->RegisterComponent();
+        OceanComponentBottom->SetStaticMesh(OceanPlaneMesh);
+        OceanComponentBottom->SetMobility(EComponentMobility::Movable);
+        OceanComponentBottom->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        OceanComponentBottom->SetCastShadow(false);
+        if (OceanMaterial) OceanComponentBottom->SetMaterial(0, OceanMaterial);
+    }
 
     // Scale: engine Plane is 100x100 cm. Divide by 100 to get unit scale, then
     // multiply by OceanPlaneScale to get the desired coverage in cm.
     const float Scale = FMath::Max(100.f, OceanPlaneScale) / 100.f;
     OceanComponent->SetWorldLocation(FVector(0.f, 0.f, SeaLevel));
     OceanComponent->SetWorldScale3D(FVector(Scale, Scale, 1.f));
+
+    if (OceanComponentBottom)
+    {
+        OceanComponentBottom->SetWorldLocation(FVector(0.f, 0.f, SeaLevel));
+        OceanComponentBottom->SetWorldScale3D(FVector(Scale, Scale, -1.f)); // Invert Z for down-facing
+    }
 
     UVoxelLogger::LogVoxelEvent(FString::Printf(
         TEXT("VoxelWater: Ocean plane created at Z=%.0f scale=%.0fx%.0f m"),
@@ -101,6 +119,8 @@ void UVoxelWaterComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 
     // Follow player XY at fixed sea level Z
     OceanComponent->SetWorldLocation(FVector(PlayerPos.X, PlayerPos.Y, SeaLevel));
+    if (OceanComponentBottom)
+        OceanComponentBottom->SetWorldLocation(FVector(PlayerPos.X, PlayerPos.Y, SeaLevel));
 
     // FIX #34: throttle ceiling check to 4 Hz + significant Z movement
     CeilingCheckTimer += DeltaTime;
@@ -127,4 +147,6 @@ void UVoxelWaterComponent::TickComponent(float DeltaTime, ELevelTick TickType,
     // This prevents seeing the infinite ocean plane through cave floors or mesh gaps.
     const bool bIsUnderground = bCachedHasCeiling && (PlayerPos.Z < SeaLevel + 1000.f);
     OceanComponent->SetVisibility(!bIsUnderground);
+    if (OceanComponentBottom)
+        OceanComponentBottom->SetVisibility(!bIsUnderground);
 }

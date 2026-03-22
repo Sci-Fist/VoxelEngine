@@ -17,20 +17,20 @@ class FIRSTVOXEL_API UVoxelWaterComponent : public UActorComponent
 public:
     UVoxelWaterComponent();
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water|Internal")
     UStaticMesh* OceanPlaneMesh = nullptr;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water|Internal")
     UMaterialInterface* OceanMaterial = nullptr;
 
     /** Z of the water surface plane (cm). FIX #39: default matches world config (0). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water|Internal")
     float SeaLevel = 0.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water|Internal")
     bool bEnableOcean = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water", meta=(ClampMin="100.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Water|Internal", meta=(ClampMin="100.0"))
     float OceanPlaneScale = 2000000.f;
 
     virtual void TickComponent(float DeltaTime, ELevelTick TickType,
@@ -41,6 +41,8 @@ protected:
 private:
     UPROPERTY()
     UStaticMeshComponent* OceanComponent = nullptr;
+    UPROPERTY()
+    UStaticMeshComponent* OceanComponentBottom = nullptr;
 
     // FIX #34: cache for throttled ceiling visibility check
     float CeilingCheckTimer  = 0.f;

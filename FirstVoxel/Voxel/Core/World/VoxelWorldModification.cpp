@@ -163,6 +163,9 @@ FVector AVoxelWorld::FindCraterSpawnLocation(
         const float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(
             Candidate.X, Candidate.Y, W, TempCfg);
 
+        // Avoid selecting craters that plunge below Sea Level (flooded spawn basins)
+        if (SurfH < Config.SeaLevel + 800.f) continue;
+
         const bool bStrictlyBetter =
             (CratersW > BestWeight + WeightTol) ||
             (FMath::Abs(CratersW - BestWeight) <= WeightTol && SurfH < BestSurfH - 1.f);

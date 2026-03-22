@@ -323,7 +323,7 @@ void AVoxelWorld::DrainGenerationQueue()
 {
     if (!GetWorld()) return;
     // Raised limits: Spawning is faster now without Editor labeling bottlenecks.
-    const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : (bWaitingForInitialSpawn ? 8 : 4);
+    const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : (bWaitingForInitialSpawn ? 128 : 8);
     int32 N = 0;
     while (N < Limit && QueueHead < GenerationQueue.Num())
     {
@@ -381,7 +381,10 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     if (!SpawnTargetPos.IsZero())
         GenerationConfig.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
 
-    const FVoxelGenerationConfig Config = GetEffectiveConfig(); // FIX #30
+    FVoxelGenerationConfig Config = GetEffectiveConfig(); // FIX #30
+    if (!SpawnTargetPos.IsZero())
+        Config.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
+
 
     FVector Pos = SpawnTargetPos;
     if (Pos.IsZero())
@@ -417,7 +420,8 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     UE_LOG(LogVoxelWorld,Warning,TEXT("VoxelWorld: Spawn Pos=(%.0f,%.0f) Surface=%.0f Z=%.0f CraterW=%.2f Sky=%d CONFIG_DEPTH=%.0f CONFIG_RADIUS=%.0f"),
         Pos.X,Pos.Y,Surface,TargetZ,CraterW,bSky?1:0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
 
-    Pos.Z = TargetZ; TargetCoordsZ = TargetZ + 30000.f; CachedSurfaceHeight = Surface;
+    Pos.Z = TargetZ; TargetCoordsZ = FMath::Max(TargetZ + 30000.f, 30000.f); CachedSurfaceHeight = Surface;
+
     Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
 
     if (bWaitingForInitialSpawn) return;
@@ -434,10 +438,10 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     auto AddToCollision = [&](const FIntVector& C) { SpawnSet.Add(C); };
     auto AddToVisual    = [&](const FIntVector& C) { VisualSet.Add(C); };
 
-    // 1. Surrounding concentric 13x13 area of player spawn (Cinematic Crater Bounds)
-    for (int32 x=-32; x<=32; x++) for (int32 y2=-32; y2<=32; y2++) for (int32 z2=-2; z2<=2; z2++)
+    // 1. Surrounding concentric area of player spawn (Cinematic Crater Bounds)
+    for (int32 x=-20; x<=20; x++) for (int32 y2=-20; y2<=20; y2++) for (int32 z2=-2; z2<=2; z2++)
     {
-        const bool bInner = (FMath::Abs(x) <= 12 && FMath::Abs(y2) <= 12);
+        const bool bInner = (FMath::Abs(x) <= 8 && FMath::Abs(y2) <= 8);
         if (bInner) AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
         else        AddToVisual   (FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
     }
@@ -445,9 +449,9 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     // 2. Add ground layer strictly beneath player if they spawn in the sky
     if (FMath::Abs(SpawnCoord.Z - GroundCoord.Z) > 1)
     {
-        for (int32 x=-32; x<=32; x++) for (int32 y2=-32; y2<=32; y2++)
+        for (int32 x=-20; x<=20; x++) for (int32 y2=-20; y2<=20; y2++)
         {
-            const bool bInner = (FMath::Abs(x) <= 12 && FMath::Abs(y2) <= 12);
+            const bool bInner = (FMath::Abs(x) <= 8 && FMath::Abs(y2) <= 8);
             if (bInner)
             {
                 AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));

@@ -67,7 +67,9 @@ struct FCraterSetup
     float BasePlains;       // = BaseHeight (surrounding terrain at this XY)
     float EffectiveDepth;   // = CraterDepth * erosion factor (negative)
     float RimHeight;        // = CraterRimHeight — NO multipliers stacked
+    float SeaLevel;         // Sea Level reference height
 };
+
 
 static FCraterSetup ComputeCraterSetup(float X, float Y,
                                         const FVoxelGenerationConfig& C,
@@ -95,11 +97,14 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
     const float EF = (C.Craters.CraterStyle == ECraterStyle::Weathered)
                      ? (1.f - C.Craters.RimErosion * 0.6f) : 1.f;
     S.EffectiveDepth = C.Craters.CentralCraterDepth * EF;  // stays negative
+    S.SeaLevel       = C.SeaLevel;
 
     // FIX: NO MinRimH override, NO 1.5x, NO 1.2x Meteor multiplier.
     // RimHeight is the config value directly, plus a small per-seed variation.
     const float RimVar = BG_Noise(S.nX * 0.0004f, S.nY * 0.0004f, 0.f) * 0.15f;
     S.RimHeight = C.Craters.CentralCraterRimHeight * (1.f + RimVar);
+    S.SeaLevel = C.SeaLevel;
+
 
     return S;
 }
@@ -119,8 +124,18 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
 
 
     const float FloorH  = S.BasePlains + S.EffectiveDepth;         // deepest point
-    const float WallBaseH = FloorH + FMath::Abs(S.EffectiveDepth) * 0.12f; // wall base is slightly higher than floor
-    const float RimH    = S.BasePlains + S.RimHeight;              // rim crest height
+    
+    // Depth Seal Clamp: prevent crater depths from plunging indefinitely below Sea Level.
+    // Ensure floor height remains dry for cinematic aesthetics unless config explicitly allows oceans.
+    float SafeFloorH = FloorH;
+    if (SafeFloorH < S.SeaLevel + 500.f) 
+    {
+        SafeFloorH = S.SeaLevel + 500.f;
+    }
+
+    const float WallBaseH = SafeFloorH + FMath::Abs(S.EffectiveDepth) * 0.12f; // wall base is slightly higher than floor
+    const float RimH    = FMath::Max(S.BasePlains, S.SeaLevel) + S.RimHeight; // rim crest height
+
 
     float H;
 
@@ -129,9 +144,10 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
     if (S.NormDist < FloorEnd)
     {
         // Zone 1: flat floor — rises 12% toward wall for natural bowl look
+        // Use power-4 so it's almost flat in the center, bends near wall
         const float FloorT = S.NormDist / FloorEnd;
         const float Rise   = FMath::Pow(FloorT, 4.f) * FMath::Abs(S.EffectiveDepth) * 0.12f;
-        H = FloorH + Rise;
+        H = SafeFloorH + Rise;
     }
     else if (S.NormDist < WallEnd)
     {
@@ -178,7 +194,8 @@ static void ApplyRimRoughness(float& H, const FCraterSetup& S, const FCraterBiom
     if (S.NormDist < RimPeak)
         RimFade = FMath::SmoothStep(WallEnd, RimPeak, S.NormDist);
     else
-        RimFade = FMath::SmoothStep(RimEnd + 0.05f, RimPeak, S.NormDist);
+        RimFade = 1.0f - FMath::SmoothStep(RimPeak, RimEnd + 0.05f, S.NormDist);
+
 
     // Low-frequency angular bumps (realistic rim irregularity)
     const float AngBump = BG_Noise(S.nX * 0.003f, S.nY * 0.003f, 0.f);
@@ -397,7 +414,8 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
     // Dominance: 1 inside the crater/rim, fades to 0 in the ejecta zone
     const float FadeStart = 0.97f;
     const float FadeEnd   = 1.80f;
-    const float Dominance = FMath::SmoothStep(FadeEnd, FadeStart, S.NormDist);
+    const float Dominance = 1.0f - FMath::SmoothStep(FadeStart, FadeEnd, S.NormDist);
+
 
     return FMath::Lerp(BaseHeight, CraterH, Dominance);
 }
