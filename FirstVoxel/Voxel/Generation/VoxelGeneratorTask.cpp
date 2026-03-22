@@ -131,6 +131,7 @@ void FVoxelGeneratorTask::Execute()
 // ============================================================
 void FVoxelGeneratorTask::BuildDensityField()
 {
+    const double StartTime = FPlatformTime::Seconds();
     const int32 EffCS        = ChunkSize / StepSize;
     this->EffSize            = EffCS + 3;  // PERF-2: write to member so ComputeWaterColumns can use it
     const int32 TotalSamples = EffSize * EffSize * EffSize;
@@ -244,7 +245,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             Item.SurfH = SurfH[k];
             
             // Tier 4 fallback: If any unsupported biome is active, re-calculate scalar.
-            const float MissingWeights = Peaks[k] + Cliffs[k] + Mesa[k] + Craters[k] + Ocean[k];
+            const float MissingWeights = Cliffs[k] + Mesa[k] + Craters[k] + Ocean[k];
             if (MissingWeights > 0.001f || Item.SurfH == 0.f)
             {
                 Item.SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, LocalConfig, Temp[k], Eros[k]);
@@ -532,6 +533,9 @@ void FVoxelGeneratorTask::BuildDensityField()
     bIsFullSolid = (SolidCount == TotalSamples);
     bIsFullAir   = (AirCount   == TotalSamples);
     PostProcessDensities(TotalSamples);
+
+    const double EndTime = FPlatformTime::Seconds();
+    UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("BuildDensityField took %.2fms"), (EndTime - StartTime) * 1000.f));
 }
 
 void FVoxelGeneratorTask::PostProcessDensities(int32) {}

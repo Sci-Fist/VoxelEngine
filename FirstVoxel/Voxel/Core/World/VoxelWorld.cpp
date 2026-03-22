@@ -198,8 +198,7 @@ void AVoxelWorld::Tick(float DeltaTime)
         // InitialSpawnCollisionReadyCount is incremented in OnGenerationComplete.
         const int32 CollisionTotal = InitialSpawnCoords.Num();
         const int32 VisualTotal    = InitialSpawnCoords_Visual.Num();
-        bAllReady = (InitialSpawnCollisionReadyCount >= CollisionTotal) &&
-                    (InitialSpawnVisualReadyCount    >= VisualTotal);
+        bAllReady = (InitialSpawnCollisionReadyCount >= CollisionTotal);
 
             // --- GRACE DELAY CUSHION ---
             if (bAllReady)
