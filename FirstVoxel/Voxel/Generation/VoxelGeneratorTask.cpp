@@ -430,8 +430,30 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         // Tier 7: Bounding Box Pruning — Restrict Z evaluation range range
         const float ExactMinZ = WorldOrigin.Z - EffVoxSz;
-        const float MinCarveZ = SurfH - 1200.f;  // Buffer buffer node node range
-        const float MaxCarveZ = SurfH + 1200.f;
+        const float CraterRadius = LocalConfig.Craters.CentralCraterRadius * 1.8f;
+        const float dx = WX - LocalConfig.Craters.ForcedCraterCenter.X;
+        const float dy = WY - LocalConfig.Craters.ForcedCraterCenter.Y;
+        const float DistSq = dx * dx + dy * dy;
+
+        float MinCarveZ = SurfH - 1200.f;
+        float MaxCarveZ = SurfH + 1200.f;
+
+        if (SteepW > 0.05f)
+        {
+            MinCarveZ -= 2400.f;
+            MaxCarveZ += 2400.f;
+        }
+
+        if (LocalConfig.Performance.bEnableOverhangs)
+        {
+            MaxCarveZ += LocalConfig.Overhangs.MaxDistFromSurface + 500.f;
+        }
+
+        if (DistSq < CraterRadius * CraterRadius)
+        {
+            MinCarveZ = SurfH - FMath::Abs(LocalConfig.Craters.CentralCraterDepth) - 2000.f;
+            MaxCarveZ = SurfH + LocalConfig.Craters.CentralCraterRimHeight + 4000.f;
+        }
 
         int32 StartZIdx = FMath::Clamp(FMath::FloorToInt((MinCarveZ - ExactMinZ) / EffVoxSz), 0, EffSize);
         int32 EndZIdx   = FMath::Clamp(FMath::CeilToInt((MaxCarveZ - ExactMinZ) / EffVoxSz), 0, EffSize);

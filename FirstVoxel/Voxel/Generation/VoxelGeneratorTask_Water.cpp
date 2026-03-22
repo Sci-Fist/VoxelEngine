@@ -51,13 +51,14 @@ void FVoxelGeneratorTask::PlaceWaterSources()
         // Fetch biome weight context
         float OceanW = 0.f;
         float SurfH  = 0.f;
-        const int32 LX = ix-1, LY2 = iy-1;
         FVoxelBiomeWeightMap W;
-        if (LX>=0&&LX<EffCS&&LY2>=0&&LY2<EffCS&&ColumnWeights.Num()==EffCS*EffCS)
+        const int32 EIdx = ix + iy * S;
+        if (PrecalcColumns.IsValidIndex(EIdx))
         {
-            W      = ColumnWeights [LX + LY2*EffCS];
+            const FColumnCacheItem& Item = PrecalcColumns[EIdx];
+            W      = Item.Weights;
             OceanW = W.GetWeight(EVoxelBiome::Ocean);
-            SurfH  = ColumnSurfaceH[LX + LY2*EffCS];
+            SurfH  = Item.SurfH;
         }
         else
         {
