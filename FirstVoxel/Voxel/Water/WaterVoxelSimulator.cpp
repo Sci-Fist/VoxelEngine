@@ -19,7 +19,7 @@ FVoxelWaterSimulator::FVoxelWaterSimulator(int32 InChunkSize, float InVoxelSize)
 void FVoxelWaterSimulator::RegisterChunk(const FIntVector& CC, FVoxelWaterData* D, int32 Gen)
 {
     check(D);
-    ChunkMap.Add(CC, { D, Gen });
+    ChunkMap.Add(CC, { D, Gen, /*bSettled=*/false });
 }
 
 void FVoxelWaterSimulator::UnregisterChunk(const FIntVector& CC)
@@ -79,6 +79,7 @@ void FVoxelWaterSimulator::SetSource(const FIntVector& WV)
     if (FChunkEntry* E = ChunkMap.Find(ToChunkCoord(WV)))
     {
         E->Data->bMeshDirty = true;
+        E->bSettled = false; // FIX-3: wake settled chunk when source changes
         if (bWasEmpty) E->Data->WaterCellCount++;
     }
 }
@@ -138,12 +139,16 @@ const TArray<FIntVector>& FVoxelWaterSimulator::Step()
         FChunkEntry&     Entry = Pair.Value;
         FVoxelWaterData* D     = Entry.Data;
         if (!D) continue;
-        if (!D->HasAnyWater()) continue; // FIX #33: O(1) early-out
+        if (!D->HasAnyWater()) continue;
+        // FIX-3: skip settled chunks — no cells changed last step;
+        // bSettled is reset by SetSource/SetFlowing when new water arrives.
+        if (Entry.bSettled) continue;
 
         const FIntVector Base(Pair.Key.X * ChunkSize,
                               Pair.Key.Y * ChunkSize,
                               Pair.Key.Z * ChunkSize);
 
+        const int32 PrevDirtyCount = DirtySet.Num();
         for (int32 z = 0; z < ChunkSize; ++z)
         for (int32 y = 0; y < ChunkSize; ++y)
         for (int32 x = 0; x < ChunkSize; ++x)
@@ -152,6 +157,11 @@ const TArray<FIntVector>& FVoxelWaterSimulator::Step()
             if (SimCell(Base + FIntVector(x, y, z), &D->Cells[Index], D, DirtySet))
                 DirtySet.Add(Pair.Key);
         }
+
+        // FIX-3: if no new dirty coords were added during this chunk's loop
+        // and the chunk previously had no movement, mark it as settled.
+        const bool bChunkMoved = DirtySet.Num() > PrevDirtyCount || DirtySet.Contains(Pair.Key);
+        if (!bChunkMoved) Entry.bSettled = true;
     }
 
     for (const FIntVector& DC : DirtySet)

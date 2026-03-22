@@ -207,7 +207,10 @@ struct FVoxelMeshGenerator
         FVoxelMeshOutput&             OutMesh,
         const struct FVoxelGenerationConfig& Config,
         int32                         InStepSize = 1,
-        struct FVoxelMeshScratchBuffers* Scratch = nullptr);
+        struct FVoxelMeshScratchBuffers* Scratch = nullptr,
+        // PERF-1: optional precomputed weights (EffSize×EffSize = S×S grid).
+        // When provided, ColumnColors skips GetBiomeWeightsStatic entirely.
+        const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights = nullptr);
 
 
 private:

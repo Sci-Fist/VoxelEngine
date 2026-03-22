@@ -313,7 +313,17 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
 
     ActiveGenerations++;
     TWeakObjectPtr<AVoxelWorld> WeakThis(this);
-    Chunk->OnGenerationComplete = [WeakThis](){ if (AVoxelWorld* S = WeakThis.Get()) S->ActiveGenerations--; };
+    const FIntVector ChunkCoord = Coord; // capture by value for lambda
+    Chunk->OnGenerationComplete = [WeakThis, ChunkCoord]()
+    {
+        if (AVoxelWorld* S = WeakThis.Get())
+        {
+            S->ActiveGenerations--;
+            // FIX-1: Feed the pending-set so CheckCloseRangeVisibility only
+            // iterates chunks that JUST became ready, not all loaded chunks.
+            S->ChunksNeedingVisibilityCheck.Add(ChunkCoord);
+        }
+    };
     if (WaterSystemComponent) WaterSystemComponent->InitChunkWater(Chunk);
     Chunk->GenerateAsync();
 }
@@ -349,6 +359,8 @@ void AVoxelWorld::DrainGenerationQueue()
     if (!GetWorld()) return;
     // Raised limits: Spawning is faster now without Editor labeling bottlenecks.
     const int32 Limit = !GetWorld()->IsGameWorld() ? 4 : (bWaitingForInitialSpawn ? 128 : 24);
+    // PERF-4: compute once per drain cycle — ConfigureChunk reads by const-ref.
+    CachedEffectiveConfig = GetEffectiveConfig();
     int32 N = 0;
     while (N < Limit && QueueHead < GenerationQueue.Num())
     {
@@ -356,7 +368,14 @@ void AVoxelWorld::DrainGenerationQueue()
         SpawnChunk(GenerationQueue[QueueHead++]);
         N++;
     }
-    if (QueueHead > 256) { GenerationQueue.RemoveAt(0, QueueHead); QueueHead = 0; }
+    // PERF-5: Never RemoveAt(0,N) — that's an O(remaining) element shift.
+    // Instead, only reset once the queue is fully consumed. The backing array
+    // stays hot in cache during the fill phase with no shifting overhead.
+    if (QueueHead >= GenerationQueue.Num())
+    {
+        GenerationQueue.Reset();
+        QueueHead = 0;
+    }
 }
 
 void AVoxelWorld::RebuildChunk(const FIntVector& Coord)
@@ -377,7 +396,10 @@ void AVoxelWorld::DiscoverExistingChunks()
 void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 {
     if (!Chunk) return;
-    const FVoxelGenerationConfig EffCfg = GetEffectiveConfig(); // FIX #30: value copy
+    // PERF-4: DrainGenerationQueue computes GetEffectiveConfig() once per drain
+    // cycle and passes it here so we don't deep-copy the large struct on every spawn.
+    // CachedEffectiveConfig is set just before SpawnChunk is called.
+    const FVoxelGenerationConfig& EffCfg = CachedEffectiveConfig;
     Chunk->ChunkSize           = ChunkSize;
     Chunk->VoxelSize           = VoxelSize;
     Chunk->MasterFlatMaterial  = MasterFlatMaterial;

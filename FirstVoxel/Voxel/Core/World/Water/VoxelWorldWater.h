@@ -48,7 +48,7 @@ private:
 
     bool  bWaterSimulationEnabled = true;
     float WaterSimTimer           = 0.f;
-    float WaterSimInterval        = 0.2f;
+    float WaterSimInterval        = 0.25f; // FIX-3: raised from 0.2s; settled chunks skip anyway
 
     void UpdateWaterSimulation(float DeltaTime);
     void ProcessChunkWaterSources(AVoxelChunk* Chunk, const FIntVector& ChunkCoord);

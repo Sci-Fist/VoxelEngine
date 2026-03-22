@@ -119,17 +119,14 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
         const float MaxIS = SC.BaseIslandSize + SC.HeightSizeBonus;
         const float SampleR = FMath::Max(1500.f, MaxIS);
-        const float SampleD = SampleR * 0.7071f;
 
+        // OPT-2: 4 axis-aligned samples instead of 8 (N/S/E/W only).
+        // Diagonal samples offered no meaningful improvement over axis at these radii.
         float CH = FMath::Max(CenterNeutralH, CenterFullH);
         CH = FMath::Max(CH, GetMaxH(CX2 + SampleR, CY2));
         CH = FMath::Max(CH, GetMaxH(CX2 - SampleR, CY2));
         CH = FMath::Max(CH, GetMaxH(CX2, CY2 + SampleR));
         CH = FMath::Max(CH, GetMaxH(CX2, CY2 - SampleR));
-        CH = FMath::Max(CH, GetMaxH(CX2 + SampleD, CY2 + SampleD));
-        CH = FMath::Max(CH, GetMaxH(CX2 - SampleD, CY2 - SampleD));
-        CH = FMath::Max(CH, GetMaxH(CX2 + SampleD, CY2 - SampleD));
-        CH = FMath::Max(CH, GetMaxH(CX2 - SampleD, CY2 + SampleD));
 
         const float HN = FMath::Clamp(CH/SC.MaxTerrainReference, 0.f, 1.f);
         const float RN = FMath::Clamp(CW.GetRoughness()/SC.RoughnessReference, 0.f, 1.f);

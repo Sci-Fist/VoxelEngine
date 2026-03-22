@@ -140,7 +140,8 @@ void FVoxelMeshGenerator::GenerateMesh(
     FVoxelMeshOutput&             OutMesh,
     const FVoxelGenerationConfig& Config,
     int32                         InStepSize,
-    FVoxelMeshScratchBuffers*     Scratch)
+    FVoxelMeshScratchBuffers*     Scratch,
+    const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights)
 {
     OutMesh.Reset();
 
@@ -218,16 +219,30 @@ void FVoxelMeshGenerator::GenerateMesh(
     // FIX #3: Disabled to eliminate interior degenerate collapses causing concentric slot gaps.
     // FlattenCellTops(EffVoxelSize, CellVertices, CellNormals, VertexIndices, S);
 
-    // ── ColumnColors — FIX #7: parallelized (was serial, 1225 Perlin calls) ──
+    // ── ColumnColors ─────────────────────────────────────────────────
+    // PERF-1: when PrecomputedColumnWeights is provided (EffSize×EffSize = S×S),
+    // skip the per-column GetBiomeWeightsStatic call (2 Perlin2D + 7 blends × 361).
+    // The precomputed array is addressed identically (FlatIdx = CX + CY*S).
+    const bool bHasPrecomp = PrecomputedColumnWeights && PrecomputedColumnWeights->Num() == S * S;
+
     TArray<FColor> ColumnColors;
     ColumnColors.SetNumUninitialized(S * S);
     ParallelFor(S * S, [&](int32 FlatIdx)
     {
-        const int32 CX = FlatIdx % S;
-        const int32 CY = FlatIdx / S;
-        const float WX = ChunkOrigin.X + (CX - 1.f) * EffVoxelSize;
-        const float WY = ChunkOrigin.Y + (CY - 1.f) * EffVoxelSize;
-        const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(WX, WY, Config);
+        FVoxelBiomeWeightMap W;
+        if (bHasPrecomp)
+        {
+            // PERF-1: direct array read — zero noise evaluations
+            W = (*PrecomputedColumnWeights)[FlatIdx];
+        }
+        else
+        {
+            const int32 CX = FlatIdx % S;
+            const int32 CY = FlatIdx / S;
+            const float WX = ChunkOrigin.X + (CX - 1.f) * EffVoxelSize;
+            const float WY = ChunkOrigin.Y + (CY - 1.f) * EffVoxelSize;
+            W = FVoxelBiomeManager::GetBiomeWeightsStatic(WX, WY, Config);
+        }
         FLinearColor C(W.Forest, W.Desert, W.Peaks + W.Cliffs, W.Craters + W.Mesa);
         ColumnColors[FlatIdx] = C.ToFColor(false);
     });

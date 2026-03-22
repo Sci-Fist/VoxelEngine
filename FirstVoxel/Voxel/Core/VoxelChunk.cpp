@@ -273,23 +273,39 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 		const int32 StepSz = GetStepSize();
 		const FVector ChunkOrigin = GetActorLocation();
 
-		// Build ocean biome weight cache (O(N²) not O(N³))
+		// OPT-4: Consume pre-baked water column data from background task instead of
+		// recomputing expensive biome noise here on the game thread.
+		// Falls back to direct computation for distant LOD chunks (StepSize>1) where
+		// ComputeWaterColumns() was skipped.
+		const bool bHasPrebakedWater = CompletedTask->GetWaterColOceanWeights().Num() == ChunkSize * ChunkSize;
 		TArray<float> OceanWeights;  OceanWeights.SetNumZeroed(ChunkSize * ChunkSize);
 		TArray<float> CraterWeights; CraterWeights.SetNumZeroed(ChunkSize * ChunkSize);
 		TArray<float> NeutralHeights; NeutralHeights.SetNumZeroed(ChunkSize * ChunkSize);
 		TArray<float> SurfaceHeights; SurfaceHeights.SetNumZeroed(ChunkSize * ChunkSize);
-		
-		for (int32 ly=0; ly<ChunkSize; ++ly)
-		for (int32 lx=0; lx<ChunkSize; ++lx)
+
+		if (bHasPrebakedWater)
 		{
-			const float ColX = ChunkOrigin.X + lx * VoxelSize;
-			const float ColY = ChunkOrigin.Y + ly * VoxelSize;
-			const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(ColX, ColY, GenerationConfig);
-			const int32 ColIdx = lx + ly * ChunkSize;
-			OceanWeights[ColIdx] = W.GetWeight(EVoxelBiome::Ocean);
-			CraterWeights[ColIdx] = W.GetWeight(EVoxelBiome::Craters);
-			NeutralHeights[ColIdx] = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(ColX, ColY, GenerationConfig);
-			SurfaceHeights[ColIdx] = FVoxelBiomeManager::GetSurfaceHeightStatic(ColX, ColY, W, GenerationConfig);
+			OceanWeights   = CompletedTask->GetWaterColOceanWeights();
+			CraterWeights  = CompletedTask->GetWaterColCraterWeights();
+			NeutralHeights = CompletedTask->GetWaterColNeutralHeights();
+			SurfaceHeights = CompletedTask->GetWaterColSurfaceHeights();
+		}
+		else
+		{
+			// Fallback: compute now (distant/LOD2 chunks that skipped background pre-bake)
+			for (int32 ly=0; ly<ChunkSize; ++ly)
+			for (int32 lx=0; lx<ChunkSize; ++lx)
+			{
+				const float ColX = ChunkOrigin.X + lx * VoxelSize;
+				const float ColY = ChunkOrigin.Y + ly * VoxelSize;
+				float Temp = -999.f, Erosion = -999.f;
+				const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(ColX, ColY, GenerationConfig, &Temp, &Erosion);
+				const int32 ColIdx = lx + ly * ChunkSize;
+				OceanWeights  [ColIdx] = W.GetWeight(EVoxelBiome::Ocean);
+				CraterWeights [ColIdx] = W.GetWeight(EVoxelBiome::Craters);
+				NeutralHeights[ColIdx] = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(ColX, ColY, GenerationConfig, Temp, Erosion);
+				SurfaceHeights[ColIdx] = FVoxelBiomeManager::GetSurfaceHeightStatic(ColX, ColY, W, GenerationConfig, Temp, Erosion);
+			}
 		}
 
 		for (int32 lz=0; lz<ChunkSize; ++lz)

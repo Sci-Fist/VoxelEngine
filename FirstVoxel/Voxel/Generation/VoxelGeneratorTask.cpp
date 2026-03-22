@@ -83,6 +83,8 @@ void FVoxelGeneratorTask::Execute()
     if (bCancelled || bIsFullSolid || bIsFullAir) return;
     BuildMesh();
     if (bCancelled) return;
+    ComputeWaterColumns(); // OPT-4: pre-bake water column data on background thread
+    if (bCancelled) return;
     if (StepSize > 1) return; // Skip foliage and water on distant silhouette chunks
     CalculateFoliage();
     if (bCancelled) return;
@@ -135,21 +137,18 @@ void FVoxelGeneratorTask::BuildDensityField()
     const bool bEnCaves    = LocalConfig.Performance.bEnableCaves;
     const bool bEnSkylands = LocalConfig.Performance.bEnableSkylands;
 
-    struct FColumnCacheItem
-    {
-        FVoxelBiomeWeightMap Weights;
-        float SurfH;
-        float NeutralH;
-        FSkylandColumnCache SkylandCache;
-    };
-    TArray<FColumnCacheItem> PrecalcColumns;
+    // PERF-2: FColumnCacheItem is now a member struct; PrecalcColumns is a member TArray.
+    // ComputeWaterColumns() will read directly from it after BuildDensityField returns.
+    EffSize = EffCS + 3;
     PrecalcColumns.SetNum(EffSize * EffSize);
     ColumnWeights .SetNum(EffSize * EffSize);
     ColumnSurfaceH.SetNum(EffSize * EffSize);
 
-    TMap<FIntPoint, TArray<FSkylandIslandData>> SkylandTaskCache;
-
-    for (int32 Idx = 0; Idx < EffSize * EffSize; ++Idx)
+    // OPT-1: Parallelise the per-column pre-compute loop.
+    // All called functions are pure/stateless — safe for concurrent execution.
+    // SkylandTaskCache (intra-chunk dedup TMap) removed: it required shared mutable
+    // state and the benefit was marginal vs the cost of a mutex or lock-free workaround.
+    ParallelFor(EffSize * EffSize, [&](int32 Idx)
     {
         const int32 Y  = Idx / EffSize;
         const int32 X  = Idx % EffSize;
@@ -158,7 +157,12 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         FColumnCacheItem& Item = PrecalcColumns[Idx];
 
-        Item.Weights = Provider->GetBiomeWeights(CX, CY, LocalConfig);
+        // OPT-3: Get biome weights via GetBiomeWeightsStatic directly so we also
+        // capture Temp/Erosion in one call. We then apply the same performance-flag
+        // masking, saving 2 redundant Perlin2D evaluations vs calling GetBiomeWeights
+        // (provider) + a separate GetBiomeWeightsStatic for Temp/Erosion.
+        float Temp = -999.f, Erosion = -999.f;
+        Item.Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(CX, CY, LocalConfig, &Temp, &Erosion);
         if (!bEnForest)  Item.Weights.SetWeight(EVoxelBiome::Forest,  0.f);
         if (!bEnDesert)  Item.Weights.SetWeight(EVoxelBiome::Desert,  0.f);
         if (!bEnPeaks)   Item.Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
@@ -167,18 +171,17 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (!bEnCraters) Item.Weights.SetWeight(EVoxelBiome::Craters, 0.f);
         Item.Weights.Normalize();
 
-        float Temp = -999.f, Erosion = -999.f;
-        FVoxelBiomeManager::GetBiomeWeightsStatic(CX, CY, LocalConfig, &Temp, &Erosion);
-
         Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, LocalConfig, Temp, Erosion);
+        // OPT-3: pass cached Temp/Erosion — avoids 2× redundant Perlin2D per column
         Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig, Temp, Erosion);
 
-        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig, &SkylandTaskCache);
+        // No shared SkylandTaskCache — each column builds its FSkylandColumnCache independently
+        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig);
 
-        // Backward compatibility
+        // Backward-compat arrays (written at same Idx — no race condition)
         ColumnWeights[Idx]  = Item.Weights;
         ColumnSurfaceH[Idx] = Item.SurfH;
-    }
+    });
 
     // ── DataMap edit arrays ────────────────────────────────────────────────
     TArray<bool>  DenseHasEdit;
@@ -224,8 +227,10 @@ void FVoxelGeneratorTask::BuildDensityField()
     }
 
     // ── Main density loop ─────────────────────────────────────────────────
-    TAtomic<int32> SolidCount{0};
-    TAtomic<int32> AirCount  {0};
+    // PERF-3: plain int32 — the loop is serial, TAtomic<int32> added lock-prefix
+    // overhead (lock xadd per increment) with zero thread-safety benefit here.
+    int32 SolidCount = 0;
+    int32 AirCount   = 0;
 
     for (int32 FlatXY = 0; FlatXY < EffSize * EffSize; ++FlatXY)
     {
@@ -292,11 +297,10 @@ void FVoxelGeneratorTask::BuildDensityField()
                     if (!DenseHasEdit.IsEmpty() && DenseHasEdit[Idx])
                     { const float Ov = DenseEditVals[Idx]; D = (Ov<0.f) ? FMath::Min(D,Ov) : FMath::Max(D,Ov); }
                     Densities[Idx] = D;
-                    Densities[Idx] = D;
                     if (D > 0.f) LocalSolid++; else LocalAir++;
                 }
-                for (int32 i = 0; i < LocalSolid; ++i) SolidCount.IncrementExchange();
-                for (int32 i = 0; i < LocalAir; ++i)   AirCount.IncrementExchange();
+                for (int32 i = 0; i < LocalSolid; ++i) SolidCount++;
+                for (int32 i = 0; i < LocalAir;   ++i) AirCount++;
                 continue;
             }
         }
@@ -314,8 +318,8 @@ void FVoxelGeneratorTask::BuildDensityField()
                 Densities[Idx] = D;
                 if (D > 0.f) LocalSolid++; else LocalAir++;
             }
-            for (int32 i = 0; i < LocalSolid; ++i) SolidCount.IncrementExchange();
-            for (int32 i = 0; i < LocalAir; ++i)   AirCount.IncrementExchange();
+            SolidCount += LocalSolid;
+            AirCount   += LocalAir;
             continue;
         }
 
@@ -364,12 +368,12 @@ void FVoxelGeneratorTask::BuildDensityField()
                 if (D > 0.f) LocalSolid++; else LocalAir++;
             }
         }
-        for (int32 i = 0; i < LocalSolid; ++i) SolidCount.IncrementExchange();
-        for (int32 i = 0; i < LocalAir; ++i)   AirCount.IncrementExchange();
+        SolidCount += LocalSolid;
+        AirCount   += LocalAir;
     }
 
-    bIsFullSolid = ((int32)SolidCount == TotalSamples);
-    bIsFullAir   = ((int32)AirCount   == TotalSamples);
+    bIsFullSolid = (SolidCount == TotalSamples);
+    bIsFullAir   = (AirCount   == TotalSamples);
     PostProcessDensities(TotalSamples);
 }
 
@@ -382,10 +386,52 @@ void FVoxelGeneratorTask::BuildMesh()
 {
     MeshOutput.Reset();
     FVoxelMeshGenerator::GenerateMesh(
-        Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize, &ScratchBuffers);
+        Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize,
+        &ScratchBuffers,
+        &ColumnWeights); // PERF-1: pass precomputed weights → ColumnColors skips noise
     UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: [%d,%d,%d] Flat=%d Slope=%d"),
         ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
         MeshOutput.FlatMesh.Vertices.Num(), MeshOutput.SlopeMesh.Vertices.Num()));
 }
 
 void FVoxelGeneratorTask::CountDensityStates(int32) {}
+
+// ============================================================
+//  ComputeWaterColumns — OPT-4 + PERF-2
+//  PERF-2: Samples from PrecalcColumns built in BuildDensityField's parallel
+//  precompute instead of calling 256 full noise evaluations serially.
+//  Column mapping: (lx, ly) in [0, ChunkSize) → PrecalcColumns[(lx+1) + (ly+1)*EffSize]
+//  The +1 accounts for the 1-cell border padding in the EffSize grid.
+//  For higher LOD steps (StepSize>1): use lx/StepSize and ly/StepSize indices.
+// ============================================================
+void FVoxelGeneratorTask::ComputeWaterColumns()
+{
+    if (bCancelled) return;
+    if (PrecalcColumns.Num() == 0 || EffSize == 0) return; // safety: BuildDensityField must have run
+
+    const int32 CS = ChunkSize;
+    WaterColOceanWeights  .SetNumZeroed(CS * CS);
+    WaterColCraterWeights .SetNumZeroed(CS * CS);
+    WaterColNeutralHeights.SetNumZeroed(CS * CS);
+    WaterColSurfaceHeights.SetNumZeroed(CS * CS);
+
+    // EffSize = ChunkSize/StepSize + 3 (with 1-cell border on each side).
+    // For column (lx, ly) in [0, CS), the best PrecalcColumns index is:
+    //   effX = lx/StepSize + 1   (clamped to [1, EffSize-2])
+    //   effY = ly/StepSize + 1
+    for (int32 ly = 0; ly < CS; ++ly)
+    for (int32 lx = 0; lx < CS; ++lx)
+    {
+        if (bCancelled) return;
+        const int32 EffX   = FMath::Clamp(lx / StepSize + 1, 0, EffSize - 1);
+        const int32 EffY   = FMath::Clamp(ly / StepSize + 1, 0, EffSize - 1);
+        const int32 EIdx   = EffX + EffY * EffSize;
+        const FColumnCacheItem& Item = PrecalcColumns[EIdx];
+
+        const int32 ColIdx = lx + ly * CS;
+        WaterColOceanWeights  [ColIdx] = Item.Weights.GetWeight(EVoxelBiome::Ocean);
+        WaterColCraterWeights [ColIdx] = Item.Weights.GetWeight(EVoxelBiome::Craters);
+        WaterColNeutralHeights[ColIdx] = Item.NeutralH;
+        WaterColSurfaceHeights[ColIdx] = Item.SurfH;
+    }
+}

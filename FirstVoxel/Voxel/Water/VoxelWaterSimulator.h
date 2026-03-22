@@ -40,6 +40,9 @@ private:
     {
         FVoxelWaterData* Data       = nullptr;
         int32            Generation = -1;
+        // FIX-3: when true, Step() skips the 16³ voxel loop for this chunk.
+        // Reset to false by SetSource/SetFlowing whenever new water arrives.
+        bool             bSettled   = false;
     };
     TMap<FIntVector, FChunkEntry> ChunkMap;
 

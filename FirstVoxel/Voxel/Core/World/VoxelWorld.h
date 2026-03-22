@@ -244,6 +244,10 @@ private:
     FVoxelDataMap DataMap;
     TMap<FIntVector, AVoxelChunk*> LoadedChunks;
     TSet<FIntVector>               EmptyChunks;
+    // FIX-1: pending-set for visibility check — only chunks that just became ready.
+    // ApplyMesh() adds coordinates here; CheckCloseRangeVisibility() drains it.
+    // Avoids O(N loaded chunks) scan every frame.
+    TSet<FIntVector>               ChunksNeedingVisibilityCheck;
     FVoxelChunkManager             ChunkManager;
     FVoxelChunkPool                ChunkPool;
     TArray<FIntVector>             DirtyRebuildQueue;
@@ -252,6 +256,9 @@ private:
     TArray<FIntVector> GenerationQueue;
     int32              QueueHead = 0;
     TAtomic<int32>     ActiveGenerations{0};
+    // PERF-4: populated once per DrainGenerationQueue call so ConfigureChunk
+    // reads a const-ref instead of deep-copying the large config struct N times.
+    mutable FVoxelGenerationConfig CachedEffectiveConfig;
 
     FVector LastStreamedPos = FVector::ZeroVector;
     float   StreamingTimer  = 0.f;

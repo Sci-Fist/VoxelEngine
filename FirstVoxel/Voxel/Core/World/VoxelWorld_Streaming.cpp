@@ -322,19 +322,30 @@ void AVoxelWorld::UpdateChunkStreaming()
 
 void AVoxelWorld::CheckCloseRangeVisibility()
 {
+    // FIX-1: Only iterate chunks that have JUST become ready (added by ApplyMesh).
+    // Previously this looped over ALL LoadedChunks every frame (O(N)) even though
+    // the vast majority were already visible and nothing had changed.
+    if (ChunksNeedingVisibilityCheck.IsEmpty()) return;
+
     APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
     if (!Player) return;
     const FVector Pos       = Player->GetActorLocation();
     const float   Threshold = ChunkSize * VoxelSize * 3.0f;
-    for (auto& P : LoadedChunks)
+
+    TArray<FIntVector> ToRemove;
+    for (const FIntVector& Coord : ChunksNeedingVisibilityCheck)
     {
-        AVoxelChunk* Chunk = P.Value;
-        if (!Chunk || FVector::Dist(Chunk->GetActorLocation(), Pos) >= Threshold) continue;
+        AVoxelChunk** P = LoadedChunks.Find(Coord);
+        if (!P || !*P) { ToRemove.Add(Coord); continue; }
+        AVoxelChunk* Chunk = *P;
+        if (FVector::Dist(Chunk->GetActorLocation(), Pos) >= Threshold) continue;
         if (Chunk->IsReady() && !Chunk->IsGenerating())
         {
             if (UProceduralMeshComponent* PM = Chunk->GetProceduralMesh())
                 if (!PM->IsVisible()) PM->SetVisibility(true);
             Chunk->bMeshDirty = false;
+            ToRemove.Add(Coord); // Remove from pending once handled
         }
     }
+    for (const FIntVector& C : ToRemove) ChunksNeedingVisibilityCheck.Remove(C);
 }

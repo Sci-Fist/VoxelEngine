@@ -350,6 +350,10 @@ void AVoxelWorld::Tick(float DeltaTime)
     CheckCloseRangeVisibility();
 
     // ── Dirty-chunk rebuild from DirtyRebuildQueue ───────────────────────
+    // FIX-4: Early exit — if generation quota is already full, no point
+    // iterating the queue just to discover every entry must wait.
+    if (ActiveGenerations >= MaxConcurrentGenerations) return;
+
     for (int32 i = DirtyRebuildQueue.Num()-1; i >= 0; --i)
     {
         const FIntVector Coord = DirtyRebuildQueue[i];
@@ -366,11 +370,9 @@ void AVoxelWorld::Tick(float DeltaTime)
         Chunk->GenerateAsync();
     }
 
-    // Legacy bMeshDirty fallback
-    for (auto& It : LoadedChunks)
-        if (AVoxelChunk* Chunk = It.Value)
-            if (Chunk->bMeshDirty && !Chunk->IsGenerating())
-            { Chunk->bMeshDirty = false; DirtyRebuildQueue.AddUnique(It.Key); }
+    // FIX-2: Removed the O(N) bMeshDirty fallback scan (lines 370-373 in original).
+    // Any code setting bMeshDirty=true must call MarkChunkDirty() which already
+    // adds to DirtyRebuildQueue — the scan was always redundant.
 }
 
 // ============================================================
@@ -399,6 +401,7 @@ void AVoxelWorld::ClearWorld()
     LoadedChunks.Empty(); GenerationQueue.Empty(); EmptyChunks.Empty();
     DirtyRebuildQueue.Empty(); ChunkManager.Clear(); QueueHead = 0;
     ActiveGenerations = 0;
+    ChunksNeedingVisibilityCheck.Empty(); // FIX-1: clear pending-set on world reset
     GenerationConfig.Craters.ForcedCraterCenter = FVector2D(0.f, 0.f);
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: World cleared"));
 }

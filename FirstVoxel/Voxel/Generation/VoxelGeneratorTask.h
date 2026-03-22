@@ -15,6 +15,7 @@
 #include "Voxel/Core/VoxelDensityChunk.h"
 #include "Math/IntVector.h"
 #include "Biomes/VoxelBiomeGenerators.h"
+#include "Biomes/VoxelBiomeManager.h"
 
 class FVoxelGeneratorTask
 {
@@ -45,6 +46,11 @@ public:
     const TArray<FIntVector>&         GetWaterSources()          const { return WaterSources;         }
     const TArray<float>&              GetDensities()             const { return Densities;            }
     const FIntVector&                 GetChunkCoord()            const { return ChunkCoord;           }
+    // OPT-4: pre-computed water column data (background thread) — consumed by ApplyMesh
+    const TArray<float>& GetWaterColOceanWeights()   const { return WaterColOceanWeights;   }
+    const TArray<float>& GetWaterColCraterWeights()  const { return WaterColCraterWeights;  }
+    const TArray<float>& GetWaterColNeutralHeights() const { return WaterColNeutralHeights; }
+    const TArray<float>& GetWaterColSurfaceHeights() const { return WaterColSurfaceHeights; }
 
 private:
     // Inputs
@@ -70,9 +76,21 @@ private:
     TArray<FFoliageSlot> FoliageSlots;
     bool bHasPerBiomeFoliage = false;
 
+    // PERF-2: Column cache data promoted from BuildDensityField local → member,
+    // so ComputeWaterColumns() can sample from it without re-evaluating noise.
+    struct FColumnCacheItem
+    {
+        FVoxelBiomeWeightMap Weights;
+        float SurfH    = 0.f;
+        float NeutralH = 0.f;
+        FSkylandColumnCache SkylandCache;
+    };
+
     TArray<float>                 Densities;
     TArray<FVoxelBiomeWeightMap>  ColumnWeights;
     TArray<float>                 ColumnSurfaceH;
+    TArray<FColumnCacheItem>      PrecalcColumns;  // PERF-2: shared with ComputeWaterColumns
+    int32                         EffSize = 0;     // PERF-2: EffCS+3, set in BuildDensityField
 
     // FIX #5: flattened 1D array — single alloc, indexed [i*ChunkSize+j]
     TArray<FSkylandColumnCache>   SkylandColumnCaches;
@@ -81,10 +99,17 @@ private:
 
     FVoxelMeshScratchBuffers      ScratchBuffers;
 
+    // OPT-4: water column biome data pre-computed on background thread
+    TArray<float> WaterColOceanWeights;
+    TArray<float> WaterColCraterWeights;
+    TArray<float> WaterColNeutralHeights;
+    TArray<float> WaterColSurfaceHeights;
+
     void BuildDensityField();
     void PostProcessDensities(int32 TotalSamples);
     void BuildMesh();
     void CalculateFoliage();
+    void ComputeWaterColumns(); // OPT-4: pre-computes water biome data on background thread
     void ProcessLegacyFoliage(const FVector& Center, float SlopeZ,
                                const FVoxelBiomeWeightMap& W, const FVector& WorldCenter);
     void PlaceWaterSources();
