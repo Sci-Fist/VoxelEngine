@@ -299,6 +299,9 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
         if (DistSq > LOD2Distance * LOD2Distance) TargetLOD = 2;
         else if (DistSq > LOD1Distance * LOD1Distance) TargetLOD = 1;
 
+        // Force maximum LOD 1 for high elevations so they retain 3D mesh overhangs instead of flat fits
+        if (Coord.Z >= 4) TargetLOD = FMath::Min(TargetLOD, 1);
+
         if (bWaitingForInitialSpawn && InitialSpawnCoords.Contains(Coord))
             TargetLOD = 0;
         else if (DistSq < (ChunkSize * VoxelSize * 3.2f) * (ChunkSize * VoxelSize * 3.2f))
