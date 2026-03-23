@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FirstVoxel Codebase Analysis Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0d1117; 
+            color: #c9d1d9; 
+            line-height: 1.6;
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #161b22 0%, #21262d 100%);
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+        .header h1 { color: #58a6ff; font-size: 2.2em; margin-bottom: 10px; }
+        .header .subtitle { color: #8b949e; font-size: 1.1em; }
+        .header .meta { margin-top: 15px; display: flex; gap: 20px; flex-wrap: wrap; }
+        .header .meta span { 
+            background: #21262d; 
+            padding: 5px 12px; 
+            border-radius: 20px; 
+            font-size: 0.9em;
+            border: 1px solid #30363d;
+        }
+        
+        /* Dashboard */
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-card .number { font-size: 2.5em; font-weight: bold; }
+        .stat-card .label { color: #8b949e; margin-top: 5px; }
+        .stat-card.critical .number { color: #f85149; }
+        .stat-card.high .number { color: #f0883e; }
+        .stat-card.medium .number { color: #d29922; }
+        .stat-card.low .number { color: #58a6ff; }
+        .stat-card.info .number { color: #8b949e; }
+        
+        /* Navigation */
+        .nav {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            padding: 15px 20px;
+            margin-bottom: 30px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .nav a {
+            color: #58a6ff;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+        .nav a:hover { background: #21262d; }
+        
+        /* Sections */
+        .section {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            margin-bottom: 25px;
+            overflow: hidden;
+        }
+        .section-header {
+            padding: 20px;
+            border-bottom: 1px solid #30363d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+        .section-header h2 { color: #c9d1d9; font-size: 1.4em; }
+        .section-header .badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        .badge.critical { background: #f8514920; color: #f85149; border: 1px solid #f85149; }
+        .badge.high { background: #f0883e20; color: #f0883e; border: 1px solid #f0883e; }
+        .badge.medium { background: #d2992220; color: #d29922; border: 1px solid #d29922; }
+        .badge.low { background: #58a6ff20; color: #58a6ff; border: 1px solid #58a6ff; }
+        
+        .section-content { padding: 20px; }
+        .section-content.collapsed { display: none; }
+        
+        /* Issues */
+        .issue {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+        .issue-header {
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+        .issue-header h3 { color: #c9d1d9; font-size: 1.1em; }
+        .issue-header .severity {
+            padding: 3px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        .severity.critical { background: #f8514930; color: #f85149; }
+        .severity.high { background: #f0883e30; color: #f0883e; }
+        .severity.medium { background: #d2992230; color: #d29922; }
+        .severity.low { background: #58a6ff30; color: #58a6ff; }
+        
+        .issue-body { padding: 0 15px 15px; }
+        .issue-body.collapsed { display: none; }
+        
+        .file-path {
+            background: #21262d;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+            color: #79c0ff;
+            margin-bottom: 10px;
+        }
+        
+        .code-block {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 15px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+            overflow-x: auto;
+            margin: 10px 0;
+            white-space: pre-wrap;
+        }
+        .code-block .comment { color: #8b949e; }
+        .code-block .highlight { background: #f8514920; display: inline; }
+        
+        .recommendation {
+            background: #23863620;
+            border: 1px solid #238636;
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 10px;
+        }
+        .recommendation::before {
+            content: "💡 Recommendation: ";
+            color: #3fb950;
+            font-weight: bold;
+        }
+        
+        /* Summary Table */
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        .summary-table th, .summary-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #30363d;
+        }
+        .summary-table th { 
+            background: #21262d; 
+            color: #c9d1d9;
+            font-weight: 600;
+        }
+        .summary-table tr:hover { background: #161b22; }
+        
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 30px;
+            color: #8b949e;
+            border-top: 1px solid #30363d;
+            margin-top: 40px;
+        }
+        
+        /* Toggle Icon */
+        .toggle-icon {
+            transition: transform 0.3s;
+            color: #8b949e;
+        }
+        .toggle-icon.collapsed { transform: rotate(-90deg); }
+        
+        /* Filter Bar */
+        .filter-bar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .filter-btn:hover, .filter-btn.active {
+            background: #30363d;
+            border-color: #58a6ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🔍 FirstVoxel Codebase Analysis Report</h1>
+            <p class="subtitle">Comprehensive analysis of the Unreal Engine Voxel Engine project</p>
+            <div class="meta">
+                <span>📅 Generated: March 23, 2026</span>
+                <span>📁 Project: FirstVoxel</span>
+                <span>🔧 Engine: Unreal Engine 5</span>
+                <span>📊 Files Analyzed: 60+</span>
+            </div>
+        </div>
+
+        <!-- Dashboard -->
+        <div class="dashboard">
+            <div class="stat-card critical">
+                <div class="number">3</div>
+                <div class="label">Critical Issues</div>
+            </div>
+            <div class="stat-card high">
+                <div class="number">8</div>
+                <div class="label">High Priority</div>
+            </div>
+            <div class="stat-card medium">
+                <div class="number">12</div>
+                <div class="label">Medium Priority</div>
+            </div>
+            <div class="stat-card low">
+                <div class="number">7</div>
+                <div class="label">Low Priority</div>
+            </div>
+            <div class="stat-card info">
+                <div class="number">30</div>
+                <div class="label">Total Issues</div>
+            </div>
+        </div>
+
+        <!-- Navigation -->
+        <div class="nav">
+            <a href="#critical">🚨 Critical</a>
+            <a href="#core">🧱 Core Voxel</a>
+            <a href="#world">🌍 World System</a>
+            <a href="#generation">⚙️ Generation</a>
+            <a href="#biomes">🌲 Biomes & Water</a>
+            <a href="#framework">🎮 Game Framework</a>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="filter-bar">
+            <button class="filter-btn active" onclick="filterIssues('all')">All Issues</button>
+            <button class="filter-btn" onclick="filterIssues('critical')">Critical</button>
+            <button class="filter-btn" onclick="filterIssues('high')">High</button>
+            <button class="filter-btn" onclick="filterIssues('medium')">Medium</button>
+            <button class="filter-btn" onclick="filterIssues('low')">Low</button>
+        </div>
+
+        <!-- Critical Issues Section -->
+        <div class="section" id="critical">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>🚨 Critical Issues</h2>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <span class="badge critical">3 Critical</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="section-content">
+                
+                <!-- Critical Issue 1 -->
+                <div class="issue" data-severity="critical">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Race Condition in VoxelWorld Streaming</h3>
+                        <span class="severity critical">CRITICAL</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/World/VoxelWorld_Streaming.cpp</div>
+                        <p><strong>Problem:</strong> The streaming system accesses chunk data from multiple threads without proper synchronization. The `ActiveChunks` map is modified during async operations while being read by the game thread.</p>
+                        <div class="code-block"><span class="comment">// Dangerous: Modified from async task while read from game thread</span>
+TMap<FIntVector, UVoxelChunk*> ActiveChunks;
+<span class="highlight">UVoxelChunk* Chunk = ActiveChunks.FindRef(ChunkCoord);</span> <span class="comment">// Game thread read</span>
+<span class="highlight">ActiveChunks.Add(ChunkCoord, NewChunk);</span> <span class="comment">// Worker thread write</span></div>
+                        <div class="recommendation">Add a `FCriticalSection` or `FRWLock` to protect `ActiveChunks` access. Use `FScopeLock` for synchronized access.</div>
+                    </div>
+                </div>
+
+                <!-- Critical Issue 2 -->
+                <div class="issue" data-severity="critical">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Memory Leak in VoxelChunkPool</h3>
+                        <span class="severity critical">CRITICAL</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/VoxelChunkPool.cpp</div>
+                        <p><strong>Problem:</strong> Chunks returned to the pool are not properly cleaned up. The `ReturnChunk` method doesn't clear mesh references, causing UObject references to persist and prevent garbage collection.</p>
+                        <div class="code-block">void UVoxelChunkPool::ReturnChunk(UVoxelChunk* Chunk)
+{
+    <span class="comment">// Missing: Chunk->ClearMesh();</span>
+    <span class="comment">// Missing: Chunk->ResetData();</span>
+    <span class="highlight">AvailableChunks.Add(Chunk);</span> <span class="comment">// Mesh reference still held!</span>
+}</div>
+                        <div class="recommendation">Call `ClearMesh()` and `ResetData()` before returning chunks to the pool. Ensure all UPROPERTY references are nulled out.</div>
+                    </div>
+                </div>
+
+                <!-- Critical Issue 3 -->
+                <div class="issue" data-severity="critical">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Null Pointer Dereference in Water Simulation</h3>
+                        <span class="severity critical">CRITICAL</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Water/WaterVoxelSimulator.cpp</div>
+                        <p><strong>Problem:</strong> The water simulator accesses neighboring chunks without null checks. When a neighbor hasn't loaded yet, this causes a crash.</p>
+                        <div class="code-block"><span class="comment">// No null check before dereferencing!</span>
+UVoxelChunk* Neighbor = GetNeighborChunk(Direction);
+<span class="highlight">FVoxelData& Data = Neighbor->GetVoxelData(LocalPos);</span> <span class="comment">// CRASH if null</span></div>
+                        <div class="recommendation">Add null checks before accessing neighbor chunks. Return early or use default values when neighbors are unavailable.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Core Voxel System -->
+        <div class="section" id="core">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>🧱 Core Voxel System</h2>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <span class="badge high">3 High</span>
+                    <span class="badge medium">2 Medium</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="section-content">
+                
+                <div class="issue" data-severity="high">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>God Function: ApplyMesh() (~130 lines)</h3>
+                        <span class="severity high">HIGH</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/VoxelChunk.cpp (lines 130-260)</div>
+                        <p><strong>Problem:</strong> `ApplyMesh()` handles material resolution, mesh upload, foliage management (per-biome and legacy), water data population, and callback invocation all in one massive function.</p>
+                        <div class="recommendation">Extract into focused methods: <code>ResolveMaterials()</code>, <code>UploadFoliage()</code>, <code>PopulateWaterData()</code>. Each should be under 30 lines.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="high">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Cryptic Single-Letter Variable Names</h3>
+                        <span class="severity high">HIGH</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/VoxelChunk.cpp (lines 310-320)</div>
+                        <p><strong>Problem:</strong> Critical mesh data uses single-letter variables that obscure intent.</p>
+                        <div class="code-block">TArray<FVector>   <span class="highlight">V</span>;  <span class="comment">// Should be: Vertices</span>
+TArray<int32>     <span class="highlight">T</span>;  <span class="comment">// Should be: Triangles</span>
+TArray<FVector>   <span class="highlight">N</span>;  <span class="comment">// Should be: Normals</span>
+TArray<FVector2D> <span class="highlight">U</span>;  <span class="comment">// Should be: UVs</span></div>
+                        <div class="recommendation">Rename to descriptive names: <code>Vertices</code>, <code>Triangles</code>, <code>Normals</code>, <code>UVs</code>.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="high">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Duplicated Null-Check Fallback Pattern</h3>
+                        <span class="severity high">HIGH</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/VoxelChunk.cpp (lines 155-170)</div>
+                        <p><strong>Problem:</strong> The same fallback pattern for <code>FlatMat</code> and <code>SlopeMat</code> is duplicated multiple times.</p>
+                        <div class="recommendation">Extract into a helper function: <code>UMaterialInterface* ResolveMaterial(UMaterialInterface* Primary, UMaterialInterface* Fallback)</code></div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>VoxelDataMap: Inefficient Lookup Pattern</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/VoxelDataMap.cpp</div>
+                        <p><strong>Problem:</strong> The data map uses nested TMap lookups for 3D coordinates, causing cache misses and hash computations on every access.</p>
+                        <div class="recommendation">Consider using a flat array with computed indices for better cache locality: <code>Index = X + Y*SizeX + Z*SizeX*SizeY</code></div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Missing Error Handling in Chunk Serialization</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/VoxelChunk.cpp</div>
+                        <p><strong>Problem:</strong> Chunk save/load operations don't validate data integrity or handle corrupted saves gracefully.</p>
+                        <div class="recommendation">Add checksums to saved data and implement fallback behavior for corrupted chunks (regenerate instead of crash).</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- World System -->
+        <div class="section" id="world">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>🌍 World System</h2>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <span class="badge high">2 High</span>
+                    <span class="badge medium">3 Medium</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="section-content">
+                
+                <div class="issue" data-severity="high">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Dead Code: MergedConfig Member Never Used</h3>
+                        <span class="severity high">HIGH</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/World/VoxelWorld.h (line ~187)</div>
+                        <div class="code-block"><span class="highlight">mutable FVoxelGenerationConfig MergedConfig;</span> <span class="comment">// Never referenced!</span></div>
+                        <p><strong>Problem:</strong> This mutable member is declared but never used. The <code>GetEffectiveConfig()</code> method creates a local variable instead.</p>
+                        <div class="recommendation">Remove this dead code to reduce confusion and memory footprint.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="high">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Massive Code Duplication: 16 Biome Config UPROPERTYs</h3>
+                        <span class="severity high">HIGH</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/World/VoxelWorld.h (lines ~195-212)</div>
+                        <p><strong>Problem:</strong> 16 separate UPROPERTY declarations for 8 biomes × 2 configs, duplicated again in <code>GetEffectiveConfig()</code> with 16 manual assignments.</p>
+                        <div class="code-block">UPROPERTY(...) FVoxelBiomeRenderConfig ForestRender;
+UPROPERTY(...) FVoxelBiomeWaterConfig  ForestWater;
+UPROPERTY(...) FVoxelBiomeRenderConfig PeaksRender;
+UPROPERTY(...) FVoxelBiomeWaterConfig  PeaksWater;
+<span class="comment">// ... 12 more identical pairs ...</span></div>
+                        <div class="recommendation">Use a <code>TMap<EBiomeType, FVoxelBiomeConfig></code> to consolidate biome configurations into a single data structure.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Streaming: No Distance-Based Priority</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/World/VoxelWorld_Streaming.cpp</div>
+                        <p><strong>Problem:</strong> Chunks are loaded in arbitrary order rather than by distance to player, causing visible pop-in.</p>
+                        <div class="recommendation">Implement a priority queue sorted by distance to the player camera. Load closest chunks first.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Modification System: No Undo Support</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/World/VoxelWorldModification.cpp</div>
+                        <p><strong>Problem:</strong> Voxel modifications are applied directly without any undo/redo capability.</p>
+                        <div class="recommendation">Implement a command pattern with a modification history stack for undo support.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Water System: No Chunk Boundary Handling</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Core/World/Water/VoxelWorldWater.cpp</div>
+                        <p><strong>Problem:</strong> Water simulation doesn't properly handle flow across chunk boundaries, causing water to "stop" at edges.</p>
+                        <div class="recommendation">Implement neighbor-aware water flow that synchronizes water levels at chunk boundaries.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Generation System -->
+        <div class="section" id="generation">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>⚙️ Generation & Noise Systems</h2>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <span class="badge high">2 High</span>
+                    <span class="badge medium">3 Medium</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="section-content">
+                
+                <div class="issue" data-severity="high">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Massive Duplication: GetDensityFull vs Pipeline Stages</h3>
+                        <span class="severity high">HIGH</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Generation/VoxelDensityGenerator.cpp</div>
+                        <p><strong>Problem:</strong> The <code>GetDensityFull()</code> function duplicates the exact logic found in the three pipeline stages (Surface, Caves, Bedrock).</p>
+                        <div class="code-block"><span class="comment">// Duplicated in GetDensityFull (lines 74-90) AND FVoxelSurfacePass (lines 163-175)</span>
+if (Config.Performance.bEnableOverhangs)
+{
+    const FOverhangConfig& OC = Config.Overhangs;
+    <span class="highlight">// ... identical 15-line block ...</span>
+}</div>
+                        <div class="recommendation">Remove <code>GetDensityFull()</code> and use the pipeline stages exclusively. Or extract shared logic into reusable functions.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="high">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>SIMD Code: Platform-Specific Without Fallback</h3>
+                        <span class="severity high">HIGH</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Generation/VoxelNoiseSIMD.cpp</div>
+                        <p><strong>Problem:</strong> AVX2 intrinsics are used without runtime CPU feature detection or scalar fallback. Will crash on older CPUs.</p>
+                        <div class="code-block"><span class="comment">// Direct AVX2 usage without checks</span>
+<span class="highlight">__m256 result = _mm256_add_ps(a, b);</span></div>
+                        <div class="recommendation">Add runtime CPU feature detection with <code>IsProcessorFeaturePresent()</code> and provide scalar fallback paths.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Generator Task: No Cancellation Support</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Generation/VoxelGeneratorTask.cpp</div>
+                        <p><strong>Problem:</strong> Once a generation task starts, there's no way to cancel it if the player moves away. Wasted CPU cycles.</p>
+                        <div class="recommendation">Add an <code>std::atomic<bool> bCancelled</code> flag that's checked periodically during generation.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Mesh Generator: Excessive Memory Allocations</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Generation/VoxelMeshGenerator.cpp</div>
+                        <p><strong>Problem:</strong> New TArray allocations happen for every mesh generation. Under high load, this causes GC pressure.</p>
+                        <div class="recommendation">Use thread-local or pooled arrays that are reused across generations.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>IVoxelGenerationStage: Unused Interface Methods</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Generation/IVoxelGenerationStage.h</div>
+                        <p><strong>Problem:</strong> The interface declares methods that some implementations leave empty, violating Interface Segregation Principle.</p>
+                        <div class="recommendation">Split into smaller interfaces: <code>IVoxelDensityStage</code>, <code>IVoxelMeshStage</code>, etc.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Biomes & Water -->
+        <div class="section" id="biomes">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>🌲 Biomes & Water Systems</h2>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <span class="badge high">1 High</span>
+                    <span class="badge medium">2 Medium</span>
+                    <span class="badge low">3 Low</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="section-content">
+                
+                <div class="issue" data-severity="high">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Major DRY Violation: Duplicated Biome Height Computation</h3>
+                        <span class="severity high">HIGH</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Biomes/VoxelBiomeManager.cpp (lines 83-179)</div>
+                        <p><strong>Problem:</strong> <code>GetSurfaceHeightStatic()</code> and <code>GetNeutralSurfaceHeightStatic()</code> are nearly identical (~45 lines each), differing only by the omission of <code>GetCraterHeight()</code> at the end.</p>
+                        <div class="code-block"><span class="comment">// Appears TWICE in the file (lines ~90-115 and ~145-170)</span>
+float ForestW = FMath::SmoothStep(0.0f,0.6f,1.0f-Erosion)*FMath::SmoothStep(0.0f,1.0f,1.5f-Temp);
+float DesertW = FMath::SmoothStep(0.0f,0.6f,1.0f-Erosion)*FMath::SmoothStep(0.0f,0.25f,Temp-0.70f);
+float PeaksW  = FMath::SmoothStep(0.0f,0.2f,Erosion-0.68f)*B.PeaksStrength*FMath::SmoothStep(0.0f,0.8f,1.2f-Temp);
+<span class="comment">// ... etc</span></div>
+                        <div class="recommendation">Extract the shared biome weight computation into a private helper function <code>ComputeBiomeWeights()</code>.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Duplicate Probability Computation Across Files</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">VoxelBiomeGenerators_Skylands.cpp & VoxelBiomeManager.cpp</div>
+                        <p><strong>Problem:</strong> Two different functions compute skyland spawn probability with different algorithms, leading to inconsistent behavior.</p>
+                        <div class="recommendation">Consolidate into a single <code>ComputeSkylandProbability()</code> function used by both systems.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Water Simulator: Fixed Timestep Not Enforced</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Water/WaterVoxelSimulator.cpp</div>
+                        <p><strong>Problem:</strong> Water simulation uses variable delta time, causing non-deterministic behavior and potential instability at low framerates.</p>
+                        <div class="recommendation">Use fixed timestep with accumulator pattern for deterministic water simulation.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="low">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Biome Data Asset: No Validation</h3>
+                        <span class="severity low">LOW</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Biomes/VoxelBiomeDataAsset.h</div>
+                        <p><strong>Problem:</strong> Biome data assets don't validate that weight ranges sum correctly or that required fields are set.</p>
+                        <div class="recommendation">Add <code>PostEditChangeProperty()</code> validation to warn designers about invalid configurations.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="low">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Crater Generator: Magic Numbers</h3>
+                        <span class="severity low">LOW</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Biomes/VoxelBiomeGenerators_Craters.cpp</div>
+                        <p><strong>Problem:</strong> Hard-coded constants like <code>0.73f</code>, <code>1.25f</code> without explanation.</p>
+                        <div class="recommendation">Extract to named constants: <code>constexpr float CRATER_DEPTH_RATIO = 0.73f;</code></div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="low">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Water Types: Missing Documentation</h3>
+                        <span class="severity low">LOW</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/Water/VoxelWaterTypes.h</div>
+                        <p><strong>Problem:</strong> Enum values and structs lack documentation explaining their purpose and valid ranges.</p>
+                        <div class="recommendation">Add XML doc comments to all public types and enum values.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Framework -->
+        <div class="section" id="framework">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>🎮 Game Framework & UI</h2>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <span class="badge medium">2 Medium</span>
+                    <span class="badge low">4 Low</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="section-content">
+                
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Dead Code: 5 Camera Methods Declared But Never Defined</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/FirstVoxelCharacter.h (lines ~220-240)</div>
+                        <p><strong>Problem:</strong> Six camera methods are declared, but only <code>ToggleCameraMode()</code> is implemented. The others will cause linker errors if called.</p>
+                        <div class="code-block"><span class="comment">// Declared but NEVER defined:</span>
+void SwitchCamera();           <span class="highlight">// Linker error if called</span>
+void ToggleCamera();           <span class="highlight">// Linker error if called</span>
+void SetFirstPersonView();     <span class="highlight">// Linker error if called</span>
+void SetThirdPersonView();     <span class="highlight">// Linker error if called</span>
+void UpdateThirdPersonCamera(float DeltaTime); <span class="highlight">// Linker error if called</span></div>
+                        <div class="recommendation">Either implement these methods or remove the declarations. Dead declarations are worse than missing ones.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="medium">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Duplicate Input Bindings</h3>
+                        <span class="severity medium">MEDIUM</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/FirstVoxelCharacter.cpp (SetupPlayerInputComponent)</div>
+                        <p><strong>Problem:</strong> <code>Gamepad_FaceButton_Left</code> is bound twice to <code>ToggleCameraMode</code>. <code>Gamepad_Special_Right</code> is also bound twice.</p>
+                        <div class="recommendation">Remove duplicate bindings. Each input should map to exactly one action.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="low">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Redundant Boolean State</h3>
+                        <span class="severity low">LOW</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/FirstVoxelCharacter.h (lines ~230-235)</div>
+                        <p><strong>Problem:</strong> <code>bIsThirdPerson</code> is set in constructor to <code>true</code> but never read or toggled. It's the logical negation of <code>bIsFirstPerson</code>.</p>
+                        <div class="recommendation">Remove <code>bIsThirdPerson</code> and use <code>!bIsFirstPerson</code> where needed.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="low">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>HUD Drawing: No Culling for Off-Screen Elements</h3>
+                        <span class="severity low">LOW</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/FirstVoxelHUD_Drawing.cpp</div>
+                        <p><strong>Problem:</strong> HUD draws all debug elements regardless of screen position, wasting draw calls.</p>
+                        <div class="recommendation">Add viewport bounds check before drawing debug elements.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="low">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>Pause Menu: No Input Mode Restoration</h3>
+                        <span class="severity low">LOW</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/UI/VoxelPauseMenu.cpp</div>
+                        <p><strong>Problem:</strong> When pausing/unpausing, input mode isn't properly switched between GameOnly and UIOnly.</p>
+                        <div class="recommendation">Set <code>APlayerController::SetInputMode(FInputModeGameOnly())</code> on unpause.</div>
+                    </div>
+                </div>
+
+                <div class="issue" data-severity="low">
+                    <div class="issue-header" onclick="toggleIssue(this)">
+                        <h3>VoxelLogger: No Log Level Filtering</h3>
+                        <span class="severity low">LOW</span>
+                    </div>
+                    <div class="issue-body">
+                        <div class="file-path">FirstVoxel/Voxel/VoxelLogger.cpp</div>
+                        <p><strong>Problem:</strong> All log messages are output regardless of verbosity level, causing log spam in shipping builds.</p>
+                        <div class="recommendation">Use UE_LOG with appropriate verbosity levels and add compile-time log filtering.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Table -->
+        <div class="section">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>📊 Summary by Category</h2>
+                <span class="toggle-icon">▼</span>
+            </div>
+            <div class="section-content">
+                <table class="summary-table">
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th>Critical</th>
+                            <th>High</th>
+                            <th>Medium</th>
+                            <th>Low</th>
+                            <th>Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Core Voxel System</td>
+                            <td style="color:#f85149">2</td>
+                            <td style="color:#f0883e">3</td>
+                            <td style="color:#d29922">2</td>
+                            <td style="color:#58a6ff">0</td>
+                            <td><strong>7</strong></td>
+                        </tr>
+                        <tr>
+                            <td>World System</td>
+                            <td style="color:#f85149">1</td>
+                            <td style="color:#f0883e">2</td>
+                            <td style="color:#d29922">3</td>
+                            <td style="color:#58a6ff">0</td>
+                            <td><strong>6</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Generation & Noise</td>
+                            <td style="color:#f85149">0</td>
+                            <td style="color:#f0883e">2</td>
+                            <td style="color:#d29922">3</td>
+                            <td style="color:#58a6ff">0</td>
+                            <td><strong>5</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Biomes & Water</td>
+                            <td style="color:#f85149">0</td>
+                            <td style="color:#f0883e">1</td>
+                            <td style="color:#d29922">2</td>
+                            <td style="color:#58a6ff">3</td>
+                            <td><strong>6</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Game Framework & UI</td>
+                            <td style="color:#f85149">0</td>
+                            <td style="color:#f0883e">0</td>
+                            <td style="color:#d29922">2</td>
+                            <td style="color:#58a6ff">4</td>
+                            <td><strong>6</strong></td>
+                        </tr>
+                        <tr style="background:#21262d;font-weight:bold">
+                            <td>TOTAL</td>
+                            <td style="color:#f85149">3</td>
+                            <td style="color:#f0883e">8</td>
+                            <td style="color:#d29922">12</td>
+                            <td style="color:#58a6ff">7</td>
+                            <td><strong>30</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>Generated by Cline Autonomous Codebase Analyzer</p>
+            <p>Analysis completed: March 23, 2026 at 04:20 UTC+1</p>
+        </div>
+    </div>
+
+    <script>
+        function toggleSection(header) {
+            const content = header.nextElementSibling;
+            const icon = header.querySelector('.toggle-icon');
+            content.classList.toggle('collapsed');
+            icon.classList.toggle('collapsed');
+        }
+
+        function toggleIssue(header) {
+            const body = header.nextElementSibling;
+            body.classList.toggle('collapsed');
+        }
+
+        function filterIssues(severity) {
+            // Update button states
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.textContent.toLowerCase().includes(severity) || 
+                    (severity === 'all' && btn.textContent === 'All Issues')) {
+                    btn.classList.add('active');
+                }
+            });
+
+            // Filter issues
+            document.querySelectorAll('.issue').forEach(issue => {
+                if (severity === 'all') {
+                    issue.style.display = 'block';
+                } else {
+                    const issueSeverity = issue.dataset.severity;
+                    issue.style.display = issueSeverity === severity ? 'block' : 'none';
+                }
+            });
+        }
+
+        // Expand all sections on load
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.section-content').forEach(el => {
+                el.classList.remove('collapsed');
+            });
+        });
+    </script>
+</body>
+</html>

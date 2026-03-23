@@ -628,6 +628,7 @@ void EvaluateColumn_CrystalCaverns_AVX2(
         __m256 Guard1 = _mm256_cmp_ps(Z_v, CC_v, _CMP_GT_OQ);
         __m256 Guard2 = _mm256_cmp_ps(Z_v, _mm256_set1_ps(CC_base - (FadeDepth + 8000.f)), _CMP_LT_OQ);
         __m256 SkipMask = _mm256_or_ps(Guard1, Guard2);
+        if (_mm256_movemask_ps(SkipMask) == 0xFF) continue;
 
         // Calculate Fade
         __m256 num_fade = _mm256_sub_ps(CC_v, Z_v);
@@ -1255,7 +1256,7 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 dY = _mm256_sub_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(CRC.ForcedCraterCenter.Y));
                 __m256 Dist = _mm256_sqrt_ps(_mm256_fmadd_ps(dX, dX, _mm256_mul_ps(dY, dY)));
                 
-                __m256 Radius = _mm256_set1_ps(CRC.CentralCraterRadius * 0.5f);
+                __m256 Radius = _mm256_set1_ps(CRC.CentralCraterRadius);
                 __m256 NormDist = _mm256_div_ps(Dist, Radius);
 
                 __m256 CenterH_v = _mm256_set1_ps(CenterH);

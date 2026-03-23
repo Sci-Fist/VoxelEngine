@@ -18,6 +18,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerStart.h"
 #include "EngineUtils.h"
+#include "Voxel/Core/World/Spawn/VoxelSpawnHandlerComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "DrawDebugHelpers.h"
 #include "Misc/DateTime.h"
@@ -384,15 +385,14 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
             // iterates chunks that JUST became ready, not all loaded chunks.
             S->ChunksNeedingVisibilityCheck.Add(ChunkCoord);
 
-            // PERF Fix #3: Increment readiness counters so Tick() can check
-            // O(1) instead of scanning the entire InitialSpawnCoords array.
-            if (S->bWaitingForInitialSpawn)
+            if (S->SpawnHandlerComponent && S->SpawnHandlerComponent->IsWaitingForInitialSpawn())
             {
-                if (S->InitialSpawnCoords.Contains(ChunkCoord))
-                    ++S->InitialSpawnCollisionReadyCount;
-                else if (S->InitialSpawnCoords_Visual.Contains(ChunkCoord))
-                    ++S->InitialSpawnVisualReadyCount;
+                if (S->SpawnHandlerComponent->ContainsCollisionCoord(ChunkCoord))
+                    S->SpawnHandlerComponent->IncrementCollisionReady();
+                else if (S->SpawnHandlerComponent->ContainsVisualCoord(ChunkCoord))
+                    S->SpawnHandlerComponent->IncrementVisualReady();
             }
+
         }
     };
     if (WaterSystemComponent) WaterSystemComponent->InitChunkWater(Chunk);
@@ -500,186 +500,9 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
 // ============================================================
 void AVoxelWorld::ProcessInitialPlayerSpawn()
 {
-    APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
-    if (!Player) return;
-
-    if (!SpawnTargetPos.IsZero())
-        GenerationConfig.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
-
-    FVoxelGenerationConfig Config = GetEffectiveConfig(); // FIX #30
-    if (!SpawnTargetPos.IsZero())
-        Config.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
-
-
-    FVector Pos = SpawnTargetPos;
-    if (Pos.IsZero())
+    if (SpawnHandlerComponent)
     {
-        TArray<AActor*> PS;
-        UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PS);
-        if (PS.Num()>0&&PS[0]) Pos = PS[0]->GetActorLocation();
+        SpawnHandlerComponent->ProcessInitialPlayerSpawn();
     }
-    Pos.Z = 0.f; Pos = SnapToVoxelGrid(Pos);
-
-    const auto Wh         = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Config);
-    const float Surface   = Wh.SurfaceHeight;
-    const float SafeOff   = GetSafeSpawnHeightOffset();
-    float TargetZ         = Surface + SafeOff;
-    const float CraterW   = Wh.Weights.GetWeight(EVoxelBiome::Craters);
-    if (TargetZ > 100000.f || TargetZ < Surface - 1000.f) TargetZ = Surface + SafeOff;
-
-    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
-    const float HN  = FMath::Clamp(Surface/SC.MaxTerrainReference,0.f,1.f);
-    const float RN  = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference,0.f,1.f);
-    const float TS  = FMath::Clamp(HN*1.5f+RN*0.8f,0.f,1.f);
-    const float SkyAlt = FMath::Lerp(SC.MinAltitudeAboveTerrain,SC.BaseAltitudeAboveTerrain,TS) + HN*SC.HeightAltitudeBonus + RN*SC.RoughnessAltitudeBonus;
-    const float IHT = (SC.BaseIslandSize+HN*SC.HeightSizeBonus+RN*SC.RoughnessSizeBonus)*SC.ThicknessRatio;
-
-    bool bSky = false;
-    if (SkyAlt > Surface+5000.f && Surface < 50000.f)
-        for (float z2=SkyAlt+IHT; z2>=FMath::Max(SkyAlt-IHT,Surface+500.f); z2-=200.f)
-            if (DensityGenerator && DensityGenerator->GetDensity(Pos.X,Pos.Y,z2,Config)>0.f)
-            { TargetZ=z2+SafeOff; bSky=true; break; }
-
-    if (TargetZ > 100000.f || CraterW > 0.3f) TargetZ = Surface + SafeOff;
-
-    UE_LOG(LogVoxelWorld,Warning,TEXT("VoxelWorld: Spawn Pos=(%.0f,%.0f) Surface=%.0f Z=%.0f CraterW=%.2f Sky=%d CONFIG_DEPTH=%.0f CONFIG_RADIUS=%.0f"),
-        Pos.X,Pos.Y,Surface,TargetZ,CraterW,bSky?1:0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
-
-    Pos.Z = TargetZ; 
-    TargetCoordsZ = TargetZ + 25000.f; // aloft waiting area
-    CachedSurfaceHeight = Surface;
-    
-    Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
-
-    if (bWaitingForInitialSpawn) return;
-    InitialSpawnCoords.Empty();
-    InitialSpawnCollisionReadyCount = 0; // PERF Fix #3: reset for new spawn cycle
-    InitialSpawnVisualReadyCount    = 0;
-    bWaitingForInitialSpawn = true;
-
-    const FIntVector SpawnCoord  = WorldToChunkCoord(FVector(Pos.X,Pos.Y,TargetZ));
-    const FIntVector GroundCoord = WorldToChunkCoord(FVector(Pos.X,Pos.Y,Surface));
-    // Only lock the loading screen on the immediate spawn area + ground floor.
-    // This prevents generating 150+ empty air chunks if spawning on a skyland.
-    TSet<FIntVector> SpawnSet;
-    TSet<FIntVector> VisualSet;
-    
-    auto AddToCollision = [&](const FIntVector& C) { SpawnSet.Add(C); };
-    auto AddToVisual    = [&](const FIntVector& C) { VisualSet.Add(C); };
-
-    // 1. Adaptive Crater Zone depth volume sizing (COLLISION REQUIRED)
-    const float GridSize = ChunkSize * VoxelSize;
-    const float CraterRadius = Config.Craters.CentralCraterRadius; 
-    const int32 ChunkRadius = FMath::CeilToInt(CraterRadius / GridSize) + 4; // Buffer chunks outside rim
-    
-    for (int32 x = -ChunkRadius; x <= ChunkRadius; x++) 
-    for (int32 y2 = -ChunkRadius; y2 <= ChunkRadius; y2++)
-    {
-         if (x*x + y2*y2 > ChunkRadius * ChunkRadius) continue;
-
-         const float WX = (SpawnCoord.X + x + 0.5f) * GridSize;
-         const float WY = (SpawnCoord.Y + y2 + 0.5f) * GridSize;
-         const auto WhCol = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WX, WY, Config);
-         const int32 ColGroundZ = FMath::FloorToInt(WhCol.SurfaceHeight / GridSize);
-
-         const bool bCollisionNeeded = (FMath::Abs(x) <= 4 && FMath::Abs(y2) <= 4);
-
-         for (int32 z2 = -2; z2 <= 2; z2++)
-         {
-              if (bCollisionNeeded) AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, ColGroundZ + z2));
-              else                   AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, ColGroundZ + z2));
-         }
-    }
- 
-    // 2. General Visual Zone Radius (WIDE VISUALS)
-    // Add visual chunks around player for all spawns to ensure scenery is loaded.
-    const int32 VisualRadius = 16;
-    for (int32 x = -VisualRadius; x <= VisualRadius; x++)
-    for (int32 y2 = -VisualRadius; y2 <= VisualRadius; y2++)
-    {
-         if (FMath::Abs(x) <= ChunkRadius && FMath::Abs(y2) <= ChunkRadius) continue; // Skip core collision
-         AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
-    }
-
-    // 3. Add ground layer strictly beneath player if they spawn in the sky
-    if (FMath::Abs(SpawnCoord.Z - GroundCoord.Z) > 1)
-    {
-        for (int32 x=-25; x<=25; x++) for (int32 y2=-25; y2<=25; y2++)
-        {
-            const bool bInner = (FMath::Abs(x) <= 10 && FMath::Abs(y2) <= 10);
-            if (bInner)
-            {
-                AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
-                AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z + 1));
-                AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z - 1));
-            }
-            else
-            {
-                AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
-            }
-        }
-    }
-
-    TArray<FIntVector> SpawnCoords  = SpawnSet.Array();
-    TArray<FIntVector> VisualCoords = VisualSet.Array();
-
-    auto SortCoords = [SpawnCoord](const FIntVector& A, const FIntVector& B)
-    {
-        const bool bBA = (A.X==SpawnCoord.X && A.Y==SpawnCoord.Y && A.Z <= SpawnCoord.Z);
-        const bool bBB = (B.X==SpawnCoord.X && B.Y==SpawnCoord.Y && B.Z <= SpawnCoord.Z);
-        if (bBA && !bBB) return true; 
-        if (!bBA && bBB) return false;
-        return (FMath::Abs(A.X-SpawnCoord.X) + FMath::Abs(A.Y-SpawnCoord.Y) + FMath::Abs(A.Z-SpawnCoord.Z))
-             < (FMath::Abs(B.X-SpawnCoord.X) + FMath::Abs(B.Y-SpawnCoord.Y) + FMath::Abs(B.Z-SpawnCoord.Z));
-    };
-
-    SpawnCoords.Sort(SortCoords);
-    VisualCoords.Sort(SortCoords);
-
-    TArray<FIntVector> PriorityQueue;
-
-    InitialSpawnCoords_Visual.Empty();
-
-    for (const FIntVector& C : SpawnCoords)
-    { 
-        InitialSpawnCoords.Add(C); 
-        if (!LoadedChunks.Contains(C)) 
-        {
-            const bool bSync = (C.X == GroundCoord.X && C.Y == GroundCoord.Y && C.Z <= GroundCoord.Z && C.Z >= GroundCoord.Z - 2);
-            if (bSync) SpawnChunk(C, true); 
-            else       PriorityQueue.Add(C);
-        }
-    }
-
-    // Spawn visual chunks (rim, wider ground area) — async, throttled
-    for (const FIntVector& C : VisualCoords)
-    {
-        InitialSpawnCoords_Visual.Add(C);
-        if (!LoadedChunks.Contains(C))
-        {
-            PriorityQueue.Add(C);
-        }
-    }
-
-    if (PriorityQueue.Num() > 0)
-    {
-        TArray<FIntVector> NewQueue = PriorityQueue;
-        NewQueue.Append(GenerationQueue);
-        GenerationQueue = MoveTemp(NewQueue);
-        QueueHead = 0; // reset iterator head trigger
-    }
-
-    // --- FIX: Initialize counters for already-ready chunks ---
-    int32 PreCollision = 0;
-    for (const FIntVector& C : InitialSpawnCoords)
-        if (AVoxelChunk** P = LoadedChunks.Find(C)) if ((*P)->IsReady()) PreCollision++;
-    InitialSpawnCollisionReadyCount = PreCollision;
-
-    int32 PreVisual = 0;
-    for (const FIntVector& C : InitialSpawnCoords_Visual)
-        if (AVoxelChunk** P = LoadedChunks.Find(C)) if ((*P)->IsReady()) PreVisual++;
-    InitialSpawnVisualReadyCount = PreVisual;
-
-    UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Waiting for %d collision + %d visual spawn chunks. Pre-ready: collision=%d, visual=%d"),
-        InitialSpawnCoords.Num(), InitialSpawnCoords_Visual.Num(), PreCollision, PreVisual);
 }
+

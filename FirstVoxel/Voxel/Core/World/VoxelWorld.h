@@ -22,11 +22,17 @@ class AVoxelChunk;
 class UMaterialInterface;
 class UStaticMesh;
 class USceneComponent;
+class UVoxelStreamingComponent;
+class UVoxelSpawnHandlerComponent;
 
 UCLASS()
 class FIRSTVOXEL_API AVoxelWorld : public AActor
 {
     GENERATED_BODY()
+
+    friend class UVoxelStreamingComponent;
+    friend class UVoxelSpawnHandlerComponent;
+
 
 public:
     AVoxelWorld();
@@ -278,6 +284,13 @@ private:
 
     UPROPERTY(VisibleAnywhere, Category="Voxel|Water")
     class UVoxelWorldWaterComponent* WaterSystemComponent = nullptr;
+
+    UPROPERTY(VisibleAnywhere, Category="Voxel|Streaming")
+    class UVoxelStreamingComponent* StreamingComponent = nullptr;
+
+    UPROPERTY(VisibleAnywhere, Category="Voxel|Spawn")
+    class UVoxelSpawnHandlerComponent* SpawnHandlerComponent = nullptr;
+
 
     void ProcessInitialPlayerSpawn();
 

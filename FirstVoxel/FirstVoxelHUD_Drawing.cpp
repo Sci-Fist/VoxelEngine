@@ -186,7 +186,7 @@ void FirstVoxelHUDDraw::DrawLoadingScreen(AFirstVoxelHUD* HUD, UFont* Font)
 
     HUD->DrawRect(FLinearColor(0,0,0,0.5f),0,0,Canvas->SizeX,Canvas->SizeY);
     const float CX=Canvas->SizeX*0.5f, CY=Canvas->SizeY*0.5f;
-    const float ClusterY = CY - 240.f;
+    const float ClusterY = CY - 420.f;
 
     float TW,TH;
     HUD->GetTextSize(TEXT("G E N E R A T I N G   W O R L D . . ."),TW,TH,Font,1.5f);

@@ -13,7 +13,10 @@
 // let GameMode::HandleStartingNewPlayer handle possession as designed.
 
 #include "VoxelWorld.h"
+#include "Streaming/VoxelStreamingComponent.h"
+#include "Spawn/VoxelSpawnHandlerComponent.h"
 #include "FirstVoxelCharacter.h"
+
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -51,8 +54,11 @@ AVoxelWorld::AVoxelWorld()
 
     WaterComponent       = CreateDefaultSubobject<UVoxelWaterComponent>(TEXT("WaterComponent"));
     WaterSystemComponent = CreateDefaultSubobject<UVoxelWorldWaterComponent>(TEXT("WaterSystemComponent"));
+    StreamingComponent    = CreateDefaultSubobject<UVoxelStreamingComponent>(TEXT("StreamingComponent"));
+    SpawnHandlerComponent = CreateDefaultSubobject<UVoxelSpawnHandlerComponent>(TEXT("SpawnHandlerComponent"));
 
     bAutoGenerateOnBeginPlay = false;
+
 }
 
 AVoxelWorld::~AVoxelWorld() {}
@@ -170,146 +176,11 @@ void AVoxelWorld::Tick(float DeltaTime)
 
     if (GetWorld()->IsGameWorld())
     {
-        StreamingTimer += DeltaTime;
-        if (StreamingTimer >= StreamingInterval && !bWaitingForInitialSpawn)
-        { StreamingTimer = 0.f; UpdateChunkStreaming(); }
+        // Components tick themselves to handle Streaming and Initial Spawn updates.
     }
 
     DrainGenerationQueue();
 
-    // ── Initial spawn hover-lock ─────────────────────────────────────────
-    if (!bWaitingForInitialSpawn)
-    {
-        SpawnWaitAccum  = 0.f;
-        SpawnDelayAccum = 0.f;
-    }
-    else
-    {
-        SpawnWaitAccum += DeltaTime;
-        const bool bTimedOut = (SpawnWaitAccum > 900.f);
-
-        int32 ReadyCount = 0;
-        const int32 Total = InitialSpawnCoords.Num();
-        bool bAllReady = bTimedOut;
-
-        if (!bTimedOut)
-        {
-            // PERF Fix #3: O(1) counter check instead of O(N) scan of up to 6900 entries.
-        // InitialSpawnCollisionReadyCount is incremented in OnGenerationComplete.
-        const int32 CollisionTotal = InitialSpawnCoords.Num();
-        const int32 VisualTotal    = InitialSpawnCoords_Visual.Num();
-        bAllReady = (InitialSpawnCollisionReadyCount >= CollisionTotal) && (InitialSpawnVisualReadyCount >= VisualTotal);
-
-            // --- GRACE DELAY CUSHION ---
-            if (bAllReady)
-            {
-                SpawnDelayAccum += DeltaTime;
-                if (SpawnDelayAccum < 3.0f) // hold for 3 seconds of buffer safety
-                {
-                    bAllReady = false; 
-                }
-            }
-            else
-            {
-                SpawnDelayAccum = 0.f;
-            }
-
-        }
-        else
-        {
-            for (const FIntVector& C : InitialSpawnCoords)
-                if (AVoxelChunk** P = LoadedChunks.Find(C))
-                    if ((*P)->IsReady()) ++ReadyCount;
-        }
-
-        APawn* SpawnPlayer = UGameplayStatics::GetPlayerPawn(this, 0);
-        if (!SpawnPlayer) return;
-
-        if (!bAllReady)
-        {
-            if (ACharacter* Ch = Cast<ACharacter>(SpawnPlayer))
-            {
-                if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
-                {
-                    if (CMC->MovementMode != MOVE_None)
-                    {
-                        CMC->SetMovementMode(MOVE_None);
-                        CMC->bJustTeleported = true;
-                    }
-                }
-                if (AFirstVoxelCharacter* FVCh = Cast<AFirstVoxelCharacter>(Ch))
-                {
-                    if (!FVCh->bIsFirstPerson) FVCh->ToggleCameraMode();
-                }
-            }
-
-            FVector HoverPos = SpawnPlayer->GetActorLocation();
-            if (FMath::Abs(HoverPos.Z - TargetCoordsZ) > 1.0f)
-            {
-                HoverPos.Z = TargetCoordsZ;
-                SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
-            }
-        }
-        else
-        {
-            if (bTimedOut)
-                UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn timeout (%.1fs). Releasing with %d/%d ready."), SpawnWaitAccum, ReadyCount, Total);
-
-            bWaitingForInitialSpawn = false;
-            SpawnWaitAccum = SpawnDelayAccum = 0.f;
-            InitialSpawnCoords.Empty();
-            bGenerationActive.Store(false); // Unlock parallel chain gate
-
-            SpawnPlayer->SetActorHiddenInGame(false);
-
-            // === DROP PLAYER & HIDE HUD IMMEDIATELY ON CORE READY ===
-            if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
-            {
-                if (AFirstVoxelHUD* HUD = Cast<AFirstVoxelHUD>(PC->GetHUD()))
-                {
-                    HUD->LoadProgress = 1.f;
-                    HUD->bShowLoadBar = false;
-                }
-            }
-
-            SpawnPlayer->SetActorEnableCollision(true);
-            const FVector TraceOrigin = SpawnPlayer->GetActorLocation();
-            FHitResult Hit;
-            FCollisionQueryParams QP; QP.AddIgnoredActor(SpawnPlayer);
-            const FVector Start = TraceOrigin + FVector(0,0,50.f);
-            const FVector End   = TraceOrigin + FVector(0,0,-150000.f);
-            FCollisionShape Sphere = FCollisionShape::MakeSphere(30.f);
-            bool bHit2 = GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Visibility, Sphere, QP);
-            if (!bHit2)
-                bHit2 = GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, QP);
-
-            if (bHit2)
-            {
-                FVector LandPos = TraceOrigin;
-                LandPos.Z = Hit.ImpactPoint.Z + 101.f;
-                SpawnPlayer->SetActorLocation(LandPos, false, nullptr, ETeleportType::TeleportPhysics);
-            }
-
-            if (ACharacter* Ch = Cast<ACharacter>(SpawnPlayer))
-            {
-                if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
-                {
-                    CMC->Velocity = FVector::ZeroVector; 
-                    CMC->SetMovementMode(MOVE_Walking);
-                    CMC->UpdateFloorFromAdjustment(); 
-                    CMC->bJustTeleported = false; 
-                }
-
-                if (AFirstVoxelCharacter* FVCh = Cast<AFirstVoxelCharacter>(Ch))
-                {
-                    if (FVCh->bIsFirstPerson)
-                    {
-                        FVCh->ToggleCameraMode();
-                    }
-                }
-            }
-        }
-    }
 
     // ── Update Loading Screen HUD ────────────────────────────────────────
     if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
@@ -319,7 +190,8 @@ void AVoxelWorld::Tick(float DeltaTime)
             if (HUD->bShowLoadBar)
             {
                 const int32 TotalQ = GenerationQueue.Num();
-                if (!bWaitingForInitialSpawn && TotalQ > 0 && QueueHead >= TotalQ && ActiveGenerations == 0)
+                const bool bW = SpawnHandlerComponent ? SpawnHandlerComponent->IsWaitingForInitialSpawn() : bWaitingForInitialSpawn;
+                if (!bW && TotalQ > 0 && QueueHead >= TotalQ && ActiveGenerations == 0)
                 {
                     HUD->LoadProgress = 1.f;
                     HUD->bShowLoadBar = false;
@@ -335,7 +207,7 @@ void AVoxelWorld::Tick(float DeltaTime)
         }
     }
 
-    CheckCloseRangeVisibility();
+    // Handled by StreamingComponent
 
     // ── Dirty-chunk rebuild from DirtyRebuildQueue ───────────────────────
     // FIX-4: Early exit — if generation quota is already full, no point

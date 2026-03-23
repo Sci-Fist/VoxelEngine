@@ -244,6 +244,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             Item.Weights.Normalize();
 
             Item.SurfH = SurfH[k];
+            Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], LocalConfig);
             
             // Tier 4 fallback: If any unsupported biome is active, re-calculate scalar.
             if (Item.SurfH == 0.f)
@@ -380,8 +381,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             // New: uses NeutralH (~9840cm) → SkyLB = ~16240cm
             //      → only chunks above 16240cm get skylands → visible above rim.
             const float CraterW = Weights.GetWeight(EVoxelBiome::Craters);
-            const float BaseH   = FMath::Lerp(NeutralH, SurfH, CraterW);
-            const float SkyLB   = BaseH + SC.MinAltitudeAboveTerrain
+            const float SkyLB   = NeutralH + SC.MinAltitudeAboveTerrain
                                 - SC.BaseIslandSize * SC.ThicknessRatio - 1000.f;
 
             if (MaxWZ < SkyLB)
@@ -501,7 +501,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             if (CraterW > 0.05f) 
             {
                 const float CraterDrop = FMath::Max(0.f, NeutralH - SurfH);
-                DynamicMinDepth += CraterDrop + (CraterW * 2500.f); // Pushes down proportionate to drop + safety buffer
+                DynamicMinDepth += CraterDrop + (CraterW * 4500.f); // Pushes down proportionate to drop + heavier safety buffer
             }
 
             // Caves can travel travel deep down down, so start start at index 0.
