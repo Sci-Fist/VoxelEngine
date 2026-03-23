@@ -213,6 +213,14 @@ struct FVoxelMeshGenerator
         // When provided, ColumnColors skips GetBiomeWeightsStatic entirely.
         const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights = nullptr);
 
+    static void GenerateHeightmapMesh(
+        const TArray<float>&          Heights,
+        const TArray<struct FVoxelBiomeWeightMap>& Weights,
+        int32                         InChunkSize,
+        float                         InVoxelSize,
+        const FVector&                ChunkOrigin,
+        FVoxelMeshOutput&             OutMesh,
+        int32                         InStepSize = 1);
 
 private:
 	static FVector InterpolateEdge(

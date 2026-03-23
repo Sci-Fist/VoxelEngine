@@ -120,64 +120,32 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
 // ─────────────────────────────────────────────────────────────────────────────
 static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig& CRC, float BaseHeight)
 {
+    static const float LUT[32] = {
+        -1.00f, -1.00f, -1.00f, -0.99f, -0.97f, -0.94f, -0.88f, -0.78f, -0.64f, -0.45f, -0.15f,  0.20f,
+         0.55f,  0.90f,  1.15f,  1.32f,  1.35f,  1.28f,  1.10f,  0.85f,  0.55f,  0.28f,  0.10f,  0.03f,
+         0.01f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f
+    };
 
+    const float MaxDist = 1.80f;
+    const float Normalized = FMath::Clamp(S.NormDist / MaxDist, 0.f, 1.f);
+    const float Indexf = Normalized * 31.f;
+    const int32 Index0 = FMath::FloorToInt(Indexf);
+    const int32 Index1 = FMath::Min(Index0 + 1, 31);
+    const float Alpha  = Indexf - Index0;
 
-    const float FloorH  = S.BasePlains + S.EffectiveDepth;         // deepest point
-    
-    // Depth Seal Clamp: prevent crater depths from plunging indefinitely below Sea Level.
-    // Ensure floor height remains dry for cinematic aesthetics unless config explicitly allows oceans.
+    const float Mult = FMath::Lerp(LUT[Index0], LUT[Index1], Alpha);
+
+    const float FloorH = S.BasePlains + S.EffectiveDepth;
     float SafeFloorH = FloorH;
-    if (SafeFloorH < S.SeaLevel + 100.f) 
-    {
-        SafeFloorH = S.SeaLevel + 100.f;
-    }
+    if (SafeFloorH < S.SeaLevel + 100.f) SafeFloorH = S.SeaLevel + 100.f;
 
-    const float WallBaseH = SafeFloorH + FMath::Abs(S.EffectiveDepth) * 0.12f; // wall base is slightly higher than floor
-    
-    // NEW: Anchor relative to unflattened hills to elevate crest above mountaintopswards onwards !!
-    const float RimH    = FMath::Max(BaseHeight, S.SeaLevel) + S.RimHeight; // rim crest height
+    const float RimH = FMath::Max(BaseHeight, S.SeaLevel) + S.RimHeight;
 
-
-    float H;
-
-    static constexpr float InnerWallStart = 0.78f; // Narrower floor, steeper wall
-
-    if (S.NormDist < FloorEnd)
+    if (Mult < 0.f)
     {
-        // Zone 1: flat floor — rises 12% toward wall for natural bowl look
-        // Use power-4 so it's almost flat in the center, bends near wall
-        const float FloorT = S.NormDist / FloorEnd;
-        const float Rise   = FMath::Pow(FloorT, 4.f) * FMath::Abs(S.EffectiveDepth) * 0.12f;
-        H = SafeFloorH + Rise;
+        return FMath::Lerp(S.BasePlains, SafeFloorH, -Mult);
     }
-    else if (S.NormDist < WallEnd)
-    {
-        // Zone 2: concave inner wall — Power curve to make it scoop inward and steep up!
-        const float SmoothT = (S.NormDist - FloorEnd) / (WallEnd - FloorEnd);
-        const float CurveT  = FMath::Pow(SmoothT, 1.75f); // conciliatory scoop curvature
-        H = FMath::Lerp(WallBaseH, RimH, FMath::Clamp(CurveT, 0.f, 1.f));
-    }
-    else if (S.NormDist < RimPeak)
-    {
-        // Zone 3: rim crest — slight additional peak, then descends to outer rim
-        // Sin curve: 0 at WallEnd (=RimH), peaks 1/3 through, back to RimH at RimPeak
-        const float CrestT  = (S.NormDist - WallEnd) / (RimPeak - WallEnd);  // 0→1
-        const float CrestExtra = FMath::Sin(CrestT * 3.14159f) * S.RimHeight * 0.35f;
-        H = RimH + CrestExtra;
-    }
-    else if (S.NormDist < RimEnd)
-    {
-        // Zone 4: outer rim dropoff — SmoothStep from RimH back to BasePlains
-        const float DropT = FMath::SmoothStep(RimPeak, RimEnd, S.NormDist);
-        H = FMath::Lerp(RimH, S.BasePlains, DropT);
-    }
-    else
-    {
-        // Zone 5: beyond crater — terrain level (ejecta added separately)
-        H = S.BasePlains;
-    }
-
-    return H;
+    return FMath::Lerp(S.BasePlains, RimH, Mult);
 }
 
 // ── Rim angular roughness (replaces the old RimDetails function) ──────────────

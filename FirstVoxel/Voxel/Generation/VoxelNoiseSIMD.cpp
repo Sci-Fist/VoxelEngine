@@ -973,15 +973,7 @@ void EvaluateColumn_Skylands_AVX2(
         );
 
         // 6. Craters
-        __m256 CraterN = Noise3D_AVX2(
-            _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(Config.Craters.Frequency*0.5f)),
-            _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(Config.Craters.Frequency*0.5f)),
-            _mm256_set1_ps(200.f), PermTable);
-            
-        OutWeights.Craters = SmoothStep_AVX2(
-            _mm256_set1_ps(Config.Craters.ImpactThreshold + 0.1f), 
-            _mm256_set1_ps(Config.Craters.ImpactThreshold), 
-            CraterN);
+        OutWeights.Craters = Zero;
 
         // FIX: Force Crater biome weight for the Central Spawn Crater Absolute Radius
         if (Config.Craters.CentralCraterRadius > 0.f)
@@ -1258,8 +1250,8 @@ void EvaluateColumn_Skylands_AVX2(
             {
                 const FCraterBiomeConfig& CRC = Config.Craters;
 
-                __m256 dX = _mm256_sub_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(CRC.ForcedCraterCenter.X));
-                __m256 dY = _mm256_sub_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(CRC.ForcedCraterCenter.Y));
+                __m256 dX = _mm256_sub_ps(X_v, _mm256_set1_ps(CRC.ForcedCraterCenter.X));
+                __m256 dY = _mm256_sub_ps(Y_v, _mm256_set1_ps(CRC.ForcedCraterCenter.Y));
                 __m256 Dist = _mm256_sqrt_ps(_mm256_fmadd_ps(dX, dX, _mm256_mul_ps(dY, dY)));
                 
                 __m256 Radius = _mm256_set1_ps(CRC.CentralCraterRadius);
@@ -1267,42 +1259,59 @@ void EvaluateColumn_Skylands_AVX2(
 
                 __m256 CenterH_v = _mm256_set1_ps(CenterH);
                 
-                // Continuous Spline bounds
-                __m256 R0 = _mm256_set1_ps(0.01f); // Floor End
-                __m256 R1 = _mm256_set1_ps(0.93f); // Rim Crest
-                __m256 R2 = _mm256_set1_ps(1.05f); // Rim Dropoff End
+                // Constants matching VoxelBiomeGenerators_Craters.cpp exact coefficients
+                __m256 FloorEnd_v = _mm256_set1_ps(0.65f);
+                __m256 WallEnd_v  = _mm256_set1_ps(0.82f);
+                __m256 RimPeak_v  = _mm256_set1_ps(0.94f);
+                __m256 RimEnd_v   = _mm256_set1_ps(1.15f);
 
-                // Floor flattening blend
-                __m256 T_Floor = _mm256_div_ps(_mm256_sub_ps(NormDist, R0), _mm256_sub_ps(R2, R0));
-                T_Floor = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Floor));
-                __m256 Smooth_Floor = SmoothStep_AVX2(Zero, One, T_Floor);
-                __m256 C_Mask_Floor = _mm256_cmp_ps(NormDist, R0, _CMP_LT_OQ);
-                __m256 FlatBlend = _mm256_blendv_ps(Smooth_Floor, Zero, C_Mask_Floor);
+                __m256 Depth_v = _mm256_set1_ps(CRC.CentralCraterDepth * 1.25f); // stays negative
+                __m256 FloorH = _mm256_add_ps(CenterH_v, Depth_v);
 
-                __m256 BasePlains = Lerp_AVX2(FlatBlend, CenterH_v, OutSurfH);
+                // Depth Seal Clamp
+                __m256 SafeFloorH = _mm256_max_ps(FloorH, _mm256_set1_ps(Config.SeaLevel + 100.f));
+                __m256 AbsDepth = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), Depth_v);
 
-                __m256 Depth = _mm256_set1_ps(CRC.CentralCraterDepth * 1.25f);
-                __m256 RimH = _mm256_set1_ps(CRC.CentralCraterRimHeight * 1.8f);
+                __m256 RimHeight_v = _mm256_set1_ps(CRC.CentralCraterRimHeight);
+                __m256 SeaLevel_v  = _mm256_set1_ps(Config.SeaLevel);
+                __m256 RimH = _mm256_add_ps(_mm256_max_ps(OutSurfH, SeaLevel_v), RimHeight_v);
 
-                // 1. Inner Wall
-                __m256 T_Wall = _mm256_div_ps(_mm256_sub_ps(NormDist, R0), _mm256_sub_ps(R1, R0));
-                T_Wall = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Wall));
-                __m256 WallH = _mm256_add_ps(_mm256_mul_ps(SmoothStep_AVX2(Zero, One, T_Wall), _mm256_sub_ps(RimH, Depth)), Depth);
-                WallH = _mm256_add_ps(BasePlains, WallH);
+                __m256 WallBaseH = _mm256_fmadd_ps(AbsDepth, _mm256_set1_ps(0.12f), SafeFloorH);
 
-                // 2. Outer Dropoff
-                __m256 T_Drop = _mm256_div_ps(_mm256_sub_ps(NormDist, R1), _mm256_sub_ps(R2, R1));
-                T_Drop = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Drop));
-                __m256 DropH = Lerp_AVX2(SmoothStep_AVX2(Zero, One, T_Drop), _mm256_add_ps(BasePlains, RimH), BasePlains);
+                static const float LUT[32] = {
+                    -1.00f, -1.00f, -1.00f, -0.99f, -0.97f, -0.94f, -0.88f, -0.78f, -0.64f, -0.45f, -0.15f,  0.20f,
+                     0.55f,  0.90f,  1.15f,  1.32f,  1.35f,  1.28f,  1.10f,  0.85f,  0.55f,  0.28f,  0.10f,  0.03f,
+                     0.01f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f
+                };
 
-                // 3. Combine with blends
-                __m256 C_Mask_Crest = _mm256_cmp_ps(NormDist, R1, _CMP_LT_OQ);
-                __m256 CraterH = _mm256_blendv_ps(DropH, WallH, C_Mask_Crest);
+                __m256 MaxDist_v = _mm256_set1_ps(1.80f);
+                __m256 Normalized = _mm256_max_ps(_mm256_setzero_ps(), _mm256_min_ps(_mm256_set1_ps(1.f), _mm256_div_ps(NormDist, MaxDist_v)));
+                __m256 Indexf = _mm256_mul_ps(Normalized, _mm256_set1_ps(31.f));
+                __m256 Index0_f = _mm256_floor_ps(Indexf);
+                __m256 Index1_f = _mm256_min_ps(_mm256_add_ps(Index0_f, _mm256_set1_ps(1.f)), _mm256_set1_ps(31.f));
 
-                // 4. Domimance Fade
-                __m256 T_Fade = _mm256_div_ps(_mm256_sub_ps(NormDist, _mm256_set1_ps(0.97f)), _mm256_set1_ps(1.80f - 0.97f));
-                T_Fade = _mm256_max_ps(Zero, _mm256_min_ps(One, T_Fade));
-                __m256 Dominance = _mm256_sub_ps(One, SmoothStep_AVX2(Zero, One, T_Fade));
+                __m256i Index0_i = _mm256_cvtps_epi32(Index0_f);
+                __m256i Index1_i = _mm256_cvtps_epi32(Index1_f);
+
+                __m256 v0 = _mm256_i32gather_ps(LUT, Index0_i, 4);
+                __m256 v1 = _mm256_i32gather_ps(LUT, Index1_i, 4);
+
+                __m256 Alpha = _mm256_sub_ps(Indexf, Index0_f);
+                __m256 Mult = _mm256_add_ps(v0, _mm256_mul_ps(Alpha, _mm256_sub_ps(v1, v0)));
+
+                __m256 NegMask = _mm256_cmp_ps(Mult, _mm256_setzero_ps(), _CMP_LT_OQ);
+                __m256 AbsMult = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), Mult);
+
+                __m256 H_neg = Lerp_AVX2(AbsMult, SafeFloorH, OutSurfH);
+                __m256 H_pos = Lerp_AVX2(Mult, RimH, OutSurfH);
+
+                __m256 CraterH = _mm256_blendv_ps(H_pos, H_neg, NegMask);
+
+                // Dominance Fade Constants
+                __m256 FadeStart_v = _mm256_set1_ps(1.10f); // matching scalar FadeStart
+                __m256 FadeEnd_v   = _mm256_set1_ps(1.80f); // matching scalar FadeEnd
+                __m256 T_Fade = SmoothStep_AVX2(FadeStart_v, FadeEnd_v, NormDist);
+                __m256 Dominance = _mm256_sub_ps(_mm256_set1_ps(1.f), T_Fade);
 
                 OutSurfH = Lerp_AVX2(Dominance, OutSurfH, CraterH);
             }

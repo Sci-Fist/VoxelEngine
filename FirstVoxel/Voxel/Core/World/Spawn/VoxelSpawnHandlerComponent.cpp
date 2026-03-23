@@ -234,11 +234,16 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
             const int32 ColGroundZ = FMath::FloorToInt(WhCol.SurfaceHeight / GridSize);
 
             const bool bCollisionNeeded = (FMath::Abs(x) <= 4 && FMath::Abs(y2) <= 4);
-
-            for (int32 z2 = -2; z2 <= 2; z2++)
+            if (bCollisionNeeded)
             {
-                if (bCollisionNeeded) AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, ColGroundZ + z2));
-                else                   AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, ColGroundZ + z2));
+                for (int32 z2 = -2; z2 <= 2; z2++)
+                {
+                    AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, ColGroundZ + z2));
+                }
+            }
+            else
+            {
+                AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, ColGroundZ));
             }
         }
     }

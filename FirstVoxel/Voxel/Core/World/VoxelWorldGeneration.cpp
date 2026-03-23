@@ -148,8 +148,9 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 
     const FVector     Anchor   = SpawnTargetPos;
     const FIntVector  Origin   = WorldToChunkCoord(Anchor);
-    const FIntVector  MinCoord = Origin - FIntVector(RenderDistanceXY, RenderDistanceXY, RenderDistanceZ);
-    const FIntVector  MaxCoord = Origin + FIntVector(RenderDistanceXY, RenderDistanceXY, RenderDistanceZ);
+    const int32 MaxRadius = MidRenderDistanceXY; // Cap at Zone B for speed (covers 640m rim)
+    const FIntVector  MinCoord = Origin - FIntVector(MaxRadius, MaxRadius, RenderDistanceZ);
+    const FIntVector  MaxCoord = Origin + FIntVector(MaxRadius, MaxRadius, RenderDistanceZ);
     const FIntVector  Center   = MinCoord + (MaxCoord - MinCoord) / 2;
 
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Chunks (%d,%d,%d)→(%d,%d,%d)"),
@@ -225,14 +226,33 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
                     ExtraMaxZ = FMath::CeilToInt(Cfg.Craters.CentralCraterRimHeight    / GridSize) + 4;
                 }
 
+                // Cascaded Z bounds setup based on radial distance
+                const int32 dx_c = x - Center.X;
+                const int32 dy_c = (MinCoord.Y + y_off + b) - Center.Y;
+                const int32 DistSq_C = dx_c * dx_c + dy_c * dy_c;
+
+                int32 EffMinZ = 1;
+                int32 EffMaxZ = 1;
+
+                if (DistSq_C <= RenderDistanceXY * RenderDistanceXY)
+                {
+                    EffMinZ = 2 + ExtraMinZ;
+                    EffMaxZ = 12 + ExtraMaxZ;
+                }
+                else if (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY)
+                {
+                    EffMinZ = MidRenderDistanceZ;
+                    EffMaxZ = MidRenderDistanceZ;
+                }
+
                 for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
                 {
                     const FIntVector C(x, y, z);
                     if (LoadedChunks.Contains(C)) continue;
 
                     bool bValid = false;
-                    if (z >= (GroundZ - 2 - ExtraMinZ) && z <= (GroundZ + 12 + ExtraMaxZ)) bValid = true;
-                    else if (z >= SkyZ_Min && z <= SkyZ_Max) bValid = true;
+                    if (z >= (GroundZ - EffMinZ) && z <= (GroundZ + EffMaxZ)) bValid = true;
+                    else if (z >= SkyZ_Min && z <= SkyZ_Max && DistSq_C <= SkylandsRenderDistanceXY * SkylandsRenderDistanceXY) bValid = true;
 
                     if (bValid)
                     {
@@ -259,14 +279,33 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
              const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
              const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
 
+             // Cascaded Z bounds setup based on radial distance
+             const int32 dx_c = x - Center.X;
+             const int32 dy_c = y - Center.Y;
+             const int32 DistSq_C = dx_c * dx_c + dy_c * dy_c;
+
+             int32 EffMinZ = 1;
+             int32 EffMaxZ = 1;
+
+             if (DistSq_C <= RenderDistanceXY * RenderDistanceXY)
+             {
+                 EffMinZ = 2;
+                 EffMaxZ = 12;
+             }
+             else if (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY)
+             {
+                 EffMinZ = MidRenderDistanceZ;
+                 EffMaxZ = MidRenderDistanceZ;
+             }
+
              for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
              {
                  const FIntVector C(x, y, z);
                  if (LoadedChunks.Contains(C)) continue;
 
                  bool bValid = false;
-                 if (z >= GroundZ - 2 && z <= GroundZ + 12) bValid = true;
-                 else if (z >= SkyZ_Min && z <= SkyZ_Max) bValid = true;
+                 if (z >= (GroundZ - EffMinZ) && z <= (GroundZ + EffMaxZ)) bValid = true;
+                 else if (z >= SkyZ_Min && z <= SkyZ_Max && DistSq_C <= SkylandsRenderDistanceXY * SkylandsRenderDistanceXY) bValid = true;
 
                  if (bValid)
                  {

@@ -350,3 +350,167 @@ void FVoxelMeshGenerator::GenerateMesh(
                        X,Y,D0>0.f,FVector(0,0,1)); }
     }
 }
+
+// ---------------------------------------------------------------------------
+// GenerateHeightmapMesh
+// ---------------------------------------------------------------------------
+void FVoxelMeshGenerator::GenerateHeightmapMesh(
+    const TArray<float>&          Heights,
+    const TArray<FVoxelBiomeWeightMap>& Weights,
+    int32                         InChunkSize,
+    float                         InVoxelSize,
+    const FVector&                ChunkOrigin,
+    FVoxelMeshOutput&             OutMesh,
+    int32                         InStepSize)
+{
+    OutMesh.Reset();
+
+    const int32 EffectiveSize = InChunkSize / InStepSize;
+    const float EffVoxelSize  = InVoxelSize * (float)InStepSize;
+    const int32 S             = EffectiveSize + 3; // Padded size
+
+    TArray<int32> VertexIndices;
+    VertexIndices.SetNumUninitialized((EffectiveSize + 1) * (EffectiveSize + 1));
+
+    int32 VertexCount = 0;
+    for (int32 ly = 0; ly <= EffectiveSize; ++ly)
+    for (int32 lx = 0; lx <= EffectiveSize; ++lx)
+    {
+        const int32 X = lx + 1;
+        const int32 Y = ly + 1;
+        const int32 HIdx = X + Y * S;
+
+        if (!Heights.IsValidIndex(HIdx)) continue;
+
+        const float Height = Heights[HIdx];
+        const FVector LocalPos(lx * EffVoxelSize, ly * EffVoxelSize, Height - ChunkOrigin.Z);
+
+        OutMesh.FlatMesh.Vertices.Add(LocalPos);
+
+        // Normals: compute from adjacent height samples for decent look
+        float H_Right = Heights[FMath::Clamp(X+1, 0, S-1) + Y*S];
+        float H_Left  = Heights[FMath::Clamp(X-1, 0, S-1) + Y*S];
+        float H_Up    = Heights[X + FMath::Clamp(Y+1, 0, S-1)*S];
+        float H_Down  = Heights[X + FMath::Clamp(Y-1, 0, S-1)*S];
+
+        FVector TangentX(2.0f * EffVoxelSize, 0.0f, H_Right - H_Left);
+        FVector TangentY(0.0f, 2.0f * EffVoxelSize, H_Up - H_Down);
+        FVector Normal = FVector::CrossProduct(TangentX, TangentY).GetSafeNormal();
+
+        if (Normal.Z < 0.f) Normal = -Normal;
+
+        OutMesh.FlatMesh.Normals.Add(Normal);
+
+        // UVs
+        const FVector WorldPos = ChunkOrigin + LocalPos;
+        const float s = InVoxelSize * 4.f; // Match MakeUV scaling
+        OutMesh.FlatMesh.UVs.Add(FVector2D(WorldPos.X / s, WorldPos.Y / s));
+
+        // Colors
+        if (Weights.IsValidIndex(HIdx))
+        {
+            const FVoxelBiomeWeightMap& W = Weights[HIdx];
+            FLinearColor C(W.Forest, W.Desert, W.Peaks + W.Cliffs, W.Craters + W.Mesa);
+            OutMesh.FlatMesh.VertexColors.Add(C.ToFColor(false));
+        }
+        else
+        {
+            OutMesh.FlatMesh.VertexColors.Add(FColor::Green);
+        }
+
+        OutMesh.FlatMesh.Tangents.Add(FProcMeshTangent(1,0,0));
+
+        VertexIndices[lx + ly * (EffectiveSize + 1)] = VertexCount++;
+    }
+
+    // ---------------------------------------------------------------------------
+    // 1. Main Grid Triangles (Double-Sided)
+    // ---------------------------------------------------------------------------
+    for (int32 ly = 0; ly < EffectiveSize; ++ly)
+    for (int32 lx = 0; lx < EffectiveSize; ++lx)
+    {
+        int32 i0 = VertexIndices[lx + ly * (EffectiveSize + 1)];
+        int32 i1 = VertexIndices[(lx + 1) + ly * (EffectiveSize + 1)];
+        int32 i2 = VertexIndices[(lx + 1) + (ly + 1) * (EffectiveSize + 1)];
+        int32 i3 = VertexIndices[lx + (ly + 1) * (EffectiveSize + 1)];
+
+        // Front Face
+        OutMesh.FlatMesh.Triangles.Add(i0);
+        OutMesh.FlatMesh.Triangles.Add(i1);
+        OutMesh.FlatMesh.Triangles.Add(i2);
+
+        OutMesh.FlatMesh.Triangles.Add(i0);
+        OutMesh.FlatMesh.Triangles.Add(i2);
+        OutMesh.FlatMesh.Triangles.Add(i3);
+
+        // Back Face (Double Sided for steeper inner walls)
+        OutMesh.FlatMesh.Triangles.Add(i0);
+        OutMesh.FlatMesh.Triangles.Add(i2);
+        OutMesh.FlatMesh.Triangles.Add(i1);
+
+        OutMesh.FlatMesh.Triangles.Add(i0);
+        OutMesh.FlatMesh.Triangles.Add(i3);
+        OutMesh.FlatMesh.Triangles.Add(i2);
+    }
+
+    // ---------------------------------------------------------------------------
+    // 2. Add Border Skirt to seal heightmap boundary gaps with 3D terrain
+    // ---------------------------------------------------------------------------
+    const float SkirtDepth = 20000.f; // 200m drop
+    
+    auto AddSkirtQuad = [&](int32 i0_top, int32 i1_top, const FVector& Pos0, const FVector& Pos1)
+    {
+        int32 i0_bot = OutMesh.FlatMesh.Vertices.Add(Pos0 - FVector(0, 0, SkirtDepth));
+        int32 i1_bot = OutMesh.FlatMesh.Vertices.Add(Pos1 - FVector(0, 0, SkirtDepth));
+
+        // Smooth norm facing upwards for alignment, or Outward? 
+        OutMesh.FlatMesh.Normals.Add(FVector(0,0,1));
+        OutMesh.FlatMesh.Normals.Add(FVector(0,0,1));
+        
+        OutMesh.FlatMesh.VertexColors.Add(FColor::Green);
+        OutMesh.FlatMesh.VertexColors.Add(FColor::Green);
+        OutMesh.FlatMesh.UVs.Add(FVector2D(0,0));
+        OutMesh.FlatMesh.UVs.Add(FVector2D(0,0));
+        OutMesh.FlatMesh.Tangents.Add(FProcMeshTangent(1,0,0));
+        OutMesh.FlatMesh.Tangents.Add(FProcMeshTangent(1,0,0));
+
+        // Quad triangles: outward facing roughly (We can add both wind sets to make it double-sided)
+        // Set 1: outwards/inside
+        OutMesh.FlatMesh.Triangles.Add(i0_top);
+        OutMesh.FlatMesh.Triangles.Add(i0_bot);
+        OutMesh.FlatMesh.Triangles.Add(i1_top);
+
+        OutMesh.FlatMesh.Triangles.Add(i1_top);
+        OutMesh.FlatMesh.Triangles.Add(i0_bot);
+        OutMesh.FlatMesh.Triangles.Add(i1_bot);
+    };
+
+    // 1. Left Edge (lx = 0)
+    for (int32 ly = 0; ly < EffectiveSize; ++ly)
+    {
+        int32 i0 = VertexIndices[0 + ly * (EffectiveSize + 1)];
+        int32 i1 = VertexIndices[0 + (ly + 1) * (EffectiveSize + 1)];
+        AddSkirtQuad(i0, i1, OutMesh.FlatMesh.Vertices[i0], OutMesh.FlatMesh.Vertices[i1]);
+    }
+    // 2. Right Edge (lx = EffectiveSize)
+    for (int32 ly = 0; ly < EffectiveSize; ++ly)
+    {
+        int32 i0 = VertexIndices[EffectiveSize + ly * (EffectiveSize + 1)];
+        int32 i1 = VertexIndices[EffectiveSize + (ly + 1) * (EffectiveSize + 1)];
+        AddSkirtQuad(i1, i0, OutMesh.FlatMesh.Vertices[i1], OutMesh.FlatMesh.Vertices[i0]);
+    }
+    // 3. Top Edge (ly = 0)
+    for (int32 lx = 0; lx < EffectiveSize; ++lx)
+    {
+        int32 i0 = VertexIndices[lx + 0 * (EffectiveSize + 1)];
+        int32 i1 = VertexIndices[(lx + 1) + 0 * (EffectiveSize + 1)];
+        AddSkirtQuad(i1, i0, OutMesh.FlatMesh.Vertices[i1], OutMesh.FlatMesh.Vertices[i0]);
+    }
+    // 4. Bottom Edge (ly = EffectiveSize)
+    for (int32 lx = 0; lx < EffectiveSize; ++lx)
+    {
+        int32 i0 = VertexIndices[lx + EffectiveSize * (EffectiveSize + 1)];
+        int32 i1 = VertexIndices[(lx + 1) + EffectiveSize * (EffectiveSize + 1)];
+        AddSkirtQuad(i0, i1, OutMesh.FlatMesh.Vertices[i0], OutMesh.FlatMesh.Vertices[i1]);
+    }
+}

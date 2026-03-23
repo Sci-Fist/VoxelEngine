@@ -160,11 +160,13 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     const FIntVector& InChunkCoord, const FVector& InWorldOrigin,
     int32 InChunkSize, float InVoxelSize, int32 InStepSize,
     const FVoxelGenerationConfig& InConfig, IVoxelDensityProvider* InProvider,
-    float InFoliageDensity, float InMaxFoliageSlope, struct FVoxelDataMap* InDataMap)
+    float InFoliageDensity, float InMaxFoliageSlope, struct FVoxelDataMap* InDataMap,
+    bool InIsDistantHeightmesh)
     : ChunkCoord(InChunkCoord), WorldOrigin(InWorldOrigin), ChunkSize(InChunkSize)
     , VoxelSize(InVoxelSize), StepSize(InStepSize), Config(InConfig)
     , DensityProvider(InProvider), FoliageDensity(InFoliageDensity)
     , MaxFoliageSlope(InMaxFoliageSlope), DataMap(InDataMap)
+    , bIsDistantHeightmesh(InIsDistantHeightmesh)
 {
     for (EVoxelBiome Biome : GBiomeOrder)
     {
@@ -416,6 +418,12 @@ void FVoxelGeneratorTask::BuildDensityField()
         ColumnSurfaceH[ColIdx] = Item.SurfH;
     }
 
+    if (bIsDistantHeightmesh)
+    {
+        PostProcessDensities(TotalSamples);
+        return;
+    }
+
     // ── DataMap edit arrays ────────────────────────────────────────────────
     TArray<bool>  DenseHasEdit;
     TArray<float> DenseEditVals;
@@ -618,10 +626,18 @@ void FVoxelGeneratorTask::BuildMesh()
     }
 
     MeshOutput.Reset();
-    FVoxelMeshGenerator::GenerateMesh(
-        Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize,
-        &ScratchBuffers,
-        &ColumnWeights); // PERF-1: pass precomputed weights → ColumnColors skips noise
+    if (bIsDistantHeightmesh)
+    {
+        FVoxelMeshGenerator::GenerateHeightmapMesh(
+            ColumnSurfaceH, ColumnWeights, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, StepSize);
+    }
+    else
+    {
+        FVoxelMeshGenerator::GenerateMesh(
+            Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize,
+            &ScratchBuffers,
+            &ColumnWeights); // PERF-1: pass precomputed weights → ColumnColors skips noise
+    }
     UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: [%d,%d,%d] Flat=%d Slope=%d"),
         ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
         MeshOutput.FlatMesh.Vertices.Num(), MeshOutput.SlopeMesh.Vertices.Num()));

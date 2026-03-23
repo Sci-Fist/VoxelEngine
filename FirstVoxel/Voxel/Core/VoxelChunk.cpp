@@ -135,7 +135,7 @@ void AVoxelChunk::GenerateAsync()
 		FScopeLock Lock(&TaskLock);
 		CurrentTask = MakeShared<FVoxelGeneratorTask>(
 			ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
-			GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap);
+			GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap, (LOD >= 2));
 		LocalTask = CurrentTask;
 	}
 	TWeakObjectPtr<AVoxelChunk>     SafeThis(this);
@@ -161,7 +161,7 @@ void AVoxelChunk::GenerateSync()
 		FScopeLock Lock(&TaskLock);
 		CurrentTask = MakeShared<FVoxelGeneratorTask>(
 			ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
-			GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap);
+			GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap, (LOD >= 2));
 		LocalTask = CurrentTask;
 	}
 	LocalTask->Execute();

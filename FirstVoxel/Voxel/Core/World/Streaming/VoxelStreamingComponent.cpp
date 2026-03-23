@@ -270,9 +270,7 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
         }
         else if (radSq <= MaxRad * MaxRad)
         {
-            OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ - 1));
             OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ));
-            OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ + 1));
         }
     }
 

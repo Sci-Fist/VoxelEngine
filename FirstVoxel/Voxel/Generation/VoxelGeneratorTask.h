@@ -30,7 +30,8 @@ public:
         IVoxelDensityProvider*        InProvider,
         float                         InFoliageDensity,
         float                         InMaxFoliageSlope,
-        struct FVoxelDataMap*         InDataMap);
+        struct FVoxelDataMap*         InDataMap,
+        bool                          bIsDistantHeightmesh = false);
 
     ~FVoxelGeneratorTask();
 
@@ -64,6 +65,7 @@ private:
     float                  FoliageDensity;
     float                  MaxFoliageSlope;
     struct FVoxelDataMap*  DataMap;
+    bool                   bIsDistantHeightmesh;
 
     // Outputs
     FVoxelMeshOutput            MeshOutput;
