@@ -303,7 +303,9 @@ void FVoxelMeshGenerator::GenerateMesh(
             CellVertices[i3]-CellVertices[i1]).GetSafeNormal();
         if ((GeoNormal | OutwardNormal) < 0.f) GeoNormal = -GeoNormal;
 
-        const bool bIsFlat = FMath::Abs(GeoNormal.Z) >= Config.SlopeThreshold;
+        const float AvgZ = (CellNormals[i0].Z + CellNormals[i1].Z + CellNormals[i2].Z + CellNormals[i3].Z) * 0.25f;
+        const bool bIsFlat = FMath::Abs(AvgZ) >= Config.SlopeThreshold;
+
         FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
         TArray<int32>&  Map      = bIsFlat ? FlatMap : SlopeMap;
         const FColor&   VC       = GetQuadColor(ColX, ColY);
@@ -442,15 +444,6 @@ void FVoxelMeshGenerator::GenerateHeightmapMesh(
         OutMesh.FlatMesh.Triangles.Add(i0);
         OutMesh.FlatMesh.Triangles.Add(i2);
         OutMesh.FlatMesh.Triangles.Add(i3);
-
-        // Back Face (Double Sided for steeper inner walls)
-        OutMesh.FlatMesh.Triangles.Add(i0);
-        OutMesh.FlatMesh.Triangles.Add(i2);
-        OutMesh.FlatMesh.Triangles.Add(i1);
-
-        OutMesh.FlatMesh.Triangles.Add(i0);
-        OutMesh.FlatMesh.Triangles.Add(i3);
-        OutMesh.FlatMesh.Triangles.Add(i2);
     }
 
     // ---------------------------------------------------------------------------

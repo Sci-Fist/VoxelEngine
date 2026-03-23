@@ -1268,6 +1268,19 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 Depth_v = _mm256_set1_ps(CRC.CentralCraterDepth * 1.25f); // stays negative
                 __m256 FloorH = _mm256_add_ps(CenterH_v, Depth_v);
 
+                // Calculate FlattenBlend to match Scalar S.BasePlains flattening
+                __m256 FlattenBlend = _mm256_set1_ps(1.0f);
+                __m256 Mask_Floor = _mm256_cmp_ps(NormDist, FloorEnd_v, _CMP_LT_OQ);
+                __m256 Mask_Rim   = _mm256_cmp_ps(NormDist, RimEnd_v, _CMP_LT_OQ);
+                __m256 Smooth     = SmoothStep_AVX2(FloorEnd_v, RimEnd_v, NormDist);
+                
+                // if < FloorEnd, 0.0f
+                FlattenBlend = _mm256_blendv_ps(Smooth, _mm256_setzero_ps(), Mask_Floor);
+                // if >= RimEnd, 1.0f
+                FlattenBlend = _mm256_blendv_ps(_mm256_set1_ps(1.f), FlattenBlend, Mask_Rim);
+
+                __m256 BasePlains = Lerp_AVX2(FlattenBlend, CenterH_v, OutSurfH);
+
                 // Depth Seal Clamp
                 __m256 SafeFloorH = _mm256_max_ps(FloorH, _mm256_set1_ps(Config.SeaLevel + 100.f));
                 __m256 AbsDepth = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), Depth_v);
@@ -1302,8 +1315,8 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 NegMask = _mm256_cmp_ps(Mult, _mm256_setzero_ps(), _CMP_LT_OQ);
                 __m256 AbsMult = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), Mult);
 
-                __m256 H_neg = Lerp_AVX2(AbsMult, OutSurfH, SafeFloorH);
-                __m256 H_pos = Lerp_AVX2(Mult, OutSurfH, RimH);
+                __m256 H_neg = Lerp_AVX2(AbsMult, BasePlains, SafeFloorH);
+                __m256 H_pos = Lerp_AVX2(Mult, BasePlains, RimH);
 
                 __m256 CraterH = _mm256_blendv_ps(H_pos, H_neg, NegMask);
 
