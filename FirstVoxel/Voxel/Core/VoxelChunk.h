@@ -137,7 +137,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
 	float SlopeThreshold = 0.7f;
 
-	FVoxelDataMap* DataMap = nullptr;
+	FVoxelDataMap* GetDataMap() const { return DataMap; }
+	void SetDataMap(struct FVoxelDataMap* InMap) { DataMap = InMap; }
 
 	/** Shared data node cache for dense density float grids. */
 	TSharedPtr<struct FVoxelDensityChunk> DenseChunk;
@@ -161,7 +162,8 @@ public:
 	FVoxelGenerationConfig GenerationConfig;
 
 	/** Level of Detail: 0=High, 1=Medium, 2=Low. Each step doubles the voxel sampling distance. */
-	int32 LOD = 0;
+	int32 GetLOD() const { return LOD; }
+	void SetLOD(int32 NewLOD) { LOD = NewLOD; }
 
 	/** Returns the number of voxels to skip between samples for the current LOD level. */
 	int32 GetStepSize() const { return 1 << LOD; }
@@ -203,6 +205,10 @@ public:
 	 * Game-thread only — no synchronization needed.
 	 */
 	int32 WaterGeneration = 0;
+	
+	/** Warning flags to avoid duplicate logs. Reset in ClearMesh() for pool safety. */
+	bool bFlatMaterialWarned = false;
+	bool bSlopeMaterialWarned = false;
 
 	bool IsReady()          const { return bMeshApplied; }
 	bool IsGenerating()     const { return bGenerating;  }
@@ -236,10 +242,12 @@ public:
 	FORCEINLINE UProceduralMeshComponent* GetProceduralMesh() const { return ProceduralMesh; }
 
 	/** Injected density evaluator. Falls back to an internal static instance when null. */
-	struct FVoxelDensityGenerator* DensityGenerator = nullptr;
+	struct FVoxelDensityGenerator* GetDensityGenerator() const { return DensityGenerator; }
+	void SetDensityGenerator(struct FVoxelDensityGenerator* InGen) { DensityGenerator = InGen; }
 
 	/** Set to true when player edits have invalidated this chunk's mesh; rebuilt on the next Tick. */
-	FThreadSafeBool bMeshDirty { false };
+	bool IsMeshDirty() const { return bMeshDirty; }
+	void MarkMeshDirty(bool bDirty) { bMeshDirty = bDirty; }
 
 	/** Water material — assigned by AVoxelWorld from GenerationConfig.Water.OceanMaterial. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
@@ -336,8 +344,7 @@ private:
 	// Stored as instance members (not static locals) so they reset when the
 	// chunk is returned to the pool and ClearMesh() is called, allowing
 	// re-warnings in new PIE sessions after the issue is fixed.
-	bool bFlatMaterialWarned  = false;
-	bool bSlopeMaterialWarned = false;
+
 
 	void ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask);
 
@@ -357,4 +364,10 @@ private:
 
 	/** Set mesh visibility while maintaining proper state. */
 	void SetMeshVisibility(bool bVisible);
+
+	// -- Encapsulated Mutable State -------------------------------------------
+	struct FVoxelDataMap* DataMap = nullptr;
+	int32 LOD = 0;
+	struct FVoxelDensityGenerator* DensityGenerator = nullptr;
+	FThreadSafeBool bMeshDirty { false };
 };

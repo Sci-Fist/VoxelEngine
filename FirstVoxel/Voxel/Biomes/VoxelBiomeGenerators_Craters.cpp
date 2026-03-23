@@ -50,10 +50,10 @@
 
 namespace
 {
-static constexpr float FloorEnd = 0.74f;
-static constexpr float WallEnd  = 0.88f;
-static constexpr float RimPeak  = 0.93f;
-static constexpr float RimEnd   = 1.22f; // WAS 1.00f — expanded to flatten outer slope dropoff gentle
+static constexpr float FloorEnd = 0.65f; // expanded floor
+static constexpr float WallEnd  = 0.82f; // Wall transition
+static constexpr float RimPeak  = 0.94f; // WIDE crest peak (12% of radius!)
+static constexpr float RimEnd   = 1.15f; // Dropoff
 
 // ── Setup (anchor fixed, multiplier stack removed) ────────────────────────────
 struct FCraterSetup
@@ -81,7 +81,7 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
     S.dx = X - C.Craters.ForcedCraterCenter.X;
     S.dy = Y - C.Craters.ForcedCraterCenter.Y;
     S.Dist        = FMath::Sqrt(S.dx*S.dx + S.dy*S.dy);
-    S.CraterRadius= C.Craters.CentralCraterRadius * 0.5f;
+    S.CraterRadius= C.Craters.CentralCraterRadius; // Fixed: using fullConfig radius directly 
     S.NormDist    = (S.CraterRadius > 0.f) ? S.Dist / S.CraterRadius : 0.f;
     S.Ang         = FMath::Atan2(S.dy, S.dx);
     const float CenterH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
@@ -102,8 +102,7 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
     // FIX: NO MinRimH override, NO 1.5x, NO 1.2x Meteor multiplier.
     // RimHeight is the config value directly, plus a small per-seed variation.
     const float RimVar = BG_Noise(S.nX * 0.0004f, S.nY * 0.0004f, 0.f) * 0.15f;
-    S.RimHeight = C.Craters.CentralCraterRimHeight * (1.f + RimVar) * 1.8f; // WAS 1.0f — raised for dramatic effects
-    S.SeaLevel = C.SeaLevel;
+    S.RimHeight = C.Craters.CentralCraterRimHeight * (1.f + RimVar) * 1.1f;
 
 
     return S;
@@ -119,7 +118,7 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
 //  [0.93,1.00] Drop  Outer dropoff back to BasePlains              (SmoothStep)
 //  Beyond 1.00 Ejecta (handled by ApplyEjectaBlanket)
 // ─────────────────────────────────────────────────────────────────────────────
-static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig& CRC)
+static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig& CRC, float BaseHeight)
 {
 
 
@@ -134,7 +133,9 @@ static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig&
     }
 
     const float WallBaseH = SafeFloorH + FMath::Abs(S.EffectiveDepth) * 0.12f; // wall base is slightly higher than floor
-    const float RimH    = FMath::Max(S.BasePlains, S.SeaLevel) + S.RimHeight; // rim crest height
+    
+    // NEW: Anchor relative to unflattened hills to elevate crest above mountaintopswards onwards !!
+    const float RimH    = FMath::Max(BaseHeight, S.SeaLevel) + S.RimHeight; // rim crest height
 
 
     float H;
@@ -202,7 +203,7 @@ static void ApplyRimRoughness(float& H, const FCraterSetup& S, const FCraterBiom
     const float AngN = BG_Noise(S.nX * 0.003f, S.nY * 0.003f, 0.f);
     const float Ridge = 1.0f - FMath::Abs(AngN);
     const float EdgySlabs = Ridge * Ridge; // crisp slab sharpening 
-    H += EdgySlabs * CRC.RimNoiseAmplitude * 3.8f * RimFade; // multiplied for intense "longer" height specs
+    H += EdgySlabs * CRC.RimNoiseAmplitude * 1.1f * RimFade; 
 
     // Subtle directional scarps (2-4 per circumference)
     if (CRC.CraterStyle == ECraterStyle::Meteor || CRC.CraterStyle == ECraterStyle::Fresh)
@@ -406,7 +407,7 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
     // ── 1. Bowl profile ───────────────────────────────────────────────────────
     if (S.NormDist < 1.80f)
     {
-        CraterH = ComputeBowlProfile(S, CRC);
+        CraterH = ComputeBowlProfile(S, CRC, BaseHeight);
         ApplyFloorTexture(CraterH, S, CRC);
         ApplyMeteorUplift(CraterH, S, CRC);
         ApplyRimRoughness(CraterH, S, CRC);

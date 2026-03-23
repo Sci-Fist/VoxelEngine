@@ -42,8 +42,8 @@ struct FSkylandsLayerConfig
 
     // Base altitude above terrain for ISLANDS (CST≈1, high/rough terrain).
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
-        meta=(ToolTip="Average altitude above terrain for full sky-islands (CST=1, high terrain)."))
-    float BaseAltitudeAboveTerrain = 700.f;
+        meta=(ToolTip="Average altitude above terrain for full sky-islands (CST=1, high terrain). Increased for higher skylands."))
+    float BaseAltitudeAboveTerrain = 2000.f;
 
     // Legacy floor clamp — island bottom never goes below this gap.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude",
@@ -69,6 +69,19 @@ struct FSkylandsLayerConfig
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude")
     float LowTerrainAltitudeBoost = 400.f;
+
+    // Stretched formula controls
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude|Stretched Formula",
+        meta=(ToolTip="Power exponent for terrain height stretching. Lower = more aggressive stretch for high terrain. 0.6 default."))
+    float StretchedPowerExponent = 0.6f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude|Stretched Formula",
+        meta=(ToolTip="Multiplier for stretched terrain height. Higher = skylands spawn higher. 2.0 default."))
+    float StretchedMultiplier = 2.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Altitude|Stretched Formula",
+        meta=(ToolTip="Absolute minimum altitude for skylands (cm). Ensures visibility in deep craters. 5000 = 50m."))
+    float AbsoluteMinAltitude = 5000.f;
 
     // ── Probability ───────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Probability",

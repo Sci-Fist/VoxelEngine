@@ -272,6 +272,7 @@ private:
 
     bool bInitialized = false;
     FThreadSafeBool bShutdown{false};
+    TAtomic<bool> bGenerationActive{false};
 
     TUniquePtr<FVoxelDensityGenerator> DensityGenerator;
 
@@ -281,8 +282,8 @@ private:
     void ProcessInitialPlayerSpawn();
 
     bool  bWaitingForInitialSpawn = false;
-    TArray<FIntVector> InitialSpawnCoords;
-    TArray<FIntVector> InitialSpawnCoords_Visual;
+    TSet<FIntVector> InitialSpawnCoords;
+    TSet<FIntVector> InitialSpawnCoords_Visual;
     // PERF Fix #3: Counters incremented by OnGenerationComplete to avoid O(N)
     // per-frame scan of InitialSpawnCoords (up to 6900 entries × every frame).
     TAtomic<int32> InitialSpawnCollisionReadyCount{0};
@@ -304,6 +305,9 @@ public:
     void GenerateWorldDeferred();
     UFUNCTION(BlueprintPure, Category="Voxel") bool  IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
     UFUNCTION(BlueprintPure, Category="Voxel") float GetGenerationProgress()    const;
+    UFUNCTION(BlueprintPure, Category="Voxel") FString GetGenerationStatusString() const;
+    int32 GetInitialSpawnReadyCount() const { return InitialSpawnCollisionReadyCount.Load(); }
+    int32 GetInitialSpawnTotalCount() const { return InitialSpawnCoords.Num(); }
 
 private:
     void SpawnChunk        (const FIntVector& Coord, bool bSyncCollision = false);

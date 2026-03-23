@@ -198,7 +198,7 @@ void AVoxelWorld::Tick(float DeltaTime)
         // InitialSpawnCollisionReadyCount is incremented in OnGenerationComplete.
         const int32 CollisionTotal = InitialSpawnCoords.Num();
         const int32 VisualTotal    = InitialSpawnCoords_Visual.Num();
-        bAllReady = (InitialSpawnCollisionReadyCount >= CollisionTotal);
+        bAllReady = (InitialSpawnCollisionReadyCount >= CollisionTotal) && (InitialSpawnVisualReadyCount >= VisualTotal);
 
             // --- GRACE DELAY CUSHION ---
             if (bAllReady)
@@ -258,6 +258,7 @@ void AVoxelWorld::Tick(float DeltaTime)
             bWaitingForInitialSpawn = false;
             SpawnWaitAccum = SpawnDelayAccum = 0.f;
             InitialSpawnCoords.Empty();
+            bGenerationActive.Store(false); // Unlock parallel chain gate
 
             SpawnPlayer->SetActorHiddenInGame(false);
 
@@ -350,7 +351,7 @@ void AVoxelWorld::Tick(float DeltaTime)
         if (Chunk->IsGenerating()) continue;
         DirtyRebuildQueue.RemoveAtSwap(i);
         if (ActiveGenerations >= MaxConcurrentGenerations) { DirtyRebuildQueue.Add(Coord); break; }
-        Chunk->bMeshDirty = false;
+        Chunk->MarkMeshDirty(false);
         ActiveGenerations++;
         TWeakObjectPtr<AVoxelWorld> W(this);
         Chunk->OnGenerationComplete = [W](){ if (AVoxelWorld* S=W.Get()) S->ActiveGenerations = FMath::Max(0, (int32)S->ActiveGenerations-1); };
@@ -377,7 +378,7 @@ void AVoxelWorld::OnConstruction(const FTransform& Transform)
 void AVoxelWorld::MarkChunkDirty(const FIntVector& Coord)
 {
     if (AVoxelChunk** P = LoadedChunks.Find(Coord))
-        if (*P) (*P)->bMeshDirty = true;
+        if (*P) (*P)->MarkMeshDirty(true);
     DirtyRebuildQueue.AddUnique(Coord);
 }
 
@@ -497,6 +498,38 @@ void AVoxelWorld::PostEditChangeProperty(FPropertyChangedEvent& Ev)
 
 float AVoxelWorld::GetGenerationProgress() const
 {
+    if (bWaitingForInitialSpawn)
+    {
+        const int32 CollisionTotal = InitialSpawnCoords.Num();
+        const int32 VisualTotal = InitialSpawnCoords_Visual.Num();
+        const int32 Total = CollisionTotal + VisualTotal;
+        if (Total <= 0) return 0.f;
+        const int32 Ready = InitialSpawnCollisionReadyCount.Load() 
+                          + InitialSpawnVisualReadyCount.Load();
+        return (float)Ready / (float)Total;
+    }
     if (GenerationQueue.Num() == 0) return 1.f;
     return (float)QueueHead / (float)GenerationQueue.Num();
+}
+
+FString AVoxelWorld::GetGenerationStatusString() const
+{
+    if (bWaitingForInitialSpawn)
+    {
+        const int32 CollisionTotal = InitialSpawnCoords.Num();
+        const int32 VisualTotal = InitialSpawnCoords_Visual.Num();
+        const int32 Total = CollisionTotal + VisualTotal;
+        if (Total <= 0) return TEXT("Initializing Spawn Radius...");
+        const int32 Ready = InitialSpawnCollisionReadyCount.Load() 
+                          + InitialSpawnVisualReadyCount.Load();
+        return FString::Printf(TEXT("Securing Spawn Area: %d / %d"), Ready, Total);
+    }
+    
+    if (GenerationQueue.Num() == 0) return TEXT("Discovering Terrain structure...");
+    
+    const int32 H = QueueHead;
+    const int32 T = GenerationQueue.Num();
+    if (H >= T) return TEXT("Finalizing geometry mesh descriptions...");
+    
+    return FString::Printf(TEXT("Building World: %d / %d"), H, T);
 }

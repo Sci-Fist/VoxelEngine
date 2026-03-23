@@ -246,8 +246,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             Item.SurfH = SurfH[k];
             
             // Tier 4 fallback: If any unsupported biome is active, re-calculate scalar.
-            const float MissingWeights = Cliffs[k] + Ocean[k];
-            if (MissingWeights > 0.001f || Item.SurfH == 0.f)
+            if (Item.SurfH == 0.f)
             {
                 Item.SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, LocalConfig, Temp[k], Eros[k]);
             }
@@ -335,10 +334,10 @@ void FVoxelGeneratorTask::BuildDensityField()
     }
 
     // ── Main density loop ─────────────────────────────────────────────────
-    int32 SolidCount = 0;
-    int32 AirCount = 0;
+    TAtomic<int32> SolidCount{0};
+    TAtomic<int32> AirCount{0};
 
-    for (int32 FlatXY = 0; FlatXY < EffSize * EffSize; ++FlatXY)
+    ParallelFor(EffSize * EffSize, [&](int32 FlatXY)
     {
         if (bCancelled) return;
         int32 LocalSolid = 0;
@@ -409,7 +408,7 @@ void FVoxelGeneratorTask::BuildDensityField()
                 }
                 SolidCount += LocalSolid;
                 AirCount   += LocalAir;
-                continue;
+                return;
             }
         }
 
@@ -427,7 +426,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             }
             SolidCount += LocalSolid;
             AirCount   += LocalAir;
-            continue;
+            return;
         }
 
         // ── Phase 1: SIMD Surface Pre-Calculation ──────────────────────────────
@@ -436,9 +435,9 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         // Tier 7: Bounding Box Pruning — Restrict Z evaluation range range
         const float ExactMinZ = WorldOrigin.Z - EffVoxSz;
-        const float CraterRadius = LocalConfig.Craters.CentralCraterRadius * 1.8f;
-        const float dx = WX - LocalConfig.Craters.ForcedCraterCenter.X;
-        const float dy = WY - LocalConfig.Craters.ForcedCraterCenter.Y;
+        const float CraterRadius = Config.Craters.CentralCraterRadius * 1.8f;
+        const float dx = WX - Config.Craters.ForcedCraterCenter.X;
+        const float dy = WY - Config.Craters.ForcedCraterCenter.Y;
         const float DistSq = dx * dx + dy * dy;
 
         float MinCarveZ = SurfH - 1200.f;
@@ -450,15 +449,20 @@ void FVoxelGeneratorTask::BuildDensityField()
             MaxCarveZ += 2400.f;
         }
 
-        if (LocalConfig.Performance.bEnableOverhangs)
+        if (Config.Performance.bEnableOverhangs)
         {
-            MaxCarveZ += LocalConfig.Overhangs.MaxDistFromSurface + 500.f;
+            MaxCarveZ += Config.Overhangs.MaxDistFromSurface + 500.f;
         }
-
+        
         if (DistSq < CraterRadius * CraterRadius)
         {
-            MinCarveZ = SurfH - FMath::Abs(LocalConfig.Craters.CentralCraterDepth) - 2000.f;
-            MaxCarveZ = SurfH + LocalConfig.Craters.CentralCraterRimHeight + 4000.f;
+            MinCarveZ = SurfH - FMath::Abs(Config.Craters.CentralCraterDepth) - 2000.f;
+            
+            // FIX: Lift based on neutral/sea heights since SurfH sinks with crater depth clipping off the rim top!
+            const float SafeBaseH = FMath::Max(SurfH, Config.SeaLevel);
+            // Allow buffer multiplier overheads (*1.8x) and Peak roughness (+noise) accurately continuous 
+            const float MaxRimOverhead = Config.Craters.CentralCraterRimHeight * 2.5f + 4500.f;
+            MaxCarveZ = FMath::Max(MaxCarveZ, SafeBaseH + MaxRimOverhead);
         }
 
         int32 StartZIdx = FMath::Clamp(FMath::FloorToInt((MinCarveZ - ExactMinZ) / EffVoxSz), 0, EffSize);
@@ -490,9 +494,18 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (bEnCaves && EffVoxSz <= 1)
         {
             const FCaveTunnelsConfig& CVC = LocalConfig.CaveTunnels;
+            const float CraterW = Weights.GetWeight(EVoxelBiome::Craters);
+            float DynamicMinDepth = CVC.MinDepthBelowSurface;
+
+            // Push caves deeper inside craters so they don't break through the floor and kill FPS
+            if (CraterW > 0.05f) 
+            {
+                const float CraterDrop = FMath::Max(0.f, NeutralH - SurfH);
+                DynamicMinDepth += CraterDrop + (CraterW * 2500.f); // Pushes down proportionate to drop + safety buffer
+            }
+
             // Caves can travel travel deep down down, so start start at index 0.
-            // But skip continuous high Air above EndZIdx setup securely.
-            const int32 CaveCount = EndZIdx; // 0 to EndZIdx
+            const int32 CaveCount = EndZIdx; 
             
             if (CaveCount > 0)
             {
@@ -502,11 +515,11 @@ void FVoxelGeneratorTask::BuildDensityField()
                     CaveCount, SF_Densities, 
                     Ctx.SurfaceHeight, Ctx.BedrockJag,
                     Ctx.CachedSeedOffset,
-                FVoxelNoiseSIMD::GetPermutationTable(),
-                CVC.Scale, CVC.Threshold, CVC.WobbleAmplitude, CVC.WobbleFrequency, CVC.Strength,
-                CVC.MinDepthBelowSurface, CVC.SurfaceFadeDepth, CVC.BedrockDepth
-            );
-        }
+                    FVoxelNoiseSIMD::GetPermutationTable(),
+                    CVC.Scale, CVC.Threshold, CVC.WobbleAmplitude, CVC.WobbleFrequency, CVC.Strength,
+                    DynamicMinDepth, CVC.SurfaceFadeDepth, CVC.BedrockDepth
+                );
+            }
     }
 
         // ── SIMD PHASE 3: CRYSTAL CAVERNS ───────────────────────────────────
@@ -555,11 +568,11 @@ void FVoxelGeneratorTask::BuildDensityField()
             if (D > 0.f) LocalSolid++; else LocalAir++;
         }
         SolidCount += LocalSolid;
-        AirCount   += LocalAir;
-    }
+        AirCount += LocalAir;
+    });
 
-    bIsFullSolid = (SolidCount == TotalSamples);
-    bIsFullAir   = (AirCount   == TotalSamples);
+    bIsFullSolid = (SolidCount.Load() == TotalSamples);
+    bIsFullAir   = (AirCount.Load() == TotalSamples);
     PostProcessDensities(TotalSamples);
 
     const double EndTime = FPlatformTime::Seconds();

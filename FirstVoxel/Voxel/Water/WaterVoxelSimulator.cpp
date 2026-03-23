@@ -93,6 +93,7 @@ void FVoxelWaterSimulator::SetFlowing(const FIntVector& WV, uint8 Level)
     if (FChunkEntry* E = ChunkMap.Find(ToChunkCoord(WV)))
     {
         E->Data->bMeshDirty = true;
+        E->bSettled = false; // Wake up chunk for continuous simulation flow propagation downwards !!
         if (bWasEmpty && *C != WATER_EMPTY)      E->Data->WaterCellCount++;
         else if (!bWasEmpty && *C == WATER_EMPTY) E->Data->WaterCellCount--;
     }
@@ -235,7 +236,7 @@ bool FVoxelWaterSimulator::SimCell(const FIntVector& WV, uint8* SrcCell,
                     if (*BC != WATER_SOURCE)
                         *BC = FMath::Min((int32)(*BC) + Transfer, (int32)WATER_FULL);
                     DirtyChunks.Add(ToChunkCoord(Below));
-                    if (bBelowWasEmpty && *BC != WATER_EMPTY)
+                    if (bBelowWasEmpty && *BC != WATER_EMPTY && BE->Data)
                         BE->Data->WaterCellCount++;
                 }
  

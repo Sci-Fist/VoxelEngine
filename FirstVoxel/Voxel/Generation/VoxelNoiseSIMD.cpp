@@ -337,16 +337,17 @@ namespace FVoxelNoiseSIMD
 
         const int32 Stride = 4;
         const int32 NumNodes = (Count + Stride - 1) / Stride + 1;
-        float LowRes[128] = {0}; 
+        TArray<float> LowRes;
+        LowRes.SetNumZeroed(NumNodes);
 
         int32 n = 0;
         for (; n <= NumNodes - 8; n += 8)
         {
             __m256 Z_vec = _mm256_set_ps(
-                StartZ + (n + 7*Stride)*StepZ, StartZ + (n + 6*Stride)*StepZ,
-                StartZ + (n + 5*Stride)*StepZ, StartZ + (n + 4*Stride)*StepZ,
-                StartZ + (n + 3*Stride)*StepZ, StartZ + (n + 2*Stride)*StepZ,
-                StartZ + (n + 1*Stride)*StepZ, StartZ + (n + 0*Stride)*StepZ
+                StartZ + (n + 7)*Stride*StepZ, StartZ + (n + 6)*Stride*StepZ,
+                StartZ + (n + 5)*Stride*StepZ, StartZ + (n + 4)*Stride*StepZ,
+                StartZ + (n + 3)*Stride*StepZ, StartZ + (n + 2)*Stride*StepZ,
+                StartZ + (n + 1)*Stride*StepZ, StartZ + (n + 0)*Stride*StepZ
             );
             __m256 D = EvaluateSurface_AVX2(
                 Z_vec, SurfaceHeight, GradientScale, SteepWeight, 
@@ -834,6 +835,8 @@ void EvaluateColumn_Skylands_AVX2(
 
             // Apply Falloff
             __m256 TargetD = _mm256_mul_ps(IsD, Falloff_v);
+            __m256 F_Mask = _mm256_cmp_ps(Falloff_v, _mm256_set1_ps(0.001f), _CMP_GT_OQ);
+            TargetD = _mm256_blendv_ps(_mm256_set1_ps(-2.f), TargetD, F_Mask);
 
             // Update MaxD_v
             MaxD_v = _mm256_max_ps(MaxD_v, TargetD);
@@ -973,10 +976,28 @@ void EvaluateColumn_Skylands_AVX2(
             _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(Config.Craters.Frequency*0.5f)),
             _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(Config.Craters.Frequency*0.5f)),
             _mm256_set1_ps(200.f), PermTable);
+            
         OutWeights.Craters = SmoothStep_AVX2(
             _mm256_set1_ps(Config.Craters.ImpactThreshold + 0.1f), 
             _mm256_set1_ps(Config.Craters.ImpactThreshold), 
             CraterN);
+
+        // FIX: Force Crater biome weight for the Central Spawn Crater Absolute Radius
+        if (Config.Craters.CentralCraterRadius > 0.f)
+        {
+            __m256 dX_f = _mm256_sub_ps(X_v, _mm256_set1_ps(Config.Craters.ForcedCraterCenter.X));
+            __m256 dY_f = _mm256_sub_ps(Y_v, _mm256_set1_ps(Config.Craters.ForcedCraterCenter.Y));
+            __m256 Dist_f = _mm256_sqrt_ps(_mm256_add_ps(_mm256_mul_ps(dX_f, dX_f), _mm256_mul_ps(dY_f, dY_f)));
+            
+            __m256 Radius_f = _mm256_set1_ps(Config.Craters.CentralCraterRadius);
+            
+            // Smooth transition: 1.0 at Radius*1.10 => 0.0 at Radius*1.25
+            __m256 EdgeMax = _mm256_mul_ps(Radius_f, _mm256_set1_ps(1.25f));
+            __m256 EdgeMin = _mm256_mul_ps(Radius_f, _mm256_set1_ps(1.10f));
+            
+            __m256 ForceCraterW = SmoothStep_AVX2(EdgeMax, EdgeMin, Dist_f);
+            OutWeights.Craters = _mm256_max_ps(OutWeights.Craters, ForceCraterW);
+        }
 
         // 7. Ocean
         OutWeights.Ocean = Zero;
@@ -1212,6 +1233,15 @@ void EvaluateColumn_Skylands_AVX2(
  
                 OutSurfH = _mm256_fmadd_ps(Height, Weights.Mesa, OutSurfH);
             }
+        }
+
+        // Divide by sum of dry biome weights (matches scalar division)
+        {
+            __m256 BaseWeightSum_v = _mm256_add_ps(Weights.Forest, 
+                _mm256_add_ps(Weights.Desert, 
+                    _mm256_add_ps(Weights.Peaks, 
+                        _mm256_add_ps(Weights.Cliffs, Weights.Mesa))));
+            OutSurfH = _mm256_div_ps(OutSurfH, _mm256_add_ps(BaseWeightSum_v, _mm256_set1_ps(0.0001f)));
         }
 
         // 6. Craters Post-Process Overlay

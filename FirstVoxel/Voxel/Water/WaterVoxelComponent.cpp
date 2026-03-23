@@ -62,7 +62,7 @@ void UVoxelWaterComponent::BeginPlay()
     }
 
     AActor* Owner = GetOwner();
-    if (!Owner) return;
+    if (!IsValid(Owner)) return;
 
     OceanComponent = NewObject<UStaticMeshComponent>(Owner, TEXT("ImplicitOceanComponent"));
     if (!OceanComponent) return;

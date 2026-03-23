@@ -217,7 +217,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         const float L2ISq = LOD2Distance*LOD2Distance*HIn*HIn;
         const float L2OSq = LOD2Distance*LOD2Distance*HOut*HOut;
 
-        int32 LOD = Chunk->LOD;
+        int32 LOD = Chunk->GetLOD();
         if      (LOD < 2 && DistSq > L2OSq) LOD = 2;
         else if (LOD > 1 && DistSq < L2ISq) LOD = 1;
         else if (LOD < 1 && DistSq > L1OSq) LOD = 1;
@@ -255,7 +255,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         for (auto& It : DesiredLODs)
         {
             AVoxelChunk** CP = LoadedChunks.Find(It.Key);
-            if (CP && IsValid(*CP) && It.Value != (*CP)->LOD)
+            if (CP && IsValid(*CP) && It.Value != (*CP)->GetLOD())
                 Queue.Add(It.Key);
         }
         const FIntVector Adj[6]={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
@@ -286,7 +286,7 @@ void AVoxelWorld::UpdateChunkStreaming()
         AVoxelChunk* Chunk = It.Value;
         if (!IsValid(Chunk)) continue;
         const int32* FL = DesiredLODs.Find(It.Key);
-        if (!FL || *FL == Chunk->LOD) continue;
+        if (!FL || *FL == Chunk->GetLOD()) continue;
         if (Chunk->IsReady() && !Chunk->IsGenerating())
             Chunk->TransitionToLOD(*FL);
         else { Chunk->bPendingLODTransition = true; Chunk->PendingLOD = *FL; }
@@ -345,7 +345,7 @@ void AVoxelWorld::CheckCloseRangeVisibility()
         {
             if (UProceduralMeshComponent* PM = Chunk->GetProceduralMesh())
                 if (!PM->IsVisible()) PM->SetVisibility(true);
-            Chunk->bMeshDirty = false;
+            Chunk->MarkMeshDirty(false);
             ToRemove.Add(Coord); // Remove from pending once handled
         }
     }

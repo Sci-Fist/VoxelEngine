@@ -186,23 +186,21 @@ void FirstVoxelHUDDraw::DrawLoadingScreen(AFirstVoxelHUD* HUD, UFont* Font)
 
     HUD->DrawRect(FLinearColor(0,0,0,0.5f),0,0,Canvas->SizeX,Canvas->SizeY);
     const float CX=Canvas->SizeX*0.5f, CY=Canvas->SizeY*0.5f;
+    const float ClusterY = CY - 240.f;
 
     float TW,TH;
     HUD->GetTextSize(TEXT("G E N E R A T I N G   W O R L D . . ."),TW,TH,Font,1.5f);
-    HUD->DrawText(TEXT("G E N E R A T I N G   W O R L D . . ."),FLinearColor::White,CX-TW*0.5f,CY-40.f,Font,1.5f);
+    HUD->DrawText(TEXT("G E N E R A T I N G   W O R L D . . ."),FLinearColor::White,CX-TW*0.5f,ClusterY,Font,1.5f);
 
     const float Prog=W->GetGenerationProgress();
-    const float BW=400.f,BH=20.f,BX=CX-200.f,BY=CY+10.f;
+    const float BW=400.f,BH=20.f,BX=CX-200.f,BY=ClusterY+50.f;
     HUD->DrawRect(FLinearColor(0.1f,0.1f,0.1f,0.8f),BX-2.f,BY-2.f,BW+4.f,BH+4.f);
     HUD->DrawRect(FLinearColor(0.15f,0.18f,0.22f,1.f),BX,BY,BW,BH);
     HUD->DrawRect(FLinearColor(0.25f,0.85f,0.35f,1.f),BX,BY,BW*Prog,BH);
 
     const int32 H=W->GetQueueHead(),T=W->GetQueueCount();
     FString Status;
-    if (W->IsWaitingForInitialSpawn()) Status=FString::Printf(TEXT("Preparing Spawn Area: %d / %d"),H,T);
-    else if (H>=T&&T>0)               Status=TEXT("Finalizing geometry...");
-    else if (T<=0)                    Status=TEXT("Requesting coordinates...");
-    else                              Status=FString::Printf(TEXT("Chunks: %d / %d"),H,T);
+    Status = W->GetGenerationStatusString();
 
     float SW,SH2; HUD->GetTextSize(Status,SW,SH2,Font);
     HUD->DrawText(Status,FLinearColor::White,CX-SW*0.5f,BY+BH+8.f,Font);

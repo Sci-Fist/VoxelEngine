@@ -199,20 +199,18 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	if (!FlatMat)
 	{
 		FlatMat = UMaterial::GetDefaultMaterial(MD_Surface);
-        static bool s_bFlatMaterialWarned = false;
-		if (!s_bFlatMaterialWarned)
+		if (!bFlatMaterialWarned)
 		{
-			s_bFlatMaterialWarned = true;
+			bFlatMaterialWarned = true;
 			UE_LOG(LogVoxelChunk, Warning, TEXT("VoxelChunk: MasterFlatMaterial unassigned — using default. Please assign it in the VoxelWorld Details Panel."));
 		}
 	}
 	if (!SlopeMat)
 	{
 		SlopeMat = UMaterial::GetDefaultMaterial(MD_Surface);
-        static bool s_bSlopeMaterialWarned = false;
-		if (!s_bSlopeMaterialWarned)
+		if (!bSlopeMaterialWarned)
 		{
-			s_bSlopeMaterialWarned = true;
+			bSlopeMaterialWarned = true;
 			UE_LOG(LogVoxelChunk, Warning, TEXT("VoxelChunk: MasterSlopeMaterial unassigned — using default. Please assign it in the VoxelWorld Details Panel."));
 		}
 	}

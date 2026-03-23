@@ -50,6 +50,18 @@ FVoxelBiomeWeightMap FVoxelBiomeManager::GetBiomeWeightsStatic(
         (Y+Off.Y)*(Config.Craters.Frequency*0.5f), 200.f));
     float CratersW = FMath::SmoothStep(Config.Craters.ImpactThreshold+0.1f, Config.Craters.ImpactThreshold, CraterNoise);
 
+    // FIX: Force Crater biome weight for the Central Spawn Crater Absolute Radius
+    if (Config.Craters.CentralCraterRadius > 0.f)
+    {
+        const float dx = X - Config.Craters.ForcedCraterCenter.X;
+        const float dy = Y - Config.Craters.ForcedCraterCenter.Y;
+        const float Dist = FMath::Sqrt(dx*dx + dy*dy);
+        const float ExactRadius = Config.Craters.CentralCraterRadius;
+        // FIX: Fade from 1.0 at Radius*1.10 => 0.0 at Radius*1.20 (to cover outer rim drop fully)
+        const float ForceCraterW = FMath::SmoothStep(ExactRadius * 1.25f, ExactRadius * 1.10f, Dist);
+        CratersW = FMath::Max(CratersW, ForceCraterW);
+    }
+
     float OceanW = 0.f;
     if (Config.Performance.bEnableForest)
     {

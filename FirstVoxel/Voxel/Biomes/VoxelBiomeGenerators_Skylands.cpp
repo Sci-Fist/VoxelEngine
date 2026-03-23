@@ -21,15 +21,35 @@
 #include "Voxel/Config/VoxelGenerationConfig.h"
 
 static float ComputeIslandSpawnProbability(
-    float HeightNorm, float RoughnessNorm, const FSkylandsLayerConfig& SC)
+    float HeightNorm, float RoughnessNorm, float AbsoluteHeight, const FSkylandsLayerConfig& SC)
 {
-    float P = SC.BaseProbability;
-    const float HighAltFactor = FMath::SmoothStep(SC.ProbHighAltitudeThreshold, 1.f, HeightNorm);
-    P += SC.HeightProbabilityBonus * HighAltFactor;
-    P += SC.RoughnessProbabilityBonus * RoughnessNorm;
-    const float MidDev = (HeightNorm - SC.ProbMidDipCenter) / FMath::Max(SC.ProbMidDipWidth, 0.01f);
-    const float MidDip = SC.ProbMidDipDepth * FMath::Exp(-0.5f * MidDev * MidDev);
-    P -= MidDip;
+    // Skyland probability grows with terrain height
+    // Low terrain (crater floor) = almost no skylands
+    // High terrain (above mountain peaks) = many skylands
+    
+    // Base probability is extremely low - skylands almost never spawn at low heights
+    float P = 0.001f;
+    
+    // Height bonus: probability increases dramatically with absolute terrain height
+    // Only terrain above 10000cm (100m - mountain peaks) gets significant skylands
+    // At 0cm: bonus = 0
+    // At 10000cm (100m): bonus = 0.16
+    // At 20000cm (200m - high peaks): bonus = 0.65
+    const float HeightBonus = SC.HeightProbabilityBonus * FMath::SmoothStep(0.f, 20000.f, AbsoluteHeight);
+    P += HeightBonus;
+    
+    // Roughness bonus: adds variation (reduced)
+    P += SC.RoughnessProbabilityBonus * RoughnessNorm * 0.2f;
+    
+    // Altitude scale: ensures skylands only spawn above mountain peaks (10000cm = 100m)
+    const float AltitudeScale = FMath::SmoothStep(10000.f, 25000.f, AbsoluteHeight);
+    P *= AltitudeScale;
+    
+    // Height fade: extremely steep falloff - only terrain above 100m gets skylands
+    float HeightFade = FMath::SmoothStep(10000.f, 25000.f, AbsoluteHeight);
+    HeightFade = FMath::Pow(HeightFade, 2.0f);
+    P *= HeightFade;
+
     return FMath::Clamp(P, 0.f, 1.f);
 }
 
@@ -79,9 +99,12 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float CX2 = (cX+0.12f+HX*0.76f)*GridSize;
         const float CY2 = (cY+0.12f+HY*0.76f)*GridSize;
 
-        const float WarpAmt = SC.BaseIslandSize * 0.35f;
-        const float WarpX = BG_Noise(X * 0.0015f, Y * 0.0015f, 700.f) * WarpAmt;
-        const float WarpY = BG_Noise(X * 0.0015f, Y * 0.0015f, 800.f) * WarpAmt;
+        const float WarpAmt = SC.BaseIslandSize * 0.70f;
+        
+        // --- NEW: FBM Shoreline fractal warping for irregular jagged edges ---
+        const float WarpX = BG_FBM(X * 0.003f, Y * 0.003f, 700.f, 2, 2.f, 0.5f, 4) * WarpAmt;
+        const float WarpY = BG_FBM(X * 0.003f, Y * 0.003f, 800.f, 2, 2.f, 0.5f, 4) * WarpAmt;
+        
         const float Dist = FMath::Sqrt(FMath::Square(X + WarpX - CX2) + FMath::Square(Y + WarpY - CY2));
 
         // --- SPEEDUP CACHE LOOKUP ---
@@ -135,23 +158,11 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
 
         const float cnX2 = CX2+Off.X, cnY2 = CY2+Off.Y;
         const float HP   = (BG_Noise(cnX2*0.002f, cnY2*0.002f, 200.f)+1.f)*0.5f;
-        float SpawnProb = ComputeIslandSpawnProbability(HN, RN, SC);
+        float SpawnProb = ComputeIslandSpawnProbability(HN, RN, CH, SC);
 
-        // Crater adjustments: Reduce chances for larger islands, keep shards
-        if (CraterW > 0.4f)
-        {
-            if (CST > 0.4f) // If transitioning into large islands
-            {
-                SpawnProb *= 0.05f; // 20x less likely for large skylands
-            }
-            else
-            {
-                SpawnProb = FMath::Min(1.0f, SpawnProb + 0.35f); // Keep small shards boosted
-            }
-        }
+        // Altitude System fully empowers probability continuously starting from Crater Floor up up aloft!
 
-        // RULE: Lower terrain (CH < 0) = Less Probability
-        if (CH < 0.f && CraterW < 0.4f) SpawnProb *= FMath::Clamp(1.f + CH / 15000.f, 0.20f, 1.f);
+        // Cleaned up redundant clamp
         if (HP > SpawnProb) continue;
 
         // --- Size -----------------------------------------------------------
@@ -173,7 +184,8 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         const float CuR = FMath::Pow(FMath::Max(0.f,RN), 2.f);
 
         // Absolute height anchor coordinates
-        float SkyAlt = CH + AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
+        const float AnchorH = FMath::Max(CH, Config.SeaLevel);
+        float SkyAlt = AnchorH + AltBase + CST*(CuH*SC.HeightAltitudeBonus + CuR*SC.RoughnessAltitudeBonus);
 
         // Size/altitude coupling
         {
@@ -195,7 +207,7 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
         // RULE: Lower terrain (CH < 0) = Lower altitude
         float LocalMinAlt = SC.MinAltitudeAboveTerrain;
         if (CH < 0.f) LocalMinAlt = FMath::Lerp(2500.f, LocalMinAlt, FMath::Clamp(1.f + CH / 15000.f, 0.f, 1.f));
-        SkyAlt = FMath::Max(SkyAlt, CH + LocalMinAlt + HT);
+        SkyAlt = FMath::Max(SkyAlt, AnchorH + LocalMinAlt + HT);
 
         float Thr = FMath::Lerp(SC.ThresholdAtMinProbability, SC.ThresholdAtMaxProbability, CST) + FMath::Lerp(0.20f, 0.f, CST);
         if (CST > 0.5f) Thr -= FMath::Log2(FMath::Max(1.f, IS/SC.BaseIslandSize))*0.05f;
@@ -248,7 +260,12 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
         const float tC = FMath::Clamp((Z-Isl.SkyAlt)/(Isl.HalfThick+Margin+1.f), -1.f, 1.f);
         float Falloff;
         if (tC >= 0.f) { const float FZ=0.35f; Falloff=(tC<FZ)?1.f:FMath::SmoothStep(0.f,1.f,1.f-(tC-FZ)/(1.f-FZ)); }
-        else { Falloff = FMath::SmoothStep(0.f,1.f,1.f-FMath::Pow(-tC,0.85f)); }
+        else 
+        { 
+            const float BottomWarp = BG_Noise(WX * 0.003f, WY * 0.003f, (WZ + 500.f) * 0.006f) * 0.20f;
+            const float AdjustedTC = FMath::Max(0.f, -tC + BottomWarp);
+            Falloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(AdjustedTC, 0.85f)); 
+        }
         Falloff = FMath::Lerp(FMath::SmoothStep(0.f,1.f,1.f-FMath::Pow(FMath::Abs(tC),0.6f)), Falloff, FMath::Max(0.40f,Isl.ShardT));
         if (Isl.ShardT < 0.3f)
         {
@@ -266,8 +283,8 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
         if (SC.bEnableDomainWarping)
         {
             const float WF = SC.DomainWarpFrequency;
-            QX += BG_Noise(QX*WF+10.f, QY*WF+20.f, 0.f)*SC.DomainWarpStrength;
-            QY += BG_Noise(QX*WF+50.f, QY*WF+10.f, 0.f)*SC.DomainWarpStrength;
+            QX += BG_Noise(QX*WF+10.f, QY*WF+20.f, WZ*WF)*SC.DomainWarpStrength;
+            QY += BG_Noise(QX*WF+50.f, QY*WF+10.f, WZ*WF+100.f)*SC.DomainWarpStrength;
         }
 
         float SD = 0.f;
@@ -277,7 +294,7 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
                * FMath::Lerp(0.55f, 0.25f, Isl.ShardT);
 
         const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves,4), 1, Config.Performance.MaxNoiseOctaves);
-        const float SZ = (Isl.ShardT < 0.5f) ? WZ*Isl.Freq : 0.f;
+        const float SZ = WZ*Isl.Freq; // FIX: Keep 3D noise enabled always so walls are not extruded cylinders (no continuous slabs)
         const float Shape = BG_FBM(QX*Isl.Freq, QY*Isl.Freq, SZ, Oct2D, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves) + SD;
 
         float RD = 0.f;
@@ -288,7 +305,16 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
                            2, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves)) * (1.f-RZN) * 0.4f * Falloff;
         }
 
-        float D = FMath::SmoothStep(Isl.Threshold, Isl.Threshold+0.4f, Shape)*Falloff*2.5f - (1.f-Falloff)*1.8f + RD;
+        // Taper bottom radius inwards to create a bulbous cone/keel shape (from sketch)
+        float Taper = 0.f;
+        if (tC < 0.0f) 
+        {
+            const float TaperAmt = 0.50f; // Increase max taper offset at the bottom tip
+            const float N = -tC; // goes from 0.0 at center to 1.0 at absolute bottom
+            Taper = FMath::Pow(N, 2.0f) * TaperAmt; // Concave/bulbous bow out curves inwards beautifully
+        }
+
+        float D = FMath::SmoothStep(Isl.Threshold + Taper, Isl.Threshold+0.4f + Taper, Shape)*Falloff*2.5f - (1.f-Falloff)*1.8f + RD;
         const float BU = FMath::Max(0.f, BG_Noise(WX*0.002f,WY*0.002f,WZ*0.001f))
                         * FMath::Lerp(0.10f, FMath::Lerp(0.50f,2.80f,Isl.HeightNorm), Isl.ShardT);
         float PM = 1.f;

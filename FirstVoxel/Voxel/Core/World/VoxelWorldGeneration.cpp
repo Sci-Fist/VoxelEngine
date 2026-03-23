@@ -4,6 +4,7 @@
 //            DenseChunks TMap doesn't grow unbounded with session length.
 
 #include "VoxelWorld.h"
+#include "Async/ParallelFor.h"
 #include "Voxel/Core/World/Water/VoxelWorldWater.h"
 #include "Voxel/Water/VoxelWaterSimulator.h"
 #include "Voxel/Core/VoxelChunk.h"
@@ -31,6 +32,8 @@
 void AVoxelWorld::GenerateWorldDeferred()
 {
     if (!GetWorld() || bShutdown) return;
+    if (bGenerationActive.Load()) return; // Prevent overlapping Async chains
+    bGenerationActive.Store(true);
 
     UVoxelLogger::LogVoxelEvent(TEXT("VoxelWorld: GenerateWorldDeferred started."));
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: GenerateWorldDeferred started at %s"), *GetActorLocation().ToString());
@@ -154,43 +157,63 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     const FVoxelGenerationConfig Cfg = GetEffectiveConfig();
     const float GridSize = ChunkSize * VoxelSize;
 
-    for (int32 y=MinCoord.Y; y<=MaxCoord.Y; ++y)
-    for (int32 x=MinCoord.X; x<=MaxCoord.X; ++x)
+    const int32 NumX = MaxCoord.X - MinCoord.X + 1;
+    TArray<TArray<TPair<int32, FIntVector>>> ThreadResults;
+    ThreadResults.SetNum(NumX);
+
+    ParallelFor(NumX, [&](int32 x_idx)
     {
-        const float WX = (x + 0.5f) * GridSize;
-        const float WY = (y + 0.5f) * GridSize;
+        int32 x = MinCoord.X + x_idx;
+        TArray<TPair<int32, FIntVector>>& LocalSorted = ThreadResults[x_idx];
 
-        const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WX, WY, Cfg);
-        const float Surface = Wh.SurfaceHeight;
-        const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
-
-        const FSkylandsLayerConfig& SC = Cfg.SkylandsLayer;
-        const float HN  = FMath::Clamp(Surface/SC.MaxTerrainReference,0.f,1.f);
-        const float RN  = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference,0.f,1.f);
-        const float TS  = FMath::Clamp(HN*1.5f+RN*0.8f,0.f,1.f);
-        
-        const float SkyAlt = Surface + FMath::Lerp(SC.MinAltitudeAboveTerrain,SC.BaseAltitudeAboveTerrain,TS) + HN*SC.HeightAltitudeBonus + RN*SC.RoughnessAltitudeBonus;
-        const float IHT    = (SC.BaseIslandSize+HN*SC.HeightSizeBonus+RN*SC.RoughnessSizeBonus)*SC.ThicknessRatio;
-
-        const int32 SkyZ_Min = FMath::FloorToInt((SkyAlt - IHT - 1000.f) / GridSize);
-        const int32 SkyZ_Max = FMath::FloorToInt((SkyAlt + IHT + 1000.f) / GridSize);
-
-        for (int32 z=MinCoord.Z; z<=MaxCoord.Z; ++z)
+        for (int32 y = MinCoord.Y; y <= MaxCoord.Y; ++y)
         {
-            const FIntVector C(x,y,z);
-            if (LoadedChunks.Contains(C)) continue;
+             const float WX = (x + 0.5f) * GridSize;
+             const float WY = (y + 0.5f) * GridSize;
 
-            bool bValid = false;
-            // A) Zone A Ground: GroundZ - 2 to GroundZ + 12
-            if (z >= GroundZ - 2 && z <= GroundZ + 12) bValid = true;
-            // B) Skylands zone: SkyZ_Min to SkyZ_Max
-            else if (z >= SkyZ_Min && z <= SkyZ_Max) bValid = true;
+             const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WX, WY, Cfg);
+             const float Surface = Wh.SurfaceHeight;
+             const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
 
-            if (bValid)
-            {
-                Sorted.Add({FMath::Max3(FMath::Abs(x-Center.X),FMath::Abs(y-Center.Y),FMath::Abs(z-Center.Z)),C});
-            }
+             const FSkylandsLayerConfig& SC = Cfg.SkylandsLayer;
+             const float HN  = FMath::Clamp(Surface/SC.MaxTerrainReference,0.f,1.f);
+             const float RN  = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference,0.f,1.f);
+             const float TS  = FMath::Clamp(HN*1.5f+RN*0.8f,0.f,1.f);
+             
+             // Stretched terrain height: amplify altitude for higher skylands
+             // Low terrain stays low (shards near ground), high terrain gets pushed much higher
+             const float StretchedSurface = FMath::Pow(HN, SC.StretchedPowerExponent) * SC.MaxTerrainReference * SC.StretchedMultiplier;
+             
+             float SkyAlt = StretchedSurface + FMath::Lerp(SC.MinAltitudeAboveTerrain,SC.BaseAltitudeAboveTerrain,TS) + HN*SC.HeightAltitudeBonus + RN*SC.RoughnessAltitudeBonus;
+             // Absolute altitude floor: skylands never go below configured minimum
+             // This ensures skylands are visible even in deep craters while keeping shard progression
+             SkyAlt = FMath::Max(SkyAlt, SC.AbsoluteMinAltitude);
+             const float IHT    = (SC.BaseIslandSize+HN*SC.HeightSizeBonus+RN*SC.RoughnessSizeBonus)*SC.ThicknessRatio;
+
+             const int32 SkyZ_Min = FMath::FloorToInt((SkyAlt - IHT - 1000.f) / GridSize);
+             const int32 SkyZ_Max = FMath::FloorToInt((SkyAlt + IHT + 1000.f) / GridSize);
+
+             for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
+             {
+                 const FIntVector C(x, y, z);
+                 if (LoadedChunks.Contains(C)) continue;
+
+                 bool bValid = false;
+                 if (z >= GroundZ - 2 && z <= GroundZ + 12) bValid = true;
+                 else if (z >= SkyZ_Min && z <= SkyZ_Max) bValid = true;
+
+                 if (bValid)
+                 {
+                     const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
+                     LocalSorted.Add({Dist, C});
+                 }
+             }
         }
+    });
+
+    for (const auto& LocalSorted : ThreadResults)
+    {
+        Sorted.Append(LocalSorted);
     }
     Sorted.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key<B.Key; });
 
@@ -279,7 +302,12 @@ void AVoxelWorld::FinalizeGenerationSetup()
                 if (!S || S->bShutdown) { if(S) S->DrainTickerHandle.Reset(); return false; }
                 S->DrainGenerationQueue();
                 if (S->QueueHead >= S->GenerationQueue.Num())
-                { UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Editor gen done. %d chunks."),S->LoadedChunks.Num()); S->DrainTickerHandle.Reset(); return false; }
+                { 
+                    UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Editor gen done. %d chunks."),S->LoadedChunks.Num()); 
+                    S->bGenerationActive.Store(false); // Unlock
+                    S->DrainTickerHandle.Reset(); 
+                    return false; 
+                }
                 return true;
             }),0.1f);
 #endif
@@ -335,10 +363,10 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
         // Force maximum LOD 1 for high elevations so they retain 3D mesh overhangs instead of flat fits
         if (Coord.Z >= 4) TargetLOD = FMath::Min(TargetLOD, 1);
 
-        if (DistSq < (ChunkSize * VoxelSize * 3.2f) * (ChunkSize * VoxelSize * 3.2f))
+        if (DistSq < (Chunk->ChunkSize * Chunk->VoxelSize * 3.2f) * (Chunk->ChunkSize * Chunk->VoxelSize * 3.2f))
             TargetLOD = 0; // Safeguard
 
-        Chunk->LOD = TargetLOD;
+        Chunk->SetLOD(TargetLOD);
     }
 
     ConfigureChunk(Chunk);
@@ -351,8 +379,8 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
     {
         if (AVoxelWorld* S = WeakThis.Get())
         {
-            S->ActiveGenerations--;
-            // FIX-1: Feed the pending-set so CheckCloseRangeVisibility only
+            S->ActiveGenerations = FMath::Max(0, S->ActiveGenerations.Load() - 1);
+            // FIX-1: Feed the pending-set so CheckCloseRange visibility only
             // iterates chunks that JUST became ready, not all loaded chunks.
             S->ChunksNeedingVisibilityCheck.Add(ChunkCoord);
 
@@ -405,7 +433,8 @@ void AVoxelWorld::DrainGenerationQueue()
     // entire frame budget and causing 2.5 FPS during initial generation.
     // 8/frame keeps the GameThread fed without starving rendering.
     const bool bFastDrain = bWaitingForInitialSpawn;
-    const int32 Limit = bFastDrain ? GenerationQueue.Num() : (!GetWorld()->IsGameWorld() ? 4 : 8);
+    // PERF: Capping fast drain to 64 per frame protects the GameThread from SpawnActor CPU hitching
+    const int32 Limit = bFastDrain ? 64 : (!GetWorld()->IsGameWorld() ? 4 : 8);
     const int32 MaxConc = bFastDrain ? 2048 : MaxConcurrentGenerations;
 
     // PERF-4: compute once per drain cycle — ConfigureChunk reads by const-ref.
@@ -449,17 +478,17 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
     // cycle and passes it here so we don't deep-copy the large struct on every spawn.
     // CachedEffectiveConfig is set just before SpawnChunk is called.
     const FVoxelGenerationConfig& EffCfg = CachedEffectiveConfig;
-    Chunk->ChunkSize           = ChunkSize;
-    Chunk->VoxelSize           = VoxelSize;
-    Chunk->MasterFlatMaterial  = MasterFlatMaterial;
+    Chunk->ChunkSize = ChunkSize;
+    Chunk->VoxelSize = VoxelSize;
+    Chunk->MasterFlatMaterial = MasterFlatMaterial;
     Chunk->MasterSlopeMaterial = MasterSlopeMaterial;
-    Chunk->SlopeThreshold      = SlopeThreshold;
-    Chunk->GenerationConfig    = EffCfg;
-    Chunk->TreeMesh            = TreeMesh;
-    Chunk->GrassMesh           = GrassMesh;
-    Chunk->FoliageDensity      = FoliageDensity;
-    Chunk->MaxFoliageSlope     = MaxFoliageSlope;
-    Chunk->DensityGenerator    = DensityGenerator.Get();
+    Chunk->SlopeThreshold = SlopeThreshold;
+    Chunk->GenerationConfig = EffCfg;
+    Chunk->TreeMesh = TreeMesh;
+    Chunk->GrassMesh = GrassMesh;
+    Chunk->FoliageDensity = FoliageDensity;
+    Chunk->MaxFoliageSlope = MaxFoliageSlope;
+    Chunk->SetDensityGenerator(DensityGenerator.Get());
     Chunk->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
     Chunk->GenerationConfig.SlopeThreshold = SlopeThreshold;
     Chunk->WaterMaterial = GenerationConfig.Water.OceanMaterial.Get();
@@ -516,8 +545,10 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     UE_LOG(LogVoxelWorld,Warning,TEXT("VoxelWorld: Spawn Pos=(%.0f,%.0f) Surface=%.0f Z=%.0f CraterW=%.2f Sky=%d CONFIG_DEPTH=%.0f CONFIG_RADIUS=%.0f"),
         Pos.X,Pos.Y,Surface,TargetZ,CraterW,bSky?1:0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
 
-    Pos.Z = TargetZ; TargetCoordsZ = FMath::Max(TargetZ + 30000.f, 30000.f); CachedSurfaceHeight = Surface;
-
+    Pos.Z = TargetZ; 
+    TargetCoordsZ = TargetZ + 25000.f; // aloft waiting area
+    CachedSurfaceHeight = Surface;
+    
     Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
 
     if (bWaitingForInitialSpawn) return;
@@ -536,27 +567,41 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     auto AddToCollision = [&](const FIntVector& C) { SpawnSet.Add(C); };
     auto AddToVisual    = [&](const FIntVector& C) { VisualSet.Add(C); };
 
-    // 1. Immediate Crater Zone depth volume sizing (COLLISION REQUIRED)
-    // Inner radius uses shallow loads to prevent CPU overload; deep layers load async later.
-    for (int32 x=-8; x<=8; x++) for (int32 y2=-8; y2<=8; y2++) for (int32 z2=-4; z2<=2; z2++)
+    // 1. Adaptive Crater Zone depth volume sizing (COLLISION REQUIRED)
+    const float GridSize = ChunkSize * VoxelSize;
+    const float CraterRadius = Config.Craters.CentralCraterRadius; 
+    const int32 ChunkRadius = FMath::CeilToInt(CraterRadius / GridSize) + 4; // Buffer chunks outside rim
+    
+    for (int32 x = -ChunkRadius; x <= ChunkRadius; x++) 
+    for (int32 y2 = -ChunkRadius; y2 <= ChunkRadius; y2++)
     {
-         AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
-    }
- 
-    // 2. Wide Visual Zone Radius sizing (VISUAL HORIZON)
-    for (int32 x=-40; x<=40; x++) for (int32 y2=-40; y2<=40; y2++)
-    {
-         // Exclude inner collision core
-         const bool bIsCenter = (FMath::Abs(x) <= 8 && FMath::Abs(y2) <= 8);
-         if (bIsCenter) continue;
- 
-         for (int32 z2=-4; z2<=4; z2++)
+         if (x*x + y2*y2 > ChunkRadius * ChunkRadius) continue;
+
+         const float WX = (SpawnCoord.X + x + 0.5f) * GridSize;
+         const float WY = (SpawnCoord.Y + y2 + 0.5f) * GridSize;
+         const auto WhCol = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WX, WY, Config);
+         const int32 ColGroundZ = FMath::FloorToInt(WhCol.SurfaceHeight / GridSize);
+
+         const bool bCollisionNeeded = (FMath::Abs(x) <= 4 && FMath::Abs(y2) <= 4);
+
+         for (int32 z2 = -2; z2 <= 2; z2++)
          {
-              AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, SpawnCoord.Z + z2));
+              if (bCollisionNeeded) AddToCollision(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, ColGroundZ + z2));
+              else                   AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, ColGroundZ + z2));
          }
     }
+ 
+    // 2. General Visual Zone Radius (WIDE VISUALS)
+    // Add visual chunks around player for all spawns to ensure scenery is loaded.
+    const int32 VisualRadius = 16;
+    for (int32 x = -VisualRadius; x <= VisualRadius; x++)
+    for (int32 y2 = -VisualRadius; y2 <= VisualRadius; y2++)
+    {
+         if (FMath::Abs(x) <= ChunkRadius && FMath::Abs(y2) <= ChunkRadius) continue; // Skip core collision
+         AddToVisual(FIntVector(SpawnCoord.X + x, SpawnCoord.Y + y2, GroundCoord.Z));
+    }
 
-    // 2. Add ground layer strictly beneath player if they spawn in the sky
+    // 3. Add ground layer strictly beneath player if they spawn in the sky
     if (FMath::Abs(SpawnCoord.Z - GroundCoord.Z) > 1)
     {
         for (int32 x=-25; x<=25; x++) for (int32 y2=-25; y2<=25; y2++)
@@ -591,6 +636,8 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
     SpawnCoords.Sort(SortCoords);
     VisualCoords.Sort(SortCoords);
 
+    TArray<FIntVector> PriorityQueue;
+
     InitialSpawnCoords_Visual.Empty();
 
     for (const FIntVector& C : SpawnCoords)
@@ -599,18 +646,40 @@ void AVoxelWorld::ProcessInitialPlayerSpawn()
         if (!LoadedChunks.Contains(C)) 
         {
             const bool bSync = (C.X == GroundCoord.X && C.Y == GroundCoord.Y && C.Z <= GroundCoord.Z && C.Z >= GroundCoord.Z - 2);
-            if (bSync)
-            {
-                SpawnChunk(C, true); 
-            }
+            if (bSync) SpawnChunk(C, true); 
+            else       PriorityQueue.Add(C);
         }
     }
 
+    // Spawn visual chunks (rim, wider ground area) — async, throttled
     for (const FIntVector& C : VisualCoords)
     {
         InitialSpawnCoords_Visual.Add(C);
-        // Defer spawning to normal tick flow to keep the game thread fully responsive
+        if (!LoadedChunks.Contains(C))
+        {
+            PriorityQueue.Add(C);
+        }
     }
 
-    UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Waiting for %d spawn chunks."),InitialSpawnCoords.Num());
+    if (PriorityQueue.Num() > 0)
+    {
+        TArray<FIntVector> NewQueue = PriorityQueue;
+        NewQueue.Append(GenerationQueue);
+        GenerationQueue = MoveTemp(NewQueue);
+        QueueHead = 0; // reset iterator head trigger
+    }
+
+    // --- FIX: Initialize counters for already-ready chunks ---
+    int32 PreCollision = 0;
+    for (const FIntVector& C : InitialSpawnCoords)
+        if (AVoxelChunk** P = LoadedChunks.Find(C)) if ((*P)->IsReady()) PreCollision++;
+    InitialSpawnCollisionReadyCount = PreCollision;
+
+    int32 PreVisual = 0;
+    for (const FIntVector& C : InitialSpawnCoords_Visual)
+        if (AVoxelChunk** P = LoadedChunks.Find(C)) if ((*P)->IsReady()) PreVisual++;
+    InitialSpawnVisualReadyCount = PreVisual;
+
+    UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Waiting for %d collision + %d visual spawn chunks. Pre-ready: collision=%d, visual=%d"),
+        InitialSpawnCoords.Num(), InitialSpawnCoords_Visual.Num(), PreCollision, PreVisual);
 }
