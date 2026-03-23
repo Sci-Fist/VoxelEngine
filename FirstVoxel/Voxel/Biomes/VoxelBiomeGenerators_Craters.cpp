@@ -419,11 +419,12 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
 
     // ── 3. Secondary craters ──────────────────────────────────────────────────
     float SecH = 0.f, SecW = 0.f;
-    if (TryApplySecondaryCrater(S.nX, S.nY, S.Dist, S.BasePlains, CRC, SecH, SecW))
+    if (S.NormDist >= 1.80f && TryApplySecondaryCrater(S.nX, S.nY, S.Dist, S.BasePlains, CRC, SecH, SecW))
         CraterH = FMath::Lerp(CraterH, SecH, SecW);
 
     // ── 4. Tertiary craters ───────────────────────────────────────────────────
-    ApplyTertiaryCraters(CraterH, S.nX, S.nY, S.Dist, S.BasePlains, CRC);
+    if (S.NormDist >= 1.80f)
+        ApplyTertiaryCraters(CraterH, S.nX, S.nY, S.Dist, S.BasePlains, CRC);
 
     // ── 5. Blend crater into surrounding terrain ──────────────────────────────
     // Dominance: 1 inside the crater/rim, fades to 0 in the ejecta zone
