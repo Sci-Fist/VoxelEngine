@@ -108,7 +108,7 @@ void AFirstVoxelHUD::DrawLoadingScreen(UFont* Font)
     if (SH)
     {
         Head  = SH->GetVisualReadyCount();
-        Total = SH->GetTotalVisualSpawnChunks();
+        Total = SH->GetTotalVisualCount();
     }
     else
     {
