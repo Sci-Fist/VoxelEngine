@@ -629,7 +629,7 @@ void FVoxelGeneratorTask::BuildMesh()
     if (bIsDistantHeightmesh)
     {
         FVoxelMeshGenerator::GenerateHeightmapMesh(
-            ColumnSurfaceH, ColumnWeights, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, StepSize);
+            ColumnSurfaceH, ColumnWeights, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
     }
     else
     {

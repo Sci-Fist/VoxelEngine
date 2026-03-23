@@ -220,6 +220,7 @@ struct FVoxelMeshGenerator
         float                         InVoxelSize,
         const FVector&                ChunkOrigin,
         FVoxelMeshOutput&             OutMesh,
+        const struct FVoxelGenerationConfig& Config,
         int32                         InStepSize = 1);
 
 private:
