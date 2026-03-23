@@ -463,20 +463,21 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
     // PERF-4: DrainGenerationQueue computes GetEffectiveConfig() once per drain
     // cycle and passes it here so we don't deep-copy the large struct on every spawn.
     // CachedEffectiveConfig is set just before SpawnChunk is called.
-    const FVoxelGenerationConfig& EffCfg = CachedEffectiveConfig;
+    FVoxelGenerationConfig LocalCfg = CachedEffectiveConfig;
+    LocalCfg.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
+    LocalCfg.SlopeThreshold = SlopeThreshold;
+
     Chunk->ChunkSize = ChunkSize;
     Chunk->VoxelSize = VoxelSize;
     Chunk->MasterFlatMaterial = MasterFlatMaterial;
     Chunk->MasterSlopeMaterial = MasterSlopeMaterial;
     Chunk->SlopeThreshold = SlopeThreshold;
-    Chunk->GenerationConfig = EffCfg;
+    Chunk->SetGenerationConfig(LocalCfg);
     Chunk->TreeMesh = TreeMesh;
     Chunk->GrassMesh = GrassMesh;
     Chunk->FoliageDensity = FoliageDensity;
     Chunk->MaxFoliageSlope = MaxFoliageSlope;
     Chunk->SetDensityGenerator(DensityGenerator.Get());
-    Chunk->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
-    Chunk->GenerationConfig.SlopeThreshold = SlopeThreshold;
     Chunk->WaterMaterial = GenerationConfig.Water.OceanMaterial.Get();
     Chunk->DenseChunk = const_cast<AVoxelWorld*>(this)->ChunkManager.GetOrCreateChunk(Chunk->GetChunkCoord(), Chunk->ChunkSize);
 }

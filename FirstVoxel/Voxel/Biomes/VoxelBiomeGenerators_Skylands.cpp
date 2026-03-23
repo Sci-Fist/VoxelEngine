@@ -128,16 +128,15 @@ FSkylandColumnCache FVoxelBiomeGenerators::GetSkylandColumnCache(
             }
         }
 
-        const FVoxelBiomeWeightMap CW = FVoxelBiomeManager::GetBiomeWeightsStatic(CX2, CY2, Config);
-        const float CenterNeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX2, CY2, Config);
-        const float CenterFullH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX2, CY2, CW, Config);
+        const auto CenterEval = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(CX2, CY2, Config);
+        const float CenterNeutralH = CenterEval.NeutralHeight;
+        const float CenterFullH    = CenterEval.SurfaceHeight;
+        const FVoxelBiomeWeightMap& CW = CenterEval.Weights;
         
         auto GetMaxH = [&](float sX, float sY)
         {
-            const float NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(sX, sY, Config);
-            const FVoxelBiomeWeightMap mCW = FVoxelBiomeManager::GetBiomeWeightsStatic(sX, sY, Config);
-            const float FullH = FVoxelBiomeManager::GetSurfaceHeightStatic(sX, sY, mCW, Config);
-            return FMath::Max(NeutralH, FullH);
+            const auto Eval = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(sX, sY, Config);
+            return FMath::Max(Eval.NeutralHeight, Eval.SurfaceHeight);
         };
 
         const float MaxIS = SC.BaseIslandSize + SC.HeightSizeBonus;

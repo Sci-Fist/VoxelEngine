@@ -107,7 +107,8 @@ FVoxelBiomeManager::FWeightsAndHeight FVoxelBiomeManager::GetWeightsAndSurfaceHe
     FWeightsAndHeight Out;
     float Temp = -999.f, Erosion = -999.f;
     Out.Weights = GetBiomeWeightsStatic(X, Y, Config, &Temp, &Erosion);
-    Out.SurfaceHeight = GetSurfaceHeightStatic(X, Y, Out.Weights, Config, Temp, Erosion);
+    Out.NeutralHeight = GetNeutralSurfaceHeightStatic(X, Y, Config, Temp, Erosion);
+    Out.SurfaceHeight = FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config, Out.NeutralHeight);
     return Out;
 }
 

@@ -57,7 +57,7 @@ void UVoxelWorldWaterComponent::UpdateWaterSimulation(float)
             for (const FIntVector& Coord : DirtyChunks)
             {
                 if (AVoxelChunk* const* P = LC->Find(Coord))
-                    if (*P && (*P)->WaterData.bMeshDirty)
+                    if (*P && (*P)->GetWaterData().bMeshDirty)
                         RebuildWaterMeshForChunk(*P);
             }
         }
@@ -68,7 +68,7 @@ void UVoxelWorldWaterComponent::InitChunkWater(AVoxelChunk* Chunk)
 {
     if (!Chunk || !WaterSimulator.IsValid()) return;
     const FIntVector CC = Chunk->GetChunkCoord();
-    WaterSimulator->RegisterChunk(CC, &Chunk->WaterData, Chunk->WaterGeneration);
+    WaterSimulator->RegisterChunk(CC, &Chunk->GetWaterData(), Chunk->WaterGeneration);
 
     TWeakObjectPtr<UVoxelWorldWaterComponent> WeakThis(this);
     Chunk->OnChunkWaterReady = [WeakThis](const TArray<FIntVector>& Sources)

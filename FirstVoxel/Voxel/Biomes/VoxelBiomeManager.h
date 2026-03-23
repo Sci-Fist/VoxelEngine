@@ -72,7 +72,7 @@ public:
         float X, float Y, const FVoxelGenerationConfig& Config,
         float InTemp = -999.f, float InErosion = -999.f);
 
-    struct FWeightsAndHeight { FVoxelBiomeWeightMap Weights; float SurfaceHeight = 0.f; };
+    struct FWeightsAndHeight { FVoxelBiomeWeightMap Weights; float SurfaceHeight = 0.f; float NeutralHeight = 0.f; };
     static FWeightsAndHeight GetWeightsAndSurfaceHeightStatic(
         float X, float Y, const FVoxelGenerationConfig& Config);
 

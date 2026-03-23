@@ -160,6 +160,7 @@ public:
 	float MaxFoliageSlope = 0.8f;
 
 	FORCEINLINE const FVoxelGenerationConfig& GetGenerationConfig() const { return GenerationConfig; }
+	void SetGenerationConfig(const FVoxelGenerationConfig& InConfig) { GenerationConfig = InConfig; }
 
 	/** Level of Detail: 0=High, 1=Medium, 2=Low. Each step doubles the voxel sampling distance. */
 	int32 GetLOD() const { return LOD; }
