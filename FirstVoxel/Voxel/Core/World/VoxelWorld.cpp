@@ -368,16 +368,18 @@ void AVoxelWorld::PostEditChangeProperty(FPropertyChangedEvent& Ev)
 }
 #endif
 
+bool AVoxelWorld::IsWaitingForInitialSpawn() const
+{
+    return SpawnHandlerComponent != nullptr ? SpawnHandlerComponent->IsWaitingForInitialSpawn() : bWaitingForInitialSpawn;
+}
+
 float AVoxelWorld::GetGenerationProgress() const
 {
-    if (bWaitingForInitialSpawn)
+    if (IsWaitingForInitialSpawn() && SpawnHandlerComponent)
     {
-        const int32 CollisionTotal = InitialSpawnCoords.Num();
-        const int32 VisualTotal = InitialSpawnCoords_Visual.Num();
-        const int32 Total = CollisionTotal + VisualTotal;
+        const int32 Total = SpawnHandlerComponent->GetTotalCollisionCount() + SpawnHandlerComponent->GetTotalVisualCount();
         if (Total <= 0) return 0.f;
-        const int32 Ready = InitialSpawnCollisionReadyCount.Load() 
-                          + InitialSpawnVisualReadyCount.Load();
+        const int32 Ready = SpawnHandlerComponent->GetCollisionReadyCount() + SpawnHandlerComponent->GetVisualReadyCount();
         return (float)Ready / (float)Total;
     }
     if (GenerationQueue.Num() == 0) return 1.f;
@@ -386,14 +388,11 @@ float AVoxelWorld::GetGenerationProgress() const
 
 FString AVoxelWorld::GetGenerationStatusString() const
 {
-    if (bWaitingForInitialSpawn)
+    if (IsWaitingForInitialSpawn() && SpawnHandlerComponent)
     {
-        const int32 CollisionTotal = InitialSpawnCoords.Num();
-        const int32 VisualTotal = InitialSpawnCoords_Visual.Num();
-        const int32 Total = CollisionTotal + VisualTotal;
+        const int32 Total = SpawnHandlerComponent->GetTotalCollisionCount() + SpawnHandlerComponent->GetTotalVisualCount();
         if (Total <= 0) return TEXT("Initializing Spawn Radius...");
-        const int32 Ready = InitialSpawnCollisionReadyCount.Load() 
-                          + InitialSpawnVisualReadyCount.Load();
+        const int32 Ready = SpawnHandlerComponent->GetCollisionReadyCount() + SpawnHandlerComponent->GetVisualReadyCount();
         return FString::Printf(TEXT("Securing Spawn Area: %d / %d"), Ready, Total);
     }
     

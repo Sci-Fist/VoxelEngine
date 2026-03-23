@@ -290,7 +290,8 @@ public:
     void SpawnChunk        (const FIntVector& Coord, bool bSyncCollision = false);
     void DestroyChunk      (const FIntVector& Coord);
     void RebuildChunk      (const FIntVector& Coord);
-    UFUNCTION(BlueprintPure, Category="Voxel") bool  IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
+    UFUNCTION(BlueprintPure, Category="Voxel") bool IsWaitingForInitialSpawn() const;
+    
     UFUNCTION(BlueprintPure, Category="Voxel") float GetGenerationProgress()    const;
     UFUNCTION(BlueprintPure, Category="Voxel") FString GetGenerationStatusString() const;
     int32 GetInitialSpawnReadyCount() const { return InitialSpawnCollisionReadyCount.Load(); }

@@ -295,7 +295,7 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         }
     }
 
-    const int32 WaitRadius = 8; // FIX: reduce wait limit for visual chunks to speed up spawn
+    const int32 WaitRadius = ChunkRadius; // Restore to ChunkRadius to wait for full crater/rim
 
     for (const FIntVector& C : VisualCoords)
     {

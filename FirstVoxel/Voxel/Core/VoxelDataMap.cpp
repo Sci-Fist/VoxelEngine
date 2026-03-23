@@ -129,25 +129,14 @@ void FVoxelDataMap::CopyFrom(const FVoxelDataMap& Other)
 {
     if (this == &Other) return;
 
-    // Snapshot under both locks (fast reference copy only when feasible —
-    // TMap has no shallow copy, so we must deep-copy once, but we release
-    // Other.MapLock immediately after the copy and only hold our own lock
-    // while writing the result back).
     TMap<FIntVector, FChunkData> Snapshot;
     int32 SnapshotSize;
     {
-        // Address-ordered locking prevents A-B / B-A deadlock
-        FCriticalSection* First  = (this < &Other) ? &MapLock : &Other.MapLock;
-        FCriticalSection* Second = (this < &Other) ? &Other.MapLock : &MapLock;
-        First->Lock();
-        Second->Lock();
+        FScopeLock Lock(&Other.MapLock);
         SnapshotSize = Other.ChunkSize;
-        Snapshot     = Other.Chunks;   // deep copy under both locks (unavoidable)
-        Second->Unlock();
-        First->Unlock();
+        Snapshot     = Other.Chunks;  // deep copy under ONE lock
     }
 
-    // Write snapshot — hold only our own lock
     FScopeLock Lock(&MapLock);
     ChunkSize = SnapshotSize;
     Chunks    = MoveTemp(Snapshot);
