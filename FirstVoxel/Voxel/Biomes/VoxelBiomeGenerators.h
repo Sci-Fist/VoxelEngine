@@ -146,6 +146,14 @@ struct FIRSTVOXEL_API FVoxelBiomeGenerators
     //   < 0  =  sky air (far from any island)
     //  -10   =  fast-out (Z completely outside the island band)
     // ----------------------------------------------------------------
+    /** Get altitude and thickness bounds for skyland streaming volumes. */
+    static void GetSkylandAltitudeBounds(
+        float SurfaceHeight, 
+        float Roughness, 
+        const FVoxelGenerationConfig& Config, 
+        float& OutMinAlt, 
+        float& OutMaxAlt);
+
     static float GetSkylandDensity(
         float X, float Y, float Z,
         float SurfaceHeight,

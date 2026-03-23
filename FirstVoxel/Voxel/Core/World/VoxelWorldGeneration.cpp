@@ -176,23 +176,11 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
              const float Surface = Wh.SurfaceHeight;
              const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
 
-             const FSkylandsLayerConfig& SC = Cfg.SkylandsLayer;
-             const float HN  = FMath::Clamp(Surface/SC.MaxTerrainReference,0.f,1.f);
-             const float RN  = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference,0.f,1.f);
-             const float TS  = FMath::Clamp(HN*1.5f+RN*0.8f,0.f,1.f);
-             
-             // Stretched terrain height: amplify altitude for higher skylands
-             // Low terrain stays low (shards near ground), high terrain gets pushed much higher
-             const float StretchedSurface = FMath::Pow(HN, SC.StretchedPowerExponent) * SC.MaxTerrainReference * SC.StretchedMultiplier;
-             
-             float SkyAlt = StretchedSurface + FMath::Lerp(SC.MinAltitudeAboveTerrain,SC.BaseAltitudeAboveTerrain,TS) + HN*SC.HeightAltitudeBonus + RN*SC.RoughnessAltitudeBonus;
-             // Absolute altitude floor: skylands never go below configured minimum
-             // This ensures skylands are visible even in deep craters while keeping shard progression
-             SkyAlt = FMath::Max(SkyAlt, SC.AbsoluteMinAltitude);
-             const float IHT    = (SC.BaseIslandSize+HN*SC.HeightSizeBonus+RN*SC.RoughnessSizeBonus)*SC.ThicknessRatio;
+             float MinSkyAlt, MaxSkyAlt;
+             FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Wh.Weights.GetRoughness(), Cfg, MinSkyAlt, MaxSkyAlt);
 
-             const int32 SkyZ_Min = FMath::FloorToInt((SkyAlt - IHT - 1000.f) / GridSize);
-             const int32 SkyZ_Max = FMath::FloorToInt((SkyAlt + IHT + 1000.f) / GridSize);
+             const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
+             const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
 
              for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
              {
@@ -228,12 +216,10 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
         FVector Pos = SnapToVoxelGrid(FVector(Anchor.X, Anchor.Y, 0.f));
         const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Cfg);
         const float Surface = Wh.SurfaceHeight;
-        const FSkylandsLayerConfig& SC = Cfg.SkylandsLayer;
-        const float HN  = FMath::Clamp(Surface/SC.MaxTerrainReference,0.f,1.f);
-        const float RN  = FMath::Clamp(Wh.Weights.GetRoughness()/SC.RoughnessReference,0.f,1.f);
-        const float TS  = FMath::Clamp(HN*1.5f+RN*0.8f,0.f,1.f);
-        const float SkyAlt = Surface + FMath::Lerp(SC.MinAltitudeAboveTerrain,SC.BaseAltitudeAboveTerrain,TS) + HN*SC.HeightAltitudeBonus + RN*SC.RoughnessAltitudeBonus;
-        const float IHT = (SC.BaseIslandSize+HN*SC.HeightSizeBonus+RN*SC.RoughnessSizeBonus)*SC.ThicknessRatio;
+        float MinSkyAlt, MaxSkyAlt;
+        FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Wh.Weights.GetRoughness(), Cfg, MinSkyAlt, MaxSkyAlt);
+        const float SkyAlt = (MinSkyAlt + MaxSkyAlt) * 0.5f;
+        const float IHT = (MaxSkyAlt - MinSkyAlt) * 0.5f;
         static FVoxelDensityGenerator EdProbe;
         float TargetZ = Surface + GetSafeSpawnHeightOffset();
         bool bSky = false;
@@ -347,7 +333,7 @@ void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
         Chunk->SetFolderPath(FName(*FString::Printf(TEXT("g_VoxelChunks/Z%d"), Coord.Z)));
     }
 #endif
-    Chunk->ChunkCoord = Coord;
+    Chunk->SetChunkCoord(Coord);
     Chunk->SetActorLocation(ChunkCoordToWorld(Coord));
 
     // FIX Distant Chunk Lag: Compute initial LOD BEFORE generating, instead of generating at LOD 0 and later downgrading.
@@ -467,7 +453,7 @@ void AVoxelWorld::DiscoverExistingChunks()
     if (!GetWorld()) return;
     int32 N = 0;
     for (TActorIterator<AVoxelChunk> It(GetWorld()); It; ++It)
-        if (*It && (*It)->GetOwner()==this) { LoadedChunks.Add((*It)->ChunkCoord,*It); N++; }
+        if (*It && (*It)->GetOwner()==this) { LoadedChunks.Add((*It)->GetChunkCoord(),*It); N++; }
     UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Discovered %d chunks"),N);
 }
 
@@ -492,7 +478,7 @@ void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
     Chunk->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(SpawnTargetPos.X, SpawnTargetPos.Y);
     Chunk->GenerationConfig.SlopeThreshold = SlopeThreshold;
     Chunk->WaterMaterial = GenerationConfig.Water.OceanMaterial.Get();
-    Chunk->DenseChunk = const_cast<AVoxelWorld*>(this)->ChunkManager.GetOrCreateChunk(Chunk->ChunkCoord, Chunk->ChunkSize);
+    Chunk->DenseChunk = const_cast<AVoxelWorld*>(this)->ChunkManager.GetOrCreateChunk(Chunk->GetChunkCoord(), Chunk->ChunkSize);
 }
 
 // ============================================================

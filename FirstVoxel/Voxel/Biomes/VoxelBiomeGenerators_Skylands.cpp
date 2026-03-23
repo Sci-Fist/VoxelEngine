@@ -326,3 +326,55 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
 
     return FMath::Clamp(MaxD, -2.f, 2.f);
 }
+
+void FVoxelBiomeGenerators::GetSkylandAltitudeBounds(
+    float SurfaceHeight, 
+    float Roughness, 
+    const FVoxelGenerationConfig& Config, 
+    float& OutMinAlt, 
+    float& OutMaxAlt)
+{
+    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
+
+    // 1. Calculate continuous weights/norms (Mirrors GetSkylandColumnCache layout)
+    const float HN = FMath::Clamp(SurfaceHeight / SC.MaxTerrainReference, 0.f, 1.f);
+    const float RN = FMath::Clamp(Roughness / SC.RoughnessReference, 0.f, 1.f);
+    const float TS = FMath::Clamp(HN * 1.5f + RN * 0.8f, 0.f, 1.f);
+    const float CST = FMath::SmoothStep(0.f, SC.ShardTransitionStrength, TS);
+
+    // 2. Altitude base & stretch
+    const float AltBase = FMath::Lerp(SC.ShardAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, CST);
+    const float Stretched = FMath::Pow(FMath::Max(0.f, HN), SC.StretchedPowerExponent) * SC.MaxTerrainReference * SC.StretchedMultiplier;
+    
+    // 3. Anchor Height
+    const float AnchorH = FMath::Max(SurfaceHeight, Config.SeaLevel);
+    const float CuH = FMath::Pow(FMath::Max(0.f, HN), 2.5f);
+    const float CuR = FMath::Pow(FMath::Max(0.f, RN), 2.f);
+
+    float SkyAlt = AnchorH + AltBase + CST * (CuH * SC.HeightAltitudeBonus + CuR * SC.RoughnessAltitudeBonus);
+    SkyAlt = FMath::Max(SkyAlt, SC.AbsoluteMinAltitude);
+
+    // 4. Maximum Jitter/Noise additions for safety bounds
+    const float NoiseRange = FMath::Lerp(SC.ShardAltitudeJitter, SC.IslandAltitudeJitter, CST);
+    float MaxSkyAlt = SkyAlt + NoiseRange;
+    float MinSkyAlt = SkyAlt - NoiseRange;
+
+    // 5. Thickness
+    float IS = FMath::Lerp(SC.BaseIslandSize * SC.ShardMinScale, SC.BaseIslandSize + SC.HeightSizeBonus, CST);
+    const float ET = FMath::Lerp(SC.ShardThicknessRatio, SC.ThicknessRatio, CST);
+    const float HT = IS * ET;
+
+    // 6. Terrain intersection clamps
+    float LocalMinAlt = SC.MinAltitudeAboveTerrain;
+    if (SurfaceHeight < 0.f) 
+    {
+        LocalMinAlt = FMath::Lerp(2500.f, LocalMinAlt, FMath::Clamp(1.f + SurfaceHeight / 15000.f, 0.f, 1.f));
+    }
+    const float FloorSkyAlt = AnchorH + LocalMinAlt + HT;
+
+    MinSkyAlt = FMath::Max(MinSkyAlt, FloorSkyAlt);
+    MaxSkyAlt = FMath::Max(MaxSkyAlt, FloorSkyAlt);
+
+    OutMinAlt = MinSkyAlt - HT - 1000.f; // Conservative buffer
+    OutMaxAlt = MaxSkyAlt + HT + 1000.f; // Conservative buffer
+}

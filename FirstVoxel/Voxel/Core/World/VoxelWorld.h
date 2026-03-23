@@ -30,11 +30,7 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
 {
     GENERATED_BODY()
 
-    friend class UVoxelStreamingComponent;
-    friend class UVoxelSpawnHandlerComponent;
-
-
-public:
+ public:
     AVoxelWorld();
     virtual ~AVoxelWorld();
 
@@ -134,31 +130,13 @@ public:
 
     FVoxelGenerationConfig GetEffectiveConfig() const
     {
-        FVoxelGenerationConfig Out;
         if (BiomePreset != nullptr)
-            Out = BiomePreset->Config;
-        else
         {
-            Out                = GenerationConfig;
-            Out.ForestRender   = ForestRender;
-            Out.PeaksRender    = PeaksRender;
-            Out.CliffsRender   = CliffsRender;
-            Out.MesaRender     = MesaRender;
-            Out.CratersRender  = CratersRender;
-            Out.DesertRender   = DesertRender;
-            Out.OceanRender    = OceanRender;
-            Out.SkylandsRender = SkylandsRender;
-            Out.ForestWater    = ForestWater;
-            Out.PeaksWater     = PeaksWater;
-            Out.CliffsWater    = CliffsWater;
-            Out.MesaWater      = MesaWater;
-            Out.CratersWater   = CratersWater;
-            Out.DesertWater    = DesertWater;
-            Out.OceanWater     = OceanWater;
-            Out.SkylandsWater  = SkylandsWater;
+            FVoxelGenerationConfig Out = BiomePreset->Config;
+            Out.Seed = GenerationConfig.Seed; // Local seed override
+            return Out;
         }
-        Out.Seed = GenerationConfig.Seed;
-        return Out;
+        return GenerationConfig;
     }
 
 private:
@@ -204,6 +182,22 @@ public:
     int32 GetQueueCount() const { return GenerationQueue.Num(); }
     int32 GetQueueHead()  const { return QueueHead; }
 
+    bool ContainsEmptyChunk(const FIntVector& Coord) const { return EmptyChunks.Contains(Coord); }
+    const TSet<FIntVector>& GetEmptyChunks() const { return EmptyChunks; }
+
+    void SetGenerationQueue(const TArray<FIntVector>& InQueue) { GenerationQueue = InQueue; QueueHead = 0; }
+    const TArray<FIntVector>& GetGenerationQueue() const { return GenerationQueue; }
+
+    void ClearEmptyChunksInRange(int32 MinZ, int32 MaxZ) 
+    {
+        TArray<FIntVector> ToRemove;
+        for (const FIntVector& C : EmptyChunks) if (C.Z >= MinZ && C.Z <= MaxZ) ToRemove.Add(C);
+        for (const FIntVector& C : ToRemove) EmptyChunks.Remove(C);
+    }
+
+    struct FVoxelDensityGenerator* GetDensityGenerator() const { return DensityGenerator.Get(); }
+    FVector GetSpawnTargetPos() const { return SpawnTargetPos; }
+
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
     virtual void Tick(float DeltaTime) override;
@@ -222,22 +216,6 @@ public:
     UFUNCTION(BlueprintCallable, Category="Voxel|Terrain") float GetTerrainHeight(float X, float Y) const;
     float GetSurfaceZ(float X, float Y) const;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")  FVoxelBiomeRenderConfig ForestRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Forest")  FVoxelBiomeWaterConfig  ForestWater;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")   FVoxelBiomeRenderConfig PeaksRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Peaks")   FVoxelBiomeWaterConfig  PeaksWater;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Cliffs")  FVoxelBiomeRenderConfig CliffsRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Cliffs")  FVoxelBiomeWaterConfig  CliffsWater;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Mesa")    FVoxelBiomeRenderConfig MesaRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Mesa")    FVoxelBiomeWaterConfig  MesaWater;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters") FVoxelBiomeRenderConfig CratersRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Craters") FVoxelBiomeWaterConfig  CratersWater;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")  FVoxelBiomeRenderConfig DesertRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Desert")  FVoxelBiomeWaterConfig  DesertWater;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Ocean")   FVoxelBiomeRenderConfig OceanRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Ocean")   FVoxelBiomeWaterConfig  OceanWater;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands") FVoxelBiomeRenderConfig SkylandsRender;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Biomes|Skylands") FVoxelBiomeWaterConfig  SkylandsWater;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel") class UVoxelWaterComponent* WaterComponent = nullptr;
     UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") UStaticMesh* TreeMesh  = nullptr;
@@ -266,15 +244,6 @@ private:
     // reads a const-ref instead of deep-copying the large config struct N times.
     mutable FVoxelGenerationConfig CachedEffectiveConfig;
 
-    FVector LastStreamedPos = FVector::ZeroVector;
-    float   StreamingTimer  = 0.f;
-    static constexpr float StreamingInterval = 0.25f;
-
-    float   CachedSkyAltWorld = 0.f;
-    float   CachedCurvedH     = 0.f;
-    float   CachedCurvedR     = 0.f;
-    FVector LastSkyAltPos     = FVector(1e9f);
-    static constexpr float SkyAltSnapDist = 1000.f;
 
     bool bInitialized = false;
     FThreadSafeBool bShutdown{false};
@@ -309,13 +278,18 @@ private:
     float SpawnDelayAccum     = 0.f;
     static constexpr float SpawnHoldDelay = 2.f;
 
-    FVector SnapToVoxelGrid         (const FVector& WorldPos) const;
     FVector FindCraterSpawnLocation  (const FVector& StartPos, const FVoxelGenerationConfig& Config) const;
-    float   GetSafeSpawnHeightOffset () const;
     void RandomizeSeed();
 
 public:
     void GenerateWorldDeferred();
+
+    FVector SnapToVoxelGrid         (const FVector& WorldPos) const;
+    float   GetSafeSpawnHeightOffset () const;
+
+    void SpawnChunk        (const FIntVector& Coord, bool bSyncCollision = false);
+    void DestroyChunk      (const FIntVector& Coord);
+    void RebuildChunk      (const FIntVector& Coord);
     UFUNCTION(BlueprintPure, Category="Voxel") bool  IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
     UFUNCTION(BlueprintPure, Category="Voxel") float GetGenerationProgress()    const;
     UFUNCTION(BlueprintPure, Category="Voxel") FString GetGenerationStatusString() const;
@@ -323,9 +297,6 @@ public:
     int32 GetInitialSpawnTotalCount() const { return InitialSpawnCoords.Num(); }
 
 private:
-    void SpawnChunk        (const FIntVector& Coord, bool bSyncCollision = false);
-    void DestroyChunk      (const FIntVector& Coord);
-    void RebuildChunk      (const FIntVector& Coord);
     void UpdateChunkStreaming();
     void DrainGenerationQueue();
     void DiscoverExistingChunks();

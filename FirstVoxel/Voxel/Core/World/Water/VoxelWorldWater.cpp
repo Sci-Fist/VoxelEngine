@@ -67,7 +67,7 @@ void UVoxelWorldWaterComponent::UpdateWaterSimulation(float)
 void UVoxelWorldWaterComponent::InitChunkWater(AVoxelChunk* Chunk)
 {
     if (!Chunk || !WaterSimulator.IsValid()) return;
-    const FIntVector CC = Chunk->ChunkCoord;
+    const FIntVector CC = Chunk->GetChunkCoord();
     WaterSimulator->RegisterChunk(CC, &Chunk->WaterData, Chunk->WaterGeneration);
 
     TWeakObjectPtr<UVoxelWorldWaterComponent> WeakThis(this);

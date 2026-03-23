@@ -30,6 +30,9 @@
 static FCriticalSection      GDensityPoolLock;
 static TArray<TArray<float>> GDensityPool;
 
+static FCriticalSection           GScratchPoolLock;
+static TArray<FVoxelMeshScratchBuffers> GScratchPool;
+
 static const EVoxelBiome GBiomeOrder[] =
 {
     EVoxelBiome::Forest, EVoxelBiome::Peaks, EVoxelBiome::Cliffs,
@@ -71,6 +74,13 @@ FVoxelGeneratorTask::~FVoxelGeneratorTask()
         FScopeLock Lock(&GDensityPoolLock);
         if (GDensityPool.Num() < 12)
             GDensityPool.Add(MoveTemp(Densities));
+    }
+
+    if (ScratchBuffers.VertexIndices.Num() > 0)
+    {
+        FScopeLock Lock(&GScratchPoolLock);
+        if (GScratchPool.Num() < 12)
+            GScratchPool.Add(MoveTemp(ScratchBuffers));
     }
 }
 
@@ -586,6 +596,15 @@ void FVoxelGeneratorTask::PostProcessDensities(int32) {}
 // ============================================================
 void FVoxelGeneratorTask::BuildMesh()
 {
+    {
+        FScopeLock Lock(&GScratchPoolLock);
+        if (GScratchPool.Num() > 0)
+        {
+            ScratchBuffers = MoveTemp(GScratchPool.Last());
+            GScratchPool.RemoveAt(GScratchPool.Num() - 1, 1, EAllowShrinking::No);
+        }
+    }
+
     MeshOutput.Reset();
     FVoxelMeshGenerator::GenerateMesh(
         Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize,

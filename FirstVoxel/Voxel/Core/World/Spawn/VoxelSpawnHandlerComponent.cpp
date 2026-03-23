@@ -133,15 +133,17 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
     if (!Player) return;
 
-    if (!WorldOwner->SpawnTargetPos.IsZero())
-        WorldOwner->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(WorldOwner->SpawnTargetPos.X, WorldOwner->SpawnTargetPos.Y);
+    const FVector OwnerSpawnPos = WorldOwner->GetSpawnTargetPos();
+    if (!OwnerSpawnPos.IsZero())
+        WorldOwner->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(OwnerSpawnPos.X, OwnerSpawnPos.Y);
 
     // FIX #30: Use effective config
     FVoxelGenerationConfig Config = WorldOwner->GetEffectiveConfig(); 
-    if (!WorldOwner->SpawnTargetPos.IsZero())
-        Config.Craters.ForcedCraterCenter = FVector2D(WorldOwner->SpawnTargetPos.X, WorldOwner->SpawnTargetPos.Y);
+    const FVector TargetSpawnPos = WorldOwner->GetSpawnTargetPos();
+    if (!TargetSpawnPos.IsZero())
+        Config.Craters.ForcedCraterCenter = FVector2D(TargetSpawnPos.X, TargetSpawnPos.Y);
 
-    FVector Pos = WorldOwner->SpawnTargetPos;
+    FVector Pos = TargetSpawnPos;
     if (Pos.IsZero())
     {
         TArray<AActor*> PS;
@@ -161,19 +163,17 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     const float CraterW = Wh.Weights.GetWeight(EVoxelBiome::Craters);
     if (TargetZ > 100000.f || TargetZ < Surface - 1000.f) TargetZ = Surface + SafeOff;
 
-    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
-    const float HN = FMath::Clamp(Surface / SC.MaxTerrainReference, 0.f, 1.f);
-    const float RN = FMath::Clamp(Wh.Weights.GetRoughness() / SC.RoughnessReference, 0.f, 1.f);
-    const float TS = FMath::Clamp(HN * 1.5f + RN * 0.8f, 0.f, 1.f);
-    const float SkyAlt = FMath::Lerp(SC.MinAltitudeAboveTerrain, SC.BaseAltitudeAboveTerrain, TS) + HN * SC.HeightAltitudeBonus + RN * SC.RoughnessAltitudeBonus;
-    const float IHT = (SC.BaseIslandSize + HN * SC.HeightSizeBonus + RN * SC.RoughnessSizeBonus) * SC.ThicknessRatio;
+    float MinSkyAlt, MaxSkyAlt;
+    FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Wh.Weights.GetRoughness(), Config, MinSkyAlt, MaxSkyAlt);
+    const float SkyAlt = (MinSkyAlt + MaxSkyAlt) * 0.5f;
+    const float IHT = (MaxSkyAlt - MinSkyAlt) * 0.5f;
 
     bool bSky = false;
     if (SkyAlt > Surface + 5000.f && Surface < 50000.f)
     {
         for (float z2 = SkyAlt + IHT; z2 >= FMath::Max(SkyAlt - IHT, Surface + 500.f); z2 -= 200.f)
         {
-            if (WorldOwner->DensityGenerator && WorldOwner->DensityGenerator->GetDensity(Pos.X, Pos.Y, z2, Config) > 0.f)
+            if (WorldOwner->GetDensityGenerator() && WorldOwner->GetDensityGenerator()->GetDensity(Pos.X, Pos.Y, z2, Config) > 0.f)
             {
                 TargetZ = z2 + SafeOff;
                 bSky = true;
@@ -287,7 +287,7 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     for (const FIntVector& C : SpawnCoords)
     {
         InitialSpawnCoords.Add(C);
-        if (!WorldOwner->LoadedChunks.Contains(C))
+        if (!WorldOwner->GetLoadedChunks()->Contains(C))
         {
             const bool bSync = (C.X == GroundCoord.X && C.Y == GroundCoord.Y && C.Z <= GroundCoord.Z && C.Z >= GroundCoord.Z - 2);
             if (bSync) WorldOwner->SpawnChunk(C, true);
@@ -306,7 +306,7 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         {
             InitialSpawnCoords_Visual.Add(C);
 
-            if (!WorldOwner->LoadedChunks.Contains(C))
+            if (!WorldOwner->GetLoadedChunks()->Contains(C))
             {
                 PriorityQueue.Add(C);
             }
@@ -316,19 +316,18 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     if (PriorityQueue.Num() > 0)
     {
         TArray<FIntVector> NewQueue = PriorityQueue;
-        NewQueue.Append(WorldOwner->GenerationQueue);
-        WorldOwner->GenerationQueue = MoveTemp(NewQueue);
-        WorldOwner->QueueHead = 0;
+        NewQueue.Append(WorldOwner->GetGenerationQueue());
+        WorldOwner->SetGenerationQueue(NewQueue);
     }
 
     int32 PreCollision = 0;
     for (const FIntVector& C : InitialSpawnCoords)
-        if (AVoxelChunk*const* P = WorldOwner->LoadedChunks.Find(C)) if ((*P)->IsReady()) PreCollision++;
+        if (AVoxelChunk*const* P = WorldOwner->GetLoadedChunks()->Find(C)) if ((*P)->IsReady()) PreCollision++;
     InitialSpawnCollisionReadyCount = PreCollision;
 
     int32 PreVisual = 0;
     for (const FIntVector& C : InitialSpawnCoords_Visual)
-        if (AVoxelChunk*const* P = WorldOwner->LoadedChunks.Find(C)) if ((*P)->IsReady()) PreVisual++;
+        if (AVoxelChunk*const* P = WorldOwner->GetLoadedChunks()->Find(C)) if ((*P)->IsReady()) PreVisual++;
     InitialSpawnVisualReadyCount = PreVisual;
 
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelSpawnHandler: Waiting for %d collision + %d visual spawn chunks. Pre-ready: collision=%d, visual=%d"),

@@ -159,7 +159,7 @@ public:
 	UPROPERTY(BlueprintReadWrite, Category = "Voxel|Internal|Foliage")
 	float MaxFoliageSlope = 0.8f;
 
-	FVoxelGenerationConfig GenerationConfig;
+	FORCEINLINE const FVoxelGenerationConfig& GetGenerationConfig() const { return GenerationConfig; }
 
 	/** Level of Detail: 0=High, 1=Medium, 2=Low. Each step doubles the voxel sampling distance. */
 	int32 GetLOD() const { return LOD; }
@@ -170,6 +170,7 @@ public:
 
 	/** Grid coordinates of this chunk in the world chunk grid. */
 	FORCEINLINE const FIntVector& GetChunkCoord() const { return ChunkCoord; }
+	FORCEINLINE void SetChunkCoord(const FIntVector& InCoord) { ChunkCoord = InCoord; }
 
 	/** Callback fired on the GameThread after mesh upload completes. Used by AVoxelWorld to decrement ActiveGenerations. */
 	TFunction<void()> OnGenerationComplete;
@@ -195,7 +196,8 @@ public:
 	void RebuildWaterMesh();
 
 	/** Water voxel simulation state. Populated in ApplyMesh(), updated by FVoxelWaterSimulator. */
-	FVoxelWaterData WaterData;
+	FORCEINLINE const FVoxelWaterData& GetWaterData() const { return WaterData; }
+	FORCEINLINE FVoxelWaterData& GetWaterData() { return WaterData; }
 
 	/**
 	 * Generational counter for water simulator safety.
@@ -274,7 +276,7 @@ public:
 	};
 
 	/** Current mesh state. */
-	EChunkMeshState MeshState { EChunkMeshState::Empty };
+	FORCEINLINE EChunkMeshState GetMeshState() const { return MeshState; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -370,6 +372,10 @@ private:
 	int32 LOD = 0;
 	struct FVoxelDensityGenerator* DensityGenerator = nullptr;
 	FThreadSafeBool bMeshDirty { false };
+	
+	FVoxelGenerationConfig GenerationConfig;
+	FVoxelWaterData WaterData;
+	EChunkMeshState MeshState { EChunkMeshState::Empty };
 	
 	FIntVector ChunkCoord;
 };
