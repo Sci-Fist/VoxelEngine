@@ -2,6 +2,13 @@
 // FIX #30 — GetEffectiveConfig() returns by value; all call sites store value copies.
 // FIX N6  — DestroyChunk now calls ChunkManager.RemoveChunk(Coord) so the
 //            DenseChunks TMap doesn't grow unbounded with session length.
+// FIX RIM-1 — MaxRadius extended from MidRenderDistanceXY to DistantRenderDistanceXY
+//             so Zone C (distant horizon / crater rim) is actually queued for generation.
+// FIX RIM-2 — Zone C Z-selector added in both AVX2 and scalar discovery loops;
+//             previously fell through with EffMinZ=1/EffMaxZ=1 (1-chunk window)
+//             which silently skipped the rim surface.
+// FIX RIM-3 — LOD 2 heightmap path disabled in VoxelChunk.cpp; distant chunks now
+//             use Surface Nets at StepSize=4 so vertical walls (rim, cliffs) render.
 
 #include "VoxelWorld.h"
 #include "Async/ParallelFor.h"
@@ -148,7 +155,10 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 
     const FVector     Anchor   = SpawnTargetPos;
     const FIntVector  Origin   = WorldToChunkCoord(Anchor);
-    const int32 MaxRadius = MidRenderDistanceXY; // Cap at Zone B for speed (covers 640m rim)
+    // FIX RIM-1: was MidRenderDistanceXY (24 chunks / 384 m) — Zone C was never queued.
+    // Now uses DistantRenderDistanceXY (48 chunks / 768 m) so the crater rim and far
+    // horizon are included. Zone C chunks use LOD 2 (StepSize=4) so the cost is low.
+    const int32 MaxRadius = DistantRenderDistanceXY;
     const FIntVector  MinCoord = Origin - FIntVector(MaxRadius, MaxRadius, RenderDistanceZ);
     const FIntVector  MaxCoord = Origin + FIntVector(MaxRadius, MaxRadius, RenderDistanceZ);
     const FIntVector  Center   = MinCoord + (MaxCoord - MinCoord) / 2;
@@ -244,6 +254,11 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
                     EffMinZ = MidRenderDistanceZ;
                     EffMaxZ = MidRenderDistanceZ;
                 }
+                else // FIX RIM-2: Zone C — distant silhouette up to DistantRenderDistanceXY
+                {    // Thin slice: top-surface + rim cap only (no underground generation)
+                    EffMinZ = 1;
+                    EffMaxZ = 2;
+                }
 
                 for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
                 {
@@ -296,6 +311,11 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
              {
                  EffMinZ = MidRenderDistanceZ;
                  EffMaxZ = MidRenderDistanceZ;
+             }
+             else // FIX RIM-2 (scalar): Zone C distant silhouette
+             {
+                 EffMinZ = 1;
+                 EffMaxZ = 2;
              }
 
              for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)

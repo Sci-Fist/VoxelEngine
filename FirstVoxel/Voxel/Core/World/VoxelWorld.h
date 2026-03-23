@@ -63,7 +63,7 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Zone A radius (LOD 0 full detail). 24 chunks = 384m."))
-    int32 RenderDistanceXY = 24;
+    int32 RenderDistanceXY = 16;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Zone A vertical half-range above/below terrain (chunks). 16 = ±256m, covers caves and skylands from crater floor."))
@@ -71,7 +71,7 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Zone B radius (LOD 1 half-resolution). 40 chunks = 640m. Middle ground between playspace and horizon."))
-    int32 MidRenderDistanceXY = 40;
+    int32 MidRenderDistanceXY = 24;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Zone B vertical half-range (chunks). 4 = ±64m. Thin slice — just terrain surface + a little above/below."))
@@ -79,7 +79,7 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Zone C radius (LOD 2 silhouette). 80 chunks = 1280m. Valheim-level horizon view distance."))
-    int32 DistantRenderDistanceXY = 80;
+    int32 DistantRenderDistanceXY = 48;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ClampMin="2", ClampMax="4",
@@ -103,9 +103,13 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
         meta=(ToolTip="World distance (cm) at which LOD 0 transitions to LOD 1. 40000 = 400m (Zone A/B boundary)."))
     float LOD1Distance = 22400.f;   // = RenderDistanceXY * ChunkSize * VoxelSize
 
+    // FIX RIM-4: was 64000 cm (640 m) — larger than the old MaxRadius (384 m) so LOD 2
+    // never actually fired. Now correctly set to MidRenderDistanceXY(24) * ChunkSize(16)
+    // * VoxelSize(100) = 38400 cm (384 m): chunks beyond Zone B boundary get LOD 2
+    // (StepSize=4, quarter-res Surface Nets) for the new Zone C distant horizon.
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD",
-        meta=(ToolTip="World distance (cm) at which LOD 1 transitions to LOD 2. 100000 = 1000m (Zone B/C boundary)."))
-    float LOD2Distance = 64000.f;   // = MidRenderDistanceXY * ChunkSize * VoxelSize
+        meta=(ToolTip="World distance (cm) at which LOD 1 transitions to LOD 2. 38400 = 384m (Zone B/C boundary). Chunks beyond this distance use StepSize=4 (quarter-resolution Surface Nets)."))
+    float LOD2Distance = 38400.f;   // = MidRenderDistanceXY(24) * ChunkSize(16) * VoxelSize(100)
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
     UMaterialInterface* MasterFlatMaterial  = nullptr;

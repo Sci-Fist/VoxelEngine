@@ -69,7 +69,7 @@ namespace {
         float MinCarveZ = SurfH - 1200.f;
         float MaxCarveZ = SurfH + 1200.f;
 
-        if (SteepW > 0.05f) { MinCarveZ -= 2400.f; MaxCarveZ += 2400.f; }
+        if (SteepW > 0.05f) { MinCarveZ -= 6000.f; MaxCarveZ += 6000.f; }
         if (C.Config.Performance.bEnableOverhangs) { MaxCarveZ += C.Config.Overhangs.MaxDistFromSurface + 500.f; }
         
         if (DistSq < CraterRadius * CraterRadius)
@@ -77,6 +77,9 @@ namespace {
             const float SafeBaseH = FMath::Max(SurfH, C.Config.SeaLevel);
             const float MaxRimOverhead = C.Config.Craters.CentralCraterRimHeight * 2.5f + 4500.f;
             MaxCarveZ = FMath::Max(MaxCarveZ, SafeBaseH + MaxRimOverhead);
+            
+            // Sealing bottom drops for deep crater floor contours
+            MinCarveZ = FMath::Min(MinCarveZ, SurfH - FMath::Abs(C.Config.Craters.CentralCraterDepth) - 4500.f);
         }
 
         OutStartZIdx = FMath::Clamp(FMath::FloorToInt((MinCarveZ - ExactMinZ) / EffVoxSz), 0, C.EffSize);

@@ -9,6 +9,11 @@
 //        voxels in ApplyMesh(). Previously the counter stayed at 0, making
 //        HasAnyWater() always return false for voxel-ocean chunks even when
 //        hundreds of WATER_SOURCE cells had been written.
+// FIX RIM-3 bIsDistantHeightmesh forced false — LOD 2 now always runs Surface Nets
+//           (GenerateMesh, StepSize=4). The old heightmap path produced a flat 2-D
+//           surface that could not render vertical features (crater rim walls, cliffs).
+//           StepSize=4 means 64× fewer voxels than LOD 0, so performance is similar
+//           to the heightmap but with correct 3-D geometry.
 
 #include "Core/VoxelChunk.h"
 #include "FirstVoxel.h"
@@ -135,7 +140,11 @@ void AVoxelChunk::GenerateAsync()
 		FScopeLock Lock(&TaskLock);
 		CurrentTask = MakeShared<FVoxelGeneratorTask>(
 			ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
-			GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap, (LOD >= 2));
+			GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap,
+			// FIX RIM-3: was (LOD >= 2) — the heightmap path is flat 2-D only and
+			// cannot render vertical crater walls or rim silhouettes. Always use
+			// Surface Nets (false). LOD 2 naturally uses StepSize=4 via GetStepSize().
+			false);
 		LocalTask = CurrentTask;
 	}
 	TWeakObjectPtr<AVoxelChunk>     SafeThis(this);
@@ -161,7 +170,8 @@ void AVoxelChunk::GenerateSync()
 		FScopeLock Lock(&TaskLock);
 		CurrentTask = MakeShared<FVoxelGeneratorTask>(
 			ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
-			GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap, (LOD >= 2));
+			GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap,
+			false); // FIX RIM-3: always Surface Nets, see GenerateAsync for rationale
 		LocalTask = CurrentTask;
 	}
 	LocalTask->Execute();
