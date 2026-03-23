@@ -139,8 +139,17 @@ float FVoxelBiomeManager::GetSurfaceHeightStatic(
     if (MesaW   > 0.01f) { Height += FVoxelBiomeGenerators::GetMesaHeight(X,Y,Config)*MesaW;     BaseWeightSum += MesaW; }
     Height /= (BaseWeightSum + 0.0001f);
 
-    // Crater overlay — always applied regardless of the 'W' parameter
-    Height = FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config, Height);
+    // Crater overlay — restricted to local crater influence bounds
+    if (Config.Craters.CentralCraterRadius > 0.f)
+    {
+        const float dx = X - Config.Craters.ForcedCraterCenter.X;
+        const float dy = Y - Config.Craters.ForcedCraterCenter.Y;
+        const float Dist = FMath::Sqrt(dx*dx + dy*dy);
+        if (Dist < Config.Craters.CentralCraterRadius * 1.80f)
+        {
+            Height = FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config, Height);
+        }
+    }
     return Height;
 }
 

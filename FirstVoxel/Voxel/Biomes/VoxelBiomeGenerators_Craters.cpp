@@ -342,12 +342,13 @@ static bool TryApplySecondaryCrater(float nX, float nY, float DistFromCenter,
     if (Roll <= 0.15f) return false;
 
     const float NI      = (Roll - 0.15f) / 0.85f;
-    const float SecSize = FMath::Lerp(1500.f, CRC.SecondaryCraterMaxRadius, NI);
+    const float MaxSecSize = CRC.CentralCraterRadius * 0.22f; // Max 22% of central size
+    const float SecSize = FMath::Lerp(1200.f, FMath::Min(CRC.SecondaryCraterMaxRadius, MaxSecSize), NI);
     if (Dist >= SecSize) return false;
 
     const float SND     = Dist / SecSize;
-    const float RelDepth = FMath::Lerp(-600.f, -1800.f, NI);
-    const float RelRimH  = FMath::Lerp( 400.f,  1200.f, NI);
+    const float RelDepth = FMath::Lerp(-350.f, -1100.f, NI); // Shallower
+    const float RelRimH  = FMath::Lerp( 180.f,  550.f,  NI); // Smaller rims
 
     float H = BasePlains;
     if (SND < 0.70f)
@@ -419,11 +420,11 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
 
     // ── 3. Secondary craters ──────────────────────────────────────────────────
     float SecH = 0.f, SecW = 0.f;
-    if (S.NormDist >= 1.80f && TryApplySecondaryCrater(S.nX, S.nY, S.Dist, S.BasePlains, CRC, SecH, SecW))
+    if (S.NormDist >= 1.15f && TryApplySecondaryCrater(S.nX, S.nY, S.Dist, S.BasePlains, CRC, SecH, SecW))
         CraterH = FMath::Lerp(CraterH, SecH, SecW);
 
     // ── 4. Tertiary craters ───────────────────────────────────────────────────
-    if (S.NormDist >= 1.80f)
+    if (S.NormDist >= 1.15f)
         ApplyTertiaryCraters(CraterH, S.nX, S.nY, S.Dist, S.BasePlains, CRC);
 
     // ── 5. Blend crater into surrounding terrain ──────────────────────────────

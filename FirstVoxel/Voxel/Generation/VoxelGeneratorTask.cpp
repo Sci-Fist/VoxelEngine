@@ -466,11 +466,10 @@ void FVoxelGeneratorTask::BuildDensityField()
         
         if (DistSq < CraterRadius * CraterRadius)
         {
-            MinCarveZ = SurfH - FMath::Abs(Config.Craters.CentralCraterDepth) - 2000.f;
-            
-            // FIX: Lift based on neutral/sea heights since SurfH sinks with crater depth clipping off the rim top!
+            // FIX: Remove redundant crater depth subtraction because SurfH already includes crater offsets.
+            // Bounding box size is safely managed by the buffer offsets in lines 453-465.
+
             const float SafeBaseH = FMath::Max(SurfH, Config.SeaLevel);
-            // Allow buffer multiplier overheads (*1.8x) and Peak roughness (+noise) accurately continuous 
             const float MaxRimOverhead = Config.Craters.CentralCraterRimHeight * 2.5f + 4500.f;
             MaxCarveZ = FMath::Max(MaxCarveZ, SafeBaseH + MaxRimOverhead);
         }

@@ -70,8 +70,15 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
         }
         
         FVector HoverPos = SpawnPlayer->GetActorLocation();
-        if (FMath::Abs(HoverPos.Z - TargetCoordsZ) > 1.0f)
+        const float CenterX = WorldOwner->GenerationConfig.Craters.ForcedCraterCenter.X;
+        const float CenterY = WorldOwner->GenerationConfig.Craters.ForcedCraterCenter.Y;
+
+        if (FMath::Abs(HoverPos.X - CenterX) > 10.f ||
+            FMath::Abs(HoverPos.Y - CenterY) > 10.f ||
+            FMath::Abs(HoverPos.Z - TargetCoordsZ) > 10.f)
         {
+            HoverPos.X = CenterX;
+            HoverPos.Y = CenterY;
             HoverPos.Z = TargetCoordsZ;
             SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
         }
@@ -188,7 +195,7 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         Pos.X, Pos.Y, Surface, TargetZ, CraterW, bSky ? 1 : 0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
 
     Pos.Z = TargetZ;
-    TargetCoordsZ = TargetZ + 25000.f;
+    TargetCoordsZ = TargetZ + 45000.f; // High Majestic View 
     CachedSurfaceHeight = Surface;
 
     Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
