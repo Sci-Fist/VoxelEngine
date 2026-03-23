@@ -25,6 +25,7 @@
 #include "Engine/Canvas.h"
 #include "FirstVoxelCharacter.h"
 #include "Voxel/Core/World/VoxelWorld.h"
+#include "Voxel/Core/World/Spawn/VoxelSpawnHandlerComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformFileManager.h"
@@ -130,8 +131,8 @@ void AFirstVoxelHUD::DrawLoadingScreen(UFont* Font)
         Status = TEXT("Requesting world coordinates...");
     else
         Status = TEXT("Finalizing terrain...");
-    float SW,SH; GetTextSize(Status,SW,SH,Font,1.f);
-    DrawText(Status, FLinearColor::White, CX-SW*0.5f, BY+BH+8.f, Font, 1.f);
+    float SW, TextH; GetTextSize(Status, SW, TextH, Font, 1.f);
+    DrawText(Status, FLinearColor::White, CX - SW * 0.5f, BY + BH + 8.f, Font, 1.f);
 
     // Chunk-map grid
     const float BoxSz=8.f, BoxPad=2.f, Radius=35.f;

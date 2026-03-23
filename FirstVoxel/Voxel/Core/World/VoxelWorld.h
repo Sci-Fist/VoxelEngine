@@ -143,6 +143,8 @@ private:
     mutable FVoxelGenerationConfig MergedConfig;
 
 public:
+    FORCEINLINE class UVoxelSpawnHandlerComponent* GetSpawnHandlerComponent() const { return SpawnHandlerComponent; }
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Generation")
     bool bAutoGenerateOnBeginPlay = false;
 
@@ -259,7 +261,6 @@ private:
 
     UPROPERTY(VisibleAnywhere, Category="Voxel|Spawn")
     class UVoxelSpawnHandlerComponent* SpawnHandlerComponent = nullptr;
-    FORCEINLINE class UVoxelSpawnHandlerComponent* GetSpawnHandlerComponent() const { return SpawnHandlerComponent; }
 
 
     void ProcessInitialPlayerSpawn();

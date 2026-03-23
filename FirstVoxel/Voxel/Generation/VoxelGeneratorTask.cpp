@@ -41,6 +41,118 @@ static const EVoxelBiome GBiomeOrder[] =
 static_assert(UE_ARRAY_COUNT(GBiomeOrder) == FVoxelBiomeWeightMap::MaxBiomes,
     "GBiomeOrder must contain exactly one entry per EVoxelBiome value.");
 
+// ── Density Passes ──────────────────────────────────────────────────────────
+namespace {
+    struct FDensityPassContext
+    {
+        float WX, WY;
+        float ExactMinZ;
+        float EffVoxSz;
+        int32 EffSize;
+        float* SF_Densities;
+        const FColumnContext& Ctx;
+        const FVoxelGenerationConfig& Config;
+    };
+
+    static void Pass_Surface(const FDensityPassContext& C, float SteepW, int32& OutStartZIdx, int32& OutEndZIdx)
+    {
+        const float ExactMinZ = C.ExactMinZ;
+        const float EffVoxSz  = C.EffVoxSz;
+        const float SurfH     = C.Ctx.SurfaceHeight;
+        const float WX = C.WX, WY = C.WY;
+
+        const float CraterRadius = C.Config.Craters.CentralCraterRadius * 1.8f;
+        const float dx = WX - C.Config.Craters.ForcedCraterCenter.X;
+        const float dy = WY - C.Config.Craters.ForcedCraterCenter.Y;
+        const float DistSq = dx * dx + dy * dy;
+
+        float MinCarveZ = SurfH - 1200.f;
+        float MaxCarveZ = SurfH + 1200.f;
+
+        if (SteepW > 0.05f) { MinCarveZ -= 2400.f; MaxCarveZ += 2400.f; }
+        if (C.Config.Performance.bEnableOverhangs) { MaxCarveZ += C.Config.Overhangs.MaxDistFromSurface + 500.f; }
+        
+        if (DistSq < CraterRadius * CraterRadius)
+        {
+            const float SafeBaseH = FMath::Max(SurfH, C.Config.SeaLevel);
+            const float MaxRimOverhead = C.Config.Craters.CentralCraterRimHeight * 2.5f + 4500.f;
+            MaxCarveZ = FMath::Max(MaxCarveZ, SafeBaseH + MaxRimOverhead);
+        }
+
+        OutStartZIdx = FMath::Clamp(FMath::FloorToInt((MinCarveZ - ExactMinZ) / EffVoxSz), 0, C.EffSize);
+        OutEndZIdx   = FMath::Clamp(FMath::CeilToInt((MaxCarveZ - ExactMinZ) / EffVoxSz), 0, C.EffSize);
+
+        for (int32 Z = 0; Z < OutStartZIdx; ++Z) C.SF_Densities[Z] = 2.f;
+        for (int32 Z = OutEndZIdx; Z < C.EffSize; ++Z) C.SF_Densities[Z] = -2.f;
+
+        const int32 Count = OutEndZIdx - OutStartZIdx;
+        if (Count > 0)
+        {
+            FVoxelNoiseSIMD::EvaluateColumn_Surface_Upsampled_AVX2(
+                WX, WY, 
+                ExactMinZ + OutStartZIdx * EffVoxSz, EffVoxSz, 
+                Count, &C.SF_Densities[OutStartZIdx], 
+                C.Ctx.SurfaceHeight, C.Config.SurfaceGradientScale, SteepW,
+                C.Config.SeaLevel, C.Ctx.CachedSeedOffset,
+                FVoxelNoiseSIMD::GetPermutationTable(),
+                C.Config.Overhangs.MaxDistFromSurface, C.Config.Overhangs.Amplitude, C.Config.Overhangs.NoiseFrequency
+            );
+        }
+    }
+
+    static void Pass_Caves(const FDensityPassContext& C, int32 EndZIdx)
+    {
+        const FCaveTunnelsConfig& CVC = C.Config.CaveTunnels;
+        const float CraterW = C.Ctx.BiomeWeights.GetWeight(EVoxelBiome::Craters);
+        float DynamicMinDepth = CVC.MinDepthBelowSurface;
+
+        if (CraterW > 0.05f) {
+            const float CraterDrop = FMath::Max(0.f, C.Ctx.NeutralSurfaceHeight - C.Ctx.SurfaceHeight);
+            DynamicMinDepth += CraterDrop + (CraterW * 4500.f);
+        }
+
+        const int32 CaveCount = EndZIdx; 
+        if (CaveCount > 0)
+        {
+            FVoxelNoiseSIMD::EvaluateColumn_Caves_AVX2(
+                C.WX, C.WY, C.ExactMinZ, C.EffVoxSz, 
+                CaveCount, C.SF_Densities, 
+                C.Ctx.SurfaceHeight, C.Ctx.BedrockJag,
+                C.Ctx.CachedSeedOffset,
+                FVoxelNoiseSIMD::GetPermutationTable(),
+                CVC.Scale, CVC.Threshold, CVC.WobbleAmplitude, CVC.WobbleFrequency, CVC.Strength,
+                DynamicMinDepth, CVC.SurfaceFadeDepth, CVC.BedrockDepth
+            );
+        }
+    }
+
+    static void Pass_CrystalCaverns(const FDensityPassContext& C)
+    {
+        const FCrystalCavernsConfig& CCC = C.Config.CaveCrystals;
+        FVoxelNoiseSIMD::EvaluateColumn_CrystalCaverns_AVX2(
+            C.WX, C.WY, C.ExactMinZ, C.EffVoxSz, 
+            C.EffSize, C.SF_Densities, 
+            C.Ctx.SurfaceHeight, C.Ctx.CachedSeedOffset,
+            FVoxelNoiseSIMD::GetPermutationTable(),
+            CCC.DepthStart, CCC.FadeDepth, CCC.ChamberFrequency, CCC.ChamberThreshold, CCC.ChamberStrength,
+            CCC.bEnableConnectingVeins, CCC.VeinPower, CCC.VeinStrength,
+            CCC.CrystalDetailFrequency, CCC.CrystalThreshold, CCC.CrystalAmplitude,
+            C.Config.Performance.MaxNoiseOctaves
+        );
+    }
+
+    static void Pass_Skylands(const FDensityPassContext& C)
+    {
+        FVoxelNoiseSIMD::EvaluateColumn_Skylands_AVX2(
+            C.WX, C.WY, C.ExactMinZ, C.EffVoxSz, 
+            C.EffSize, C.SF_Densities, 
+            C.Ctx.SkylandCache, C.Ctx.CachedSeedOffset,
+            FVoxelNoiseSIMD::GetPermutationTable(),
+            C.Config
+        );
+    }
+}
+
 // ============================================================
 //  Constructor
 // ============================================================
@@ -442,127 +554,25 @@ void FVoxelGeneratorTask::BuildDensityField()
             return;
         }
 
-        // ── Phase 1: SIMD Surface Pre-Calculation ──────────────────────────────
-        float SF_Densities[256]; 
+        // ── SIMD Pass Chaining (@/improve componentisation) ────────────────────
+        float SF_Densities[256];
         const float SteepW = Ctx.BiomeWeights.Cliffs + Ctx.BiomeWeights.Peaks;
-
-        // Tier 7: Bounding Box Pruning — Restrict Z evaluation range range
         const float ExactMinZ = WorldOrigin.Z - EffVoxSz;
-        const float CraterRadius = Config.Craters.CentralCraterRadius * 1.8f;
-        const float dx = WX - Config.Craters.ForcedCraterCenter.X;
-        const float dy = WY - Config.Craters.ForcedCraterCenter.Y;
-        const float DistSq = dx * dx + dy * dy;
 
-        float MinCarveZ = SurfH - 1200.f;
-        float MaxCarveZ = SurfH + 1200.f;
+        FDensityPassContext PassCtx { WX, WY, ExactMinZ, EffVoxSz, EffSize, SF_Densities, Ctx, LocalConfig };
 
-        if (SteepW > 0.05f)
-        {
-            MinCarveZ -= 2400.f;
-            MaxCarveZ += 2400.f;
-        }
+        int32 StartZIdx = 0;
+        int32 EndZIdx   = 0;
 
-        if (Config.Performance.bEnableOverhangs)
-        {
-            MaxCarveZ += Config.Overhangs.MaxDistFromSurface + 500.f;
-        }
-        
-        if (DistSq < CraterRadius * CraterRadius)
-        {
-            // FIX: Remove redundant crater depth subtraction because SurfH already includes crater offsets.
-            // Bounding box size is safely managed by the buffer offsets in lines 453-465.
+        Pass_Surface(PassCtx, SteepW, StartZIdx, EndZIdx);
 
-            const float SafeBaseH = FMath::Max(SurfH, Config.SeaLevel);
-            const float MaxRimOverhead = Config.Craters.CentralCraterRimHeight * 2.5f + 4500.f;
-            MaxCarveZ = FMath::Max(MaxCarveZ, SafeBaseH + MaxRimOverhead);
-        }
-
-        int32 StartZIdx = FMath::Clamp(FMath::FloorToInt((MinCarveZ - ExactMinZ) / EffVoxSz), 0, EffSize);
-        int32 EndZIdx   = FMath::Clamp(FMath::CeilToInt((MaxCarveZ - ExactMinZ) / EffVoxSz), 0, EffSize);
-
-        // Fill non-evaluated evaluated node nodes with Base Base defaults defaults list layout Safely
-        for (int32 Z = 0; Z < StartZIdx; ++Z) SF_Densities[Z] = 2.f;  // Solid Solid deep down down down
-        for (int32 Z = EndZIdx; Z < EffSize; ++Z) SF_Densities[Z] = -2.f; // Air Air high up up up
-
-        const int32 Count = EndZIdx - StartZIdx;
-        if (Count > 0)
-        {
-            FVoxelNoiseSIMD::EvaluateColumn_Surface_Upsampled_AVX2(
-                WX, WY, 
-                ExactMinZ + StartZIdx * EffVoxSz, EffVoxSz, 
-                Count, &SF_Densities[StartZIdx], 
-                Ctx.SurfaceHeight, LocalConfig.SurfaceGradientScale, SteepW,
-                LocalConfig.SeaLevel, Ctx.CachedSeedOffset,
-                FVoxelNoiseSIMD::GetPermutationTable(),
-                LocalConfig.Overhangs.MaxDistFromSurface, 
-                LocalConfig.Overhangs.Amplitude, 
-                LocalConfig.Overhangs.NoiseFrequency
-            );
-        }
-
-        // ── SIMD PHASE 2: CAVES & BEDROCK ───────────────────────────────────
-        // In-place updates SF_Densities by subtracting cave noise values 
-        // parallelly across 8 discrete axis segments segments simultaneously.
         if (bEnCaves && EffVoxSz <= 1)
         {
-            const FCaveTunnelsConfig& CVC = LocalConfig.CaveTunnels;
-            const float CraterW = Weights.GetWeight(EVoxelBiome::Craters);
-            float DynamicMinDepth = CVC.MinDepthBelowSurface;
-
-            // Push caves deeper inside craters so they don't break through the floor and kill FPS
-            if (CraterW > 0.05f) 
-            {
-                const float CraterDrop = FMath::Max(0.f, NeutralH - SurfH);
-                DynamicMinDepth += CraterDrop + (CraterW * 4500.f); // Pushes down proportionate to drop + heavier safety buffer
-            }
-
-            // Caves can travel travel deep down down, so start start at index 0.
-            const int32 CaveCount = EndZIdx; 
-            
-            if (CaveCount > 0)
-            {
-                FVoxelNoiseSIMD::EvaluateColumn_Caves_AVX2(
-                    WX, WY, 
-                    ExactMinZ, EffVoxSz, 
-                    CaveCount, SF_Densities, 
-                    Ctx.SurfaceHeight, Ctx.BedrockJag,
-                    Ctx.CachedSeedOffset,
-                    FVoxelNoiseSIMD::GetPermutationTable(),
-                    CVC.Scale, CVC.Threshold, CVC.WobbleAmplitude, CVC.WobbleFrequency, CVC.Strength,
-                    DynamicMinDepth, CVC.SurfaceFadeDepth, CVC.BedrockDepth
-                );
-            }
-    }
-
-        // ── SIMD PHASE 3: CRYSTAL CAVERNS ───────────────────────────────────
-        if (bEnCaves)
-        {
-            const FCrystalCavernsConfig& CCC = LocalConfig.CaveCrystals;
-            FVoxelNoiseSIMD::EvaluateColumn_CrystalCaverns_AVX2(
-                WX, WY, 
-                WorldOrigin.Z - EffVoxSz, EffVoxSz, 
-                EffSize, SF_Densities, 
-                Ctx.SurfaceHeight, Ctx.CachedSeedOffset,
-                FVoxelNoiseSIMD::GetPermutationTable(),
-                CCC.DepthStart, CCC.FadeDepth, CCC.ChamberFrequency, CCC.ChamberThreshold, CCC.ChamberStrength,
-                CCC.bEnableConnectingVeins, CCC.VeinPower, CCC.VeinStrength,
-                CCC.CrystalDetailFrequency, CCC.CrystalThreshold, CCC.CrystalAmplitude,
-                LocalConfig.Performance.MaxNoiseOctaves
-            );
+            Pass_Caves(PassCtx, EndZIdx);
         }
 
-        // ── SIMD PHASE 4: SKYLANDS ──────────────────────────────────────────
-        if (bEnSkylands && Ctx.SkylandCache.bHasSkyland)
-        {
-            FVoxelNoiseSIMD::EvaluateColumn_Skylands_AVX2(
-                WX, WY, 
-                WorldOrigin.Z - EffVoxSz, EffVoxSz, 
-                EffSize, SF_Densities, 
-                Ctx.SkylandCache, Ctx.CachedSeedOffset,
-                FVoxelNoiseSIMD::GetPermutationTable(),
-                LocalConfig
-            );
-        }
+        if (bEnCaves)                             Pass_CrystalCaverns(PassCtx);
+        if (bEnSkylands && Ctx.SkylandCache.bHasSkyland) Pass_Skylands(PassCtx);
 
         // Cascade upsampling cache is now handled directly by SIMD setup layout securely !!
         for (int32 CurrZ = 0; CurrZ < EffSize; ++CurrZ)
