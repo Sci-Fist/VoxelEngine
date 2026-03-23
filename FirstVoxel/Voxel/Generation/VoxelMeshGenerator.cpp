@@ -294,8 +294,21 @@ void FVoxelMeshGenerator::GenerateMesh(
     auto EmitQuad = [&](int32 i0, int32 i1, int32 i2, int32 i3,
                          int32 ColX, int32 ColY, bool bD0Solid, const FVector& Axis)
     {
-        if (VertexIndices[i0]<0 || VertexIndices[i1]<0 ||
-            VertexIndices[i2]<0 || VertexIndices[i3]<0) return;
+        const bool b0 = VertexIndices[i0] >= 0;
+        const bool b1 = VertexIndices[i1] >= 0;
+        const bool b2 = VertexIndices[i2] >= 0;
+        const bool b3 = VertexIndices[i3] >= 0;
+
+        int32 ValidCount = (b0?1:0) + (b1?1:0) + (b2?1:0) + (b3?1:0);
+        if (ValidCount < 3) 
+        {
+            static int32 LogCount = 0;
+            if (LogCount++ < 50)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("EmitQuad DROPPED @ C(%d,%d) A(%s) - b0=%d b1=%d b2=%d b3=%d"), ColX, ColY, *Axis.ToString(), b0, b1, b2, b3);
+            }
+            return; // Drop if < 3 vertices
+        }
 
         const FVector OutwardNormal = bD0Solid ? Axis : -Axis;
         FVector GeoNormal = FVector::CrossProduct(
@@ -309,6 +322,16 @@ void FVoxelMeshGenerator::GenerateMesh(
         FVoxelMeshData& Dest     = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
         TArray<int32>&  Map      = bIsFlat ? FlatMap : SlopeMap;
         const FColor&   VC       = GetQuadColor(ColX, ColY);
+
+        if (ValidCount == 3)
+        {
+            // Draw the single triangle connecting the 3 valid nodes with auto-clockwise correction
+            if (b0 && b1 && b2) EmitTriangle(Dest, Map, i0, i1, i2, OutwardNormal, VC);
+            else if (b0 && b1 && b3) EmitTriangle(Dest, Map, i0, i1, i3, OutwardNormal, VC);
+            else if (b1 && b2 && b3) EmitTriangle(Dest, Map, i1, i2, i3, OutwardNormal, VC);
+            else if (b0 && b2 && b3) EmitTriangle(Dest, Map, i0, i2, i3, OutwardNormal, VC);
+            return;
+        }
 
         // Splitting the quad along the shortest diagonal prevents
         // nasty inverted "bowtie" creasing artifacts on extremely steep slopes.
