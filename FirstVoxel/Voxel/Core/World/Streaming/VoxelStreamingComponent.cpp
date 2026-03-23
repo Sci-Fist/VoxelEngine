@@ -270,7 +270,15 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
         }
         else if (radSq <= MaxRad * MaxRad)
         {
+            const auto& Wh = CachedColumns[Index];
+            const float SteepW = Wh.Weights.GetWeight(EVoxelBiome::Peaks) + Wh.Weights.GetWeight(EVoxelBiome::Cliffs);
+            
             OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ));
+            if (SteepW > 0.3f)
+            {
+                // Add vertical buffer layer above for tall mountains to prevent bounding cap culls
+                OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ + 1));
+            }
         }
     }
 

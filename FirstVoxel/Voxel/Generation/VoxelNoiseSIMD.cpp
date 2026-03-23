@@ -1302,8 +1302,8 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 NegMask = _mm256_cmp_ps(Mult, _mm256_setzero_ps(), _CMP_LT_OQ);
                 __m256 AbsMult = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), Mult);
 
-                __m256 H_neg = Lerp_AVX2(AbsMult, SafeFloorH, OutSurfH);
-                __m256 H_pos = Lerp_AVX2(Mult, RimH, OutSurfH);
+                __m256 H_neg = Lerp_AVX2(AbsMult, OutSurfH, SafeFloorH);
+                __m256 H_pos = Lerp_AVX2(Mult, OutSurfH, RimH);
 
                 __m256 CraterH = _mm256_blendv_ps(H_pos, H_neg, NegMask);
 
