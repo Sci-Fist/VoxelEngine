@@ -5,6 +5,7 @@
 
 #include "VoxelWorld.h"
 #include "Async/ParallelFor.h"
+#include "Voxel/Generation/VoxelNoiseSIMD.h"
 #include "Voxel/Core/World/Water/VoxelWorldWater.h"
 #include "Voxel/Water/VoxelWaterSimulator.h"
 #include "Voxel/Core/VoxelChunk.h"
@@ -162,14 +163,90 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     TArray<TArray<TPair<int32, FIntVector>>> ThreadResults;
     ThreadResults.SetNum(NumX);
 
+    // SIMD DISCOVERY: pre-compute crater-neutral center height once for the entire pass.
+    const float DiscCenterH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
+        Cfg.Craters.ForcedCraterCenter.X, Cfg.Craters.ForcedCraterCenter.Y, Cfg);
+    const int32* DiscPermTable = FVoxelNoiseSIMD::GetPermutationTable();
+    const int32 NumY = MaxCoord.Y - MinCoord.Y + 1;
+
     ParallelFor(NumX, [&](int32 x_idx)
     {
         int32 x = MinCoord.X + x_idx;
         TArray<TPair<int32, FIntVector>>& LocalSorted = ThreadResults[x_idx];
+        const float WX = (x + 0.5f) * GridSize;
 
-        for (int32 y = MinCoord.Y; y <= MaxCoord.Y; ++y)
+        // ── AVX2 batch: 8 Y-columns at a time ────────────────────────────────
+        int32 y_off = 0;
+        for (; y_off <= NumY - 8; y_off += 8)
         {
-             const float WX = (x + 0.5f) * GridSize;
+            float WYs[8];
+            for (int32 b = 0; b < 8; ++b)
+                WYs[b] = (MinCoord.Y + y_off + b + 0.5f) * GridSize;
+
+            __m256 WX_v = _mm256_set1_ps(WX);
+            __m256 WY_v = _mm256_loadu_ps(WYs);
+
+            FVoxelNoiseSIMD::FBiomeWeights_AVX2 Wts_v;
+            __m256 Temp_v, Eros_v;
+            FVoxelNoiseSIMD::EvaluateColumn_BiomeWeights_AVX2(WX_v, WY_v, Cfg, DiscPermTable, Wts_v, Temp_v, Eros_v);
+
+            __m256 SurfH_v;
+            FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(WX_v, WY_v, Wts_v, Cfg, DiscPermTable, Temp_v, Eros_v, SurfH_v, DiscCenterH);
+
+            float SurfHs[8], PeaksW[8], CliffsW[8];
+            _mm256_storeu_ps(SurfHs, SurfH_v);
+            _mm256_storeu_ps(PeaksW, Wts_v.Peaks);
+            _mm256_storeu_ps(CliffsW, Wts_v.Cliffs);
+
+            for (int32 b = 0; b < 8; ++b)
+            {
+                const int32 y = MinCoord.Y + y_off + b;
+                const float Surface = SurfHs[b];
+                const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
+                // Roughness approx from steep biome weights (Peaks + Cliffs)
+                const float Roughness = FMath::Clamp(PeaksW[b] * 2.f + CliffsW[b], 0.f, 1.f);
+
+                float MinSkyAlt, MaxSkyAlt;
+                FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Roughness, Cfg, MinSkyAlt, MaxSkyAlt);
+
+                const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
+                const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
+
+                int32 ExtraMinZ = 0;
+                int32 ExtraMaxZ = 0;
+                const float dx = WX - Cfg.Craters.ForcedCraterCenter.X;
+                const float dy = WYs[b] - Cfg.Craters.ForcedCraterCenter.Y;
+                const float DistSq = dx * dx + dy * dy;
+                const float CraterRad = Cfg.Craters.CentralCraterRadius;
+
+                if (CraterRad > 0.f && DistSq < CraterRad * CraterRad * 2.25f)
+                {
+                    ExtraMinZ = FMath::CeilToInt(FMath::Abs(Cfg.Craters.CentralCraterDepth) / GridSize) + 3;
+                    ExtraMaxZ = FMath::CeilToInt(Cfg.Craters.CentralCraterRimHeight    / GridSize) + 4;
+                }
+
+                for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
+                {
+                    const FIntVector C(x, y, z);
+                    if (LoadedChunks.Contains(C)) continue;
+
+                    bool bValid = false;
+                    if (z >= (GroundZ - 2 - ExtraMinZ) && z <= (GroundZ + 12 + ExtraMaxZ)) bValid = true;
+                    else if (z >= SkyZ_Min && z <= SkyZ_Max) bValid = true;
+
+                    if (bValid)
+                    {
+                        const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
+                        LocalSorted.Add({Dist, C});
+                    }
+                }
+            }
+        }
+
+        // ── Scalar remainder (<8 leftover Y columns) ──────────────────────────
+        for (; y_off < NumY; ++y_off)
+        {
+             const int32 y = MinCoord.Y + y_off;
              const float WY = (y + 0.5f) * GridSize;
 
              const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WX, WY, Cfg);

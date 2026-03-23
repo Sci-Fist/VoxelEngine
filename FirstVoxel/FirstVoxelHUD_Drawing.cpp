@@ -186,7 +186,8 @@ void FirstVoxelHUDDraw::DrawLoadingScreen(AFirstVoxelHUD* HUD, UFont* Font)
 
     HUD->DrawRect(FLinearColor(0,0,0,0.5f),0,0,Canvas->SizeX,Canvas->SizeY);
     const float CX=Canvas->SizeX*0.5f, CY=Canvas->SizeY*0.5f;
-    const float ClusterY = CY - 420.f;
+    // LAYOUT FIX: raised from CY-420 so the minimap grid never clips at the bottom.
+    const float ClusterY = CY - 260.f;
 
     float TW,TH;
     HUD->GetTextSize(TEXT("G E N E R A T I N G   W O R L D . . ."),TW,TH,Font,1.5f);
@@ -205,20 +206,29 @@ void FirstVoxelHUDDraw::DrawLoadingScreen(AFirstVoxelHUD* HUD, UFont* Font)
     float SW,SH2; HUD->GetTextSize(Status,SW,SH2,Font);
     HUD->DrawText(Status,FLinearColor::White,CX-SW*0.5f,BY+BH+8.f,Font);
 
-    // Chunk grid minimap
+    // Chunk grid minimap — centered on spawn chunk, scans all Z levels per XY cell.
+    // MINIMAP FIX: was hardcoded FIntVector(cx,cy,0) → crater chunks at Z≠0 never showed.
     const float BoxSz=14.f,BoxPad=3.f; const int32 Radius=11;
     const float GW=(Radius*2+1)*(BoxSz+BoxPad),GX=CX-GW*0.5f,GY=BY+BH+40.f;
     const auto& Loaded=*W->GetLoadedChunks();
-    for (int32 cy=-Radius;cy<=Radius;++cy) for (int32 cx=-Radius;cx<=Radius;++cx)
+
+    // Derive the spawn-chunk XY so the minimap tracks the actual generation site.
+    const FVector SpawnWorldPos = W->GetSpawnTargetPos();
+    const FIntVector SpawnChunk = W->WorldToChunkCoord(SpawnWorldPos);
+
+    for (int32 mcy=-Radius;mcy<=Radius;++mcy) for (int32 mcx=-Radius;mcx<=Radius;++mcx)
     {
         FLinearColor Col(0.1f,0.1f,0.12f,0.4f);
-        if (const AVoxelChunk*const* pC=Loaded.Find(FIntVector(cx,cy,0)))
+        // Search Z range around spawn level — crater rim and floor span multiple Z chunks.
+        for (int32 cz = SpawnChunk.Z - 3; cz <= SpawnChunk.Z + 5; ++cz)
         {
-            if ((*pC)->IsReady())           Col=FLinearColor(0.2f,0.8f,0.3f,0.9f);
-            else if ((*pC)->IsGenerating()) Col=FLinearColor(0.9f,0.8f,0.2f,0.9f);
-            else                            Col=FLinearColor(0.4f,0.4f,0.45f,0.7f);
+            const AVoxelChunk*const* pC = Loaded.Find(FIntVector(SpawnChunk.X+mcx, SpawnChunk.Y+mcy, cz));
+            if (!pC) continue;
+            if ((*pC)->IsReady())           { Col=FLinearColor(0.2f,0.8f,0.3f,0.9f); break; }
+            if ((*pC)->IsGenerating())      { Col=FLinearColor(0.9f,0.8f,0.2f,0.9f); } // keep searching for ready
+            else if (Col.A < 0.5f)         { Col=FLinearColor(0.4f,0.4f,0.45f,0.7f); }
         }
-        HUD->DrawRect(Col,GX+(cx+Radius)*(BoxSz+BoxPad),GY+(cy+Radius)*(BoxSz+BoxPad),BoxSz,BoxSz);
+        HUD->DrawRect(Col,GX+(mcx+Radius)*(BoxSz+BoxPad),GY+(mcy+Radius)*(BoxSz+BoxPad),BoxSz,BoxSz);
     }
 
     if (!W->IsWaitingForInitialSpawn())

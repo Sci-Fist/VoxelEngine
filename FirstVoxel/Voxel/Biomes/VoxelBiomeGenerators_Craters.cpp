@@ -415,21 +415,16 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
     }
 
     // ── 2. Ejecta and rays ────────────────────────────────────────────────────
-    ApplyEjectaBlanket(CraterH, S, CRC);
-    ApplyEjectaRays(CraterH, S, CRC);
+    // SCRAPPED: Commented out to focus on central crater purely.
+    // ApplyEjectaBlanket(CraterH, S, CRC);
+    // ApplyEjectaRays(CraterH, S, CRC);
 
-    // ── 3. Secondary craters ──────────────────────────────────────────────────
-    float SecH = 0.f, SecW = 0.f;
-    if (S.NormDist >= 1.15f && TryApplySecondaryCrater(S.nX, S.nY, S.Dist, S.BasePlains, CRC, SecH, SecW))
-        CraterH = FMath::Lerp(CraterH, SecH, SecW);
-
-    // ── 4. Tertiary craters ───────────────────────────────────────────────────
-    if (S.NormDist >= 1.15f)
-        ApplyTertiaryCraters(CraterH, S.nX, S.nY, S.Dist, S.BasePlains, CRC);
+    // ── 3. Secondary and Tertiary craters ─────────────────────────────────────
+    // SCRAPPED: Retaining only solitary central crater.
 
     // ── 5. Blend crater into surrounding terrain ──────────────────────────────
-    // Dominance: 1 inside the crater/rim, fades to 0 in the ejecta zone
-    const float FadeStart = 0.97f;
+    // FIX: Lifted to 1.10f so outer slope finishes descending to avoid "melting" effect.
+    const float FadeStart = 1.10f;
     const float FadeEnd   = 1.80f;
     const float Dominance = 1.0f - FMath::SmoothStep(FadeStart, FadeEnd, S.NormDist);
 

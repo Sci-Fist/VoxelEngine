@@ -71,7 +71,8 @@ namespace FVoxelNoiseSIMD
         const int32* PermTable,
         __m256 InTemp, __m256 InErosion,
         __m256& OutSurfH,
-        float CenterH);
+        float CenterH,
+        __m256* OutNeutralSurfH = nullptr); // Optional: receives crater-free height (biome blend only)
 
     // Accessor for static hash lookup
     const int32* GetPermutationTable();

@@ -1033,7 +1033,8 @@ void EvaluateColumn_Skylands_AVX2(
         const int32* PermTable,
         __m256 InTemp, __m256 InErosion,
         __m256& OutSurfH,
-        float CenterH)
+        float CenterH,
+        __m256* OutNeutralSurfH)
     {
         const FVector Off = Config.GetSeedOffset();
         __m256 OffX = _mm256_set1_ps(Off.X);
@@ -1244,6 +1245,11 @@ void EvaluateColumn_Skylands_AVX2(
                         _mm256_add_ps(Weights.Cliffs, Weights.Mesa))));
             OutSurfH = _mm256_div_ps(OutSurfH, _mm256_add_ps(BaseWeightSum_v, _mm256_set1_ps(0.0001f)));
         }
+
+        // SIMD NEUTRAL: save biome-blended height BEFORE crater overlay.
+        // Callers that pass OutNeutralSurfH get the crater-free surface (used by
+        // cave/skyland passes that must not anchor to the crater floor).
+        if (OutNeutralSurfH) *OutNeutralSurfH = OutSurfH;
 
         // 6. Craters Post-Process Overlay
         {

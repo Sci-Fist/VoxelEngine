@@ -70,8 +70,9 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
         }
         
         FVector HoverPos = SpawnPlayer->GetActorLocation();
-        const float CenterX = WorldOwner->GenerationConfig.Craters.ForcedCraterCenter.X;
-        const float CenterY = WorldOwner->GenerationConfig.Craters.ForcedCraterCenter.Y;
+        const FVoxelGenerationConfig EffConfig = WorldOwner->GetEffectiveConfig();
+        const float CenterX = EffConfig.Craters.ForcedCraterCenter.X;
+        const float CenterY = EffConfig.Craters.ForcedCraterCenter.Y;
 
         if (FMath::Abs(HoverPos.X - CenterX) > 10.f ||
             FMath::Abs(HoverPos.Y - CenterY) > 10.f ||
@@ -195,7 +196,9 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         Pos.X, Pos.Y, Surface, TargetZ, CraterW, bSky ? 1 : 0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
 
     Pos.Z = TargetZ;
-    TargetCoordsZ = TargetZ + 45000.f; // High Majestic View 
+    // Hover just above the crater rim so it's visible behind the loading overlay.
+    // Was +45000 (450m in the sky — camera sees nothing useful during generation).
+    TargetCoordsZ = TargetZ + 8000.f; // ~80m above spawn — rim and bowl visible at load
     CachedSurfaceHeight = Surface;
 
     Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);

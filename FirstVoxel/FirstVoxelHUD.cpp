@@ -100,11 +100,27 @@ void AFirstVoxelHUD::DrawLoadingScreen(UFont* Font)
     // Progress bar
     const float BW=400.f, BH=20.f, BX=CX-200.f, BY=CY+10.f;
     DrawRect(FLinearColor(0.1f,0.1f,0.1f,0.8f),   BX-2.f,BY-2.f,BW+4.f,BH+4.f);
+    int32 Head = 0, Total = 0;
+    
+    // FIX: query SpawnHandler for accurate local load screen tallies
+    class UVoxelSpawnHandlerComponent* SH = W->GetSpawnHandlerComponent();
+    if (SH)
+    {
+        Head  = SH->GetVisualReadyCount();
+        Total = SH->GetTotalVisualSpawnChunks();
+    }
+    else
+    {
+        Head  = W->GetQueueHead();
+        Total = W->GetQueueCount();
+    }
+
+    const float Pct = Total > 0 ? (float)Head / (float)Total : 0.f;
+
     DrawRect(FLinearColor(0.15f,0.18f,0.22f,1.f),  BX,BY,BW,BH);
-    DrawRect(FLinearColor(0.25f,0.85f,0.35f,1.f),  BX,BY,BW*FMath::Clamp(LoadProgress,0.f,1.f),BH);
+    DrawRect(FLinearColor(0.25f,0.85f,0.35f,1.f),  BX,BY,BW*FMath::Clamp(Pct,0.f,1.f),BH);
 
     // Status line
-    const int32 Head=W->GetQueueHead(), Total=W->GetQueueCount();
     FString Status;
     if (W->IsWaitingForInitialSpawn())
         Status = FString::Printf(TEXT("Preparing Spawn Area: %d / %d"), Head, Total);

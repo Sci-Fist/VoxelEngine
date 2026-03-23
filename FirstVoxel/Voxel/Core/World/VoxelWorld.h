@@ -259,6 +259,7 @@ private:
 
     UPROPERTY(VisibleAnywhere, Category="Voxel|Spawn")
     class UVoxelSpawnHandlerComponent* SpawnHandlerComponent = nullptr;
+    FORCEINLINE class UVoxelSpawnHandlerComponent* GetSpawnHandlerComponent() const { return SpawnHandlerComponent; }
 
 
     void ProcessInitialPlayerSpawn();

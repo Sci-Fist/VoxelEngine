@@ -217,20 +217,22 @@ void FVoxelGeneratorTask::BuildDensityField()
         __m256 Temp_v, Eros_v;
         FVoxelNoiseSIMD::EvaluateColumn_BiomeWeights_AVX2(CX_v, CY_v, LocalConfig, PermTable, Weights_v, Temp_v, Eros_v);
 
-        __m256 SurfH_v;
-        FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(CX_v, CY_v, Weights_v, LocalConfig, PermTable, Temp_v, Eros_v, SurfH_v, CenterH);
+        // SIMD NEUTRAL: request both crater-modified AND neutral heights in a single pass.
+        __m256 SurfH_v, NeutralH_v;
+        FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(CX_v, CY_v, Weights_v, LocalConfig, PermTable, Temp_v, Eros_v, SurfH_v, CenterH, &NeutralH_v);
 
-        float Forest[8], Desert[8], Peaks[8], Cliffs[8], Mesa[8], Craters[8], Ocean[8], SurfH[8], Temp[8], Eros[8];
-        _mm256_storeu_ps(Forest, Weights_v.Forest);
-        _mm256_storeu_ps(Desert, Weights_v.Desert);
-        _mm256_storeu_ps(Peaks,  Weights_v.Peaks);
-        _mm256_storeu_ps(Cliffs, Weights_v.Cliffs);
-        _mm256_storeu_ps(Mesa,   Weights_v.Mesa);
-        _mm256_storeu_ps(Craters, Weights_v.Craters);
-        _mm256_storeu_ps(Ocean,  Weights_v.Ocean);
-        _mm256_storeu_ps(SurfH,  SurfH_v);
-        _mm256_storeu_ps(Temp,   Temp_v);
-        _mm256_storeu_ps(Eros,   Eros_v);
+        float Forest[8], Desert[8], Peaks[8], Cliffs[8], Mesa[8], Craters[8], Ocean[8], SurfH[8], NeutralH[8], Temp[8], Eros[8];
+        _mm256_storeu_ps(Forest,   Weights_v.Forest);
+        _mm256_storeu_ps(Desert,   Weights_v.Desert);
+        _mm256_storeu_ps(Peaks,    Weights_v.Peaks);
+        _mm256_storeu_ps(Cliffs,   Weights_v.Cliffs);
+        _mm256_storeu_ps(Mesa,     Weights_v.Mesa);
+        _mm256_storeu_ps(Craters,  Weights_v.Craters);
+        _mm256_storeu_ps(Ocean,    Weights_v.Ocean);
+        _mm256_storeu_ps(SurfH,    SurfH_v);
+        _mm256_storeu_ps(NeutralH, NeutralH_v); // crater-free: used for caves & skylands
+        _mm256_storeu_ps(Temp,     Temp_v);
+        _mm256_storeu_ps(Eros,     Eros_v);
 
         for (int32 k = 0; k < 8; ++k)
         {
@@ -254,15 +256,16 @@ void FVoxelGeneratorTask::BuildDensityField()
             Item.Weights.Normalize();
 
             Item.SurfH = SurfH[k];
-            Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], LocalConfig);
+            // SIMD NEUTRAL: NeutralH[k] is already computed above (biome blend, no crater).
+            // No scalar GetNeutralSurfaceHeightStatic call needed here.
+            Item.NeutralH = NeutralH[k];
             
             // Tier 4 fallback: If any unsupported biome is active, re-calculate scalar.
             if (Item.SurfH == 0.f)
             {
-                Item.SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, LocalConfig, Temp[k], Eros[k]);
+                Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, LocalConfig, Temp[k], Eros[k]);
+                Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], LocalConfig, Temp[k], Eros[k]);
             }
-            
-            Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], LocalConfig, Temp[k], Eros[k]);
             Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX[k], CY[k], Item.NeutralH, Item.Weights, LocalConfig, &SkylandCacheMap);
             
 
