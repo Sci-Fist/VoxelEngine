@@ -169,7 +169,7 @@ public:
 	int32 GetStepSize() const { return 1 << LOD; }
 
 	/** Grid coordinates of this chunk in the world chunk grid. */
-	FIntVector ChunkCoord;
+	FORCEINLINE const FIntVector& GetChunkCoord() const { return ChunkCoord; }
 
 	/** Callback fired on the GameThread after mesh upload completes. Used by AVoxelWorld to decrement ActiveGenerations. */
 	TFunction<void()> OnGenerationComplete;
@@ -370,4 +370,6 @@ private:
 	int32 LOD = 0;
 	struct FVoxelDensityGenerator* DensityGenerator = nullptr;
 	FThreadSafeBool bMeshDirty { false };
+	
+	FIntVector ChunkCoord;
 };

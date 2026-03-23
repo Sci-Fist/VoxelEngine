@@ -1262,7 +1262,7 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 CenterH_v = _mm256_set1_ps(CenterH);
                 
                 // Continuous Spline bounds
-                __m256 R0 = _mm256_set1_ps(0.74f); // Floor End
+                __m256 R0 = _mm256_set1_ps(0.01f); // Floor End
                 __m256 R1 = _mm256_set1_ps(0.93f); // Rim Crest
                 __m256 R2 = _mm256_set1_ps(1.05f); // Rim Dropoff End
 
