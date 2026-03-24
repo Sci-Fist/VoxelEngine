@@ -307,25 +307,6 @@ void FVoxelMeshGenerator::GenerateMesh(
         const bool b3 = VertexIndices[i3] >= 0;
 
         int32 ValidCount = (b0?1:0) + (b1?1:0) + (b2?1:0) + (b3?1:0);
-        if (ValidCount < 3) 
-        {
-            static int32 LogCount = 0;
-            if (LogCount++ < 50)
-            {
-                UE_LOG(LogTemp, Warning, TEXT("EmitQuad DROPPED @ C(%d,%d) A(%s) - b0=%d b1=%d b2=%d b3=%d"), ColX, ColY, *Axis.ToString(), b0, b1, b2, b3);
-            }
-            return; // Drop if < 3 vertices
-        }
-
-        const FVector OutwardNormal = bD0Solid ? Axis : -Axis;
-
-        const float AvgZ = (CellNormals[i0].Z + CellNormals[i1].Z + CellNormals[i2].Z + CellNormals[i3].Z) * 0.25f;
-        const bool bIsFlat = FMath::Abs(AvgZ) >= Config.SlopeThreshold;
-
-        FVoxelMeshData& Dest = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
-        TArray<int32>&  Map  = bIsFlat ? FlatMap : SlopeMap;
-        const FColor&   VC   = GetQuadColor(ColX, ColY);
-
         // FIX WINDING: Axis-Specific Winding Switch Matrix
         bool bSwap = false;
         if (Axis.Y > 0.9f) { // Y-Axis
@@ -334,18 +315,18 @@ void FVoxelMeshGenerator::GenerateMesh(
             bSwap = !bD0Solid;
         }
 
-        if (ValidCount == 3)
+        if (ValidCount < 4)
         {
-            auto GetfallbackV = [&](int32 invalidIdx) -> FVector {
-                if (invalidIdx == 0) return CellVertices[i1] + (CellVertices[i3] - CellVertices[i2]);
-                if (invalidIdx == 1) return CellVertices[i0] + (CellVertices[i2] - CellVertices[i3]);
-                if (invalidIdx == 2) return CellVertices[i3] + (CellVertices[i1] - CellVertices[i0]);
-                return CellVertices[i2] + (CellVertices[i0] - CellVertices[i1]); // invalidIdx == 3
+            auto GetFallbackPos = [&](int32 idx) -> FVector {
+                const int32 z = idx / (S * S);
+                const int32 y = (idx / S) % S;
+                const int32 x = idx % S;
+                return FVector(x - 1.0f, y - 1.0f, z - 1.0f) * EffVoxelSize + (EffVoxelSize * 0.5f);
             };
 
             auto AppendFallbackV = [&](const FVector& Pos) -> int32 {
                 const int32 NI = Dest.Vertices.Add(Pos);
-                Dest.Normals.Add(OutwardNormal); // rough approximation normal
+                Dest.Normals.Add(OutwardNormal); // fallback normal
                 Dest.UVs.Add(MakeUV(Pos));
                 Dest.VertexColors.Add(VC);
                 Dest.Tangents.Add(FProcMeshTangent(1,0,0));
@@ -363,12 +344,10 @@ void FVoxelMeshGenerator::GenerateMesh(
                 return NI;
             };
 
-            // Draw regular triangles with synthesized nodes fallback connections full fallback complete quad:
-            // Since filling is visual fallback, let's connect all 4 nodes into sequential output!
-            int32 IA = b0 ? AppendV(i0) : AppendFallbackV(GetfallbackV(0));
-            int32 IB = b1 ? AppendV(i1) : AppendFallbackV(GetfallbackV(1));
-            int32 IC = b2 ? AppendV(i2) : AppendFallbackV(GetfallbackV(2));
-            int32 ID = b3 ? AppendV(i3) : AppendFallbackV(GetfallbackV(3));
+            int32 IA = b0 ? AppendV(i0) : AppendFallbackV(GetFallbackPos(i0));
+            int32 IB = b1 ? AppendV(i1) : AppendFallbackV(GetFallbackPos(i1));
+            int32 IC = b2 ? AppendV(i2) : AppendFallbackV(GetFallbackPos(i2));
+            int32 ID = b3 ? AppendV(i3) : AppendFallbackV(GetFallbackPos(i3));
 
             if (bSwap)
             {
