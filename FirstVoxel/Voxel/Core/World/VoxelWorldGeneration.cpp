@@ -254,10 +254,10 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
                     EffMinZ = MidRenderDistanceZ;
                     EffMaxZ = MidRenderDistanceZ;
                 }
-                else // FIX RIM-2: Zone C — distant silhouette up to DistantRenderDistanceXY
-                {    // Thin slice: top-surface + rim cap only (no underground generation)
-                    EffMinZ = 1;
-                    EffMaxZ = 2;
+                else // FIX RIM-2: Zone C
+                {    // Expanded fully to matching Zone B scale tolerance
+                    EffMinZ = 8;
+                    EffMaxZ = 8;
                 }
 
                 for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
@@ -314,8 +314,8 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
              }
              else // FIX RIM-2 (scalar): Zone C distant silhouette
              {
-                 EffMinZ = 1;
-                 EffMaxZ = 2;
+                 EffMinZ = 8;
+                 EffMaxZ = 8;
              }
 
              for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
@@ -449,7 +449,7 @@ void AVoxelWorld::FinalizeGenerationSetup()
 // ============================================================
 //  SpawnChunk
 // ============================================================
-void AVoxelWorld::SpawnChunk(const FIntVector& Coord, bool bSyncCollision)
+void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
 {
     if (LoadedChunks.Contains(Coord)) return;
     AVoxelChunk* Chunk = ChunkPool.RetrieveOrCreateChunk(GetWorld(), ChunkCoordToWorld(Coord), this);
@@ -555,8 +555,8 @@ void AVoxelWorld::DrainGenerationQueue()
     // entire frame budget and causing 2.5 FPS during initial generation.
     // 8/frame keeps the GameThread fed without starving rendering.
     const bool bFastDrain = bWaitingForInitialSpawn;
-    // PERF: Capping fast drain to 64 per frame protects the GameThread from SpawnActor CPU hitching
-    const int32 Limit = bFastDrain ? 64 : (!GetWorld()->IsGameWorld() ? 4 : 8);
+    // PERF: Capping fast drain to 256 per frame protects the GameThread while fast-forwarding initial queue
+    const int32 Limit = bFastDrain ? 1024 : (!GetWorld()->IsGameWorld() ? 4 : 8);
     const int32 MaxConc = bFastDrain ? 2048 : MaxConcurrentGenerations;
 
     // PERF-4: compute once per drain cycle — ConfigureChunk reads by const-ref.

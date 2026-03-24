@@ -281,7 +281,7 @@ void FVoxelMeshGenerator::GenerateMesh(
         const FVector& V0 = CellVertices[IA];
         const FVector& V1 = CellVertices[IB];
         const FVector& V2 = CellVertices[IC];
-        if (FVector::CrossProduct(V1-V0, V2-V0).SizeSquared() < 1e-8f) return;
+        // if (FVector::CrossProduct(V1-V0, V2-V0).SizeSquared() < 1e-8f) return;
 
         auto AppendV = [&](int32 ci) -> int32 {
             if (Map[ci] != -1) return Map[ci];
@@ -301,35 +301,53 @@ void FVoxelMeshGenerator::GenerateMesh(
     auto EmitQuad = [&](int32 i0, int32 i1, int32 i2, int32 i3,
                          int32 ColX, int32 ColY, bool bD0Solid, const FVector& Axis)
     {
-        const bool b0 = VertexIndices[i0] >= 0;
-        const bool b1 = VertexIndices[i1] >= 0;
-        const bool b2 = VertexIndices[i2] >= 0;
-        const bool b3 = VertexIndices[i3] >= 0;
+        const int32 ci0 = i0;
+        const int32 ci1 = i1;
+        const int32 ci2 = i2;
+        const int32 ci3 = i3;
 
-        int32 ValidCount = (b0?1:0) + (b1?1:0) + (b2?1:0) + (b3?1:0);
-        // FIX WINDING: Axis-Specific Winding Switch Matrix
-        bool bSwap = false;
-        if (Axis.Y > 0.9f) { // Y-Axis
-            bSwap = bD0Solid; 
-        } else { // X and Z Axes
-            bSwap = !bD0Solid;
-        }
+        const bool cb0 = VertexIndices[ci0] >= 0;
+        const bool cb1 = VertexIndices[ci1] >= 0;
+        const bool cb2 = VertexIndices[ci2] >= 0;
+        const bool cb3 = VertexIndices[ci3] >= 0;
+
+        int32 ValidCount = (cb0?1:0) + (cb1?1:0) + (cb2?1:0) + (cb3?1:0);
+
+        const FVector OutwardNormal = bD0Solid ? Axis : -Axis;
+
+        const bool bSwap = false; // Regular CW continuous corner loop requires false
 
         if (ValidCount < 4)
         {
             auto GetFallbackPos = [&](int32 idx) -> FVector {
+                FVector AvgPos = FVector::ZeroVector;
+                int32   Placed = 0;
+                if (cb0) { AvgPos += CellVertices[ci0]; Placed++; }
+                if (cb1) { AvgPos += CellVertices[ci1]; Placed++; }
+                if (cb2) { AvgPos += CellVertices[ci2]; Placed++; }
+                if (cb3) { AvgPos += CellVertices[ci3]; Placed++; }
+                if (Placed > 0) return AvgPos / (float)Placed;
+
                 const int32 z = idx / (S * S);
                 const int32 y = (idx / S) % S;
                 const int32 x = idx % S;
                 return FVector(x - 1.0f, y - 1.0f, z - 1.0f) * EffVoxelSize + (EffVoxelSize * 0.5f);
             };
+            
+            // Flat vs Slope Classification for fallback
+            const bool bIsFlat   = FMath::Abs(OutwardNormal.Z) >= Config.SlopeThreshold;
+            FVoxelMeshData& Dest = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
+            TArray<int32>&  Map  = bIsFlat ? FlatMap : SlopeMap;
+            const FColor&   VC   = GetQuadColor(ColX, ColY);
 
-            auto AppendFallbackV = [&](const FVector& Pos) -> int32 {
+            auto AppendFallbackV = [&](int32 ci, const FVector& Pos) -> int32 {
+                if (Map[ci] != -1) return Map[ci];
                 const int32 NI = Dest.Vertices.Add(Pos);
                 Dest.Normals.Add(OutwardNormal); // fallback normal
                 Dest.UVs.Add(MakeUV(Pos));
                 Dest.VertexColors.Add(VC);
                 Dest.Tangents.Add(FProcMeshTangent(1,0,0));
+                Map[ci] = NI;
                 return NI;
             };
 
@@ -344,55 +362,63 @@ void FVoxelMeshGenerator::GenerateMesh(
                 return NI;
             };
 
-            int32 IA = b0 ? AppendV(i0) : AppendFallbackV(GetFallbackPos(i0));
-            int32 IB = b1 ? AppendV(i1) : AppendFallbackV(GetFallbackPos(i1));
-            int32 IC = b2 ? AppendV(i2) : AppendFallbackV(GetFallbackPos(i2));
-            int32 ID = b3 ? AppendV(i3) : AppendFallbackV(GetFallbackPos(i3));
+            int32 IA = cb0 ? AppendV(ci0) : AppendFallbackV(ci0, GetFallbackPos(ci0));
+            int32 IB = cb1 ? AppendV(ci1) : AppendFallbackV(ci1, GetFallbackPos(ci1));
+            int32 IC = cb2 ? AppendV(ci2) : AppendFallbackV(ci2, GetFallbackPos(ci2));
+            int32 ID = cb3 ? AppendV(ci3) : AppendFallbackV(ci3, GetFallbackPos(ci3));
 
-            if (bSwap)
-            {
-                Dest.Triangles.Add(IA); Dest.Triangles.Add(IC); Dest.Triangles.Add(IB);
-                Dest.Triangles.Add(IB); Dest.Triangles.Add(IC); Dest.Triangles.Add(ID);
-            }
-            else
+            if (bD0Solid)
             {
                 Dest.Triangles.Add(IA); Dest.Triangles.Add(IB); Dest.Triangles.Add(IC);
                 Dest.Triangles.Add(IA); Dest.Triangles.Add(IC); Dest.Triangles.Add(ID);
             }
+            else
+            {
+                Dest.Triangles.Add(IA); Dest.Triangles.Add(IC); Dest.Triangles.Add(IB);
+                Dest.Triangles.Add(IA); Dest.Triangles.Add(ID); Dest.Triangles.Add(IC);
+            }
             return;
         }
+
+        // Flat vs Slope Classification for main quad
+        const bool bIsFlat   = FMath::Abs(OutwardNormal.Z) >= Config.SlopeThreshold;
+        FVoxelMeshData& Dest = bIsFlat ? OutMesh.FlatMesh : OutMesh.SlopeMesh;
+        TArray<int32>&  Map  = bIsFlat ? FlatMap : SlopeMap;
+        const FColor&   VC   = GetQuadColor(ColX, ColY);
 
         const float d02 = FVector::DistSquared(CellVertices[i0], CellVertices[i2]);
         const float d13 = FVector::DistSquared(CellVertices[i1], CellVertices[i3]);
         const bool bFlip = d13 < d02;
 
-        if (bFlip)
+        // EmitTriangle handles internal indexing perfectly
+        if (bD0Solid)
         {
-            if (bSwap)
+            if (bFlip)
             {
-                EmitTriangle(Dest, Map, i0, i3, i1, OutwardNormal, VC);
-                EmitTriangle(Dest, Map, i1, i3, i2, OutwardNormal, VC);
+                EmitTriangle(Dest, Map, ci0, ci1, ci3, OutwardNormal, VC);
+                EmitTriangle(Dest, Map, ci1, ci2, ci3, OutwardNormal, VC);
             }
             else
             {
-                EmitTriangle(Dest, Map, i0, i1, i3, OutwardNormal, VC);
-                EmitTriangle(Dest, Map, i1, i2, i3, OutwardNormal, VC);
+                EmitTriangle(Dest, Map, ci0, ci1, ci2, OutwardNormal, VC);
+                EmitTriangle(Dest, Map, ci0, ci2, ci3, OutwardNormal, VC);
             }
         }
         else
         {
-            if (bSwap)
+            if (bFlip)
             {
-                EmitTriangle(Dest, Map, i0, i2, i1, OutwardNormal, VC);
-                EmitTriangle(Dest, Map, i0, i3, i2, OutwardNormal, VC);
+                EmitTriangle(Dest, Map, ci0, ci3, ci1, OutwardNormal, VC);
+                EmitTriangle(Dest, Map, ci1, ci3, ci2, OutwardNormal, VC);
             }
             else
             {
-                EmitTriangle(Dest, Map, i0, i1, i2, OutwardNormal, VC);
-                EmitTriangle(Dest, Map, i0, i2, i3, OutwardNormal, VC);
+                EmitTriangle(Dest, Map, ci0, ci2, ci1, OutwardNormal, VC);
+                EmitTriangle(Dest, Map, ci0, ci3, ci2, OutwardNormal, VC);
             }
         }
     };
+
 
     // ── PASS 2: quad emission ─────────────────────────────────────────────
     for (int32 Z = 1; Z <= EffectiveSize; ++Z)
@@ -402,7 +428,7 @@ void FVoxelMeshGenerator::GenerateMesh(
         // X-axis edges
         { const float D0 = Densities[Idx(X,Y,Z,S)], D1 = Densities[Idx(X+1,Y,Z,S)];
           if ((D0>0.f)!=(D1>0.f))
-              EmitQuad(Idx(X,Y,Z,S),Idx(X,Y,Z-1,S),Idx(X,Y-1,Z-1,S),Idx(X,Y-1,Z,S),
+              EmitQuad(Idx(X,Y,Z,S),Idx(X,Y-1,Z,S),Idx(X,Y-1,Z-1,S),Idx(X,Y,Z-1,S),
                        X,Y,D0>0.f,FVector(1,0,0)); }
 
         // Y-axis edges
@@ -548,8 +574,8 @@ void FVoxelMeshGenerator::GenerateHeightmapMesh(
         if (!TempValid[c0_top] || !TempValid[c1_top]) return;
         const FVector Pos0 = TempCoords[c0_top], Pos1 = TempCoords[c1_top];
 
-        int32 i0_top = AppendV(Dest, FlatMap, c0_top); 
-        int32 i1_top = AppendV(Dest, FlatMap, c1_top);
+        int32 i0_top = AppendV(Dest, SlopeMap, c0_top); 
+        int32 i1_top = AppendV(Dest, SlopeMap, c1_top);
 
         int32 i0_bot = Dest.Vertices.Add(Pos0 - FVector(0, 0, SkirtDepth));
         int32 i1_bot = Dest.Vertices.Add(Pos1 - FVector(0, 0, SkirtDepth));
@@ -564,11 +590,11 @@ void FVoxelMeshGenerator::GenerateHeightmapMesh(
     };
 
     for (int32 ly = 0; ly < EffectiveSize; ++ly) {
-        AddSkirtQuad(OutMesh.FlatMesh, 0 + ly * (EffectiveSize + 1), 0 + (ly + 1) * (EffectiveSize + 1));
-        AddSkirtQuad(OutMesh.FlatMesh, EffectiveSize + (ly + 1) * (EffectiveSize + 1), EffectiveSize + ly * (EffectiveSize + 1));
+        AddSkirtQuad(OutMesh.SlopeMesh, 0 + ly * (EffectiveSize + 1), 0 + (ly + 1) * (EffectiveSize + 1));
+        AddSkirtQuad(OutMesh.SlopeMesh, EffectiveSize + (ly + 1) * (EffectiveSize + 1), EffectiveSize + ly * (EffectiveSize + 1));
     }
     for (int32 lx = 0; lx < EffectiveSize; ++lx) {
-        AddSkirtQuad(OutMesh.FlatMesh, (lx+1) + 0 * (EffectiveSize + 1), lx + 0 * (EffectiveSize + 1));
-        AddSkirtQuad(OutMesh.FlatMesh, lx + EffectiveSize * (EffectiveSize + 1), (lx+1) + EffectiveSize * (EffectiveSize + 1));
+        AddSkirtQuad(OutMesh.SlopeMesh, (lx+1) + 0 * (EffectiveSize + 1), lx + 0 * (EffectiveSize + 1));
+        AddSkirtQuad(OutMesh.SlopeMesh, lx + EffectiveSize * (EffectiveSize + 1), (lx+1) + EffectiveSize * (EffectiveSize + 1));
     }
 }

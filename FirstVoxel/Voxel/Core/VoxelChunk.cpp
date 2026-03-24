@@ -226,10 +226,11 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	}
 
 	FString CS = FString::Printf(TEXT("%d_%d_%d"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z);
-	UE_LOG(LogVoxelWorld, Verbose,
-		TEXT("VoxelChunk: ApplyMesh (%d,%d,%d) LOD=%d Flat=%d Slope=%d"),
+	UE_LOG(LogVoxelWorld, Warning,
+		TEXT("VoxelChunk: ApplyMesh (%d,%d,%d) LOD=%d FlatV=%d SlopeV=%d FlatT=%d SlopeT=%d"),
 		ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
-		LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num());
+		LOD, Out.FlatMesh.Vertices.Num(), Out.SlopeMesh.Vertices.Num(),
+		Out.FlatMesh.Triangles.Num(), Out.SlopeMesh.Triangles.Num());
 
 	UploadSection(0, Out.FlatMesh,  FlatMat,  TEXT("Flat"),  nullptr);
 	UploadSection(1, Out.SlopeMesh, SlopeMat, TEXT("Slope"), nullptr);

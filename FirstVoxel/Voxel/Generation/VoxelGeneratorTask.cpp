@@ -69,7 +69,8 @@ namespace {
         float MinCarveZ = SurfH - 1200.f;
         float MaxCarveZ = SurfH + 1200.f;
 
-        if (SteepW > 0.05f) { MinCarveZ -= 6000.f; MaxCarveZ += 6000.f; }
+        if (SteepW > 0.05f || C.Ctx.StepSize > 1) { MinCarveZ -= 1500000.f; MaxCarveZ += 1500000.f; }
+        if (C.Ctx.StepSize > 1) { MinCarveZ = C.ExactMinZ; MaxCarveZ = C.ExactMinZ + C.EffSize * C.EffVoxSz; }
         if (C.Config.Performance.bEnableOverhangs) { MaxCarveZ += C.Config.Overhangs.MaxDistFromSurface + 500.f; }
         
         if (DistSq < CraterRadius * CraterRadius)
@@ -79,7 +80,7 @@ namespace {
             MaxCarveZ = FMath::Max(MaxCarveZ, SafeBaseH + MaxRimOverhead);
             
             // Sealing bottom drops for deep crater floor contours
-            MinCarveZ = FMath::Min(MinCarveZ, SurfH - FMath::Abs(C.Config.Craters.CentralCraterDepth) - 4500.f);
+            MinCarveZ = FMath::Min(MinCarveZ, SurfH - FMath::Abs(C.Config.Craters.CentralCraterDepth) - 20000.f);
         }
 
         OutStartZIdx = FMath::Clamp(FMath::FloorToInt((MinCarveZ - ExactMinZ) / EffVoxSz), 0, C.EffSize);
@@ -91,7 +92,7 @@ namespace {
         const int32 Count = OutEndZIdx - OutStartZIdx;
         if (Count > 0)
         {
-            FVoxelNoiseSIMD::EvaluateColumn_Surface_Upsampled_AVX2(
+            FVoxelNoiseSIMD::EvaluateColumn_Surface_AVX2(
                 WX, WY, 
                 ExactMinZ + OutStartZIdx * EffVoxSz, EffVoxSz, 
                 Count, &C.SF_Densities[OutStartZIdx], 
@@ -280,7 +281,8 @@ void FVoxelGeneratorTask::BuildDensityField()
     {
         LocalConfig.Performance.bEnableCaves = false;
         LocalConfig.Performance.bEnableOverhangs = false;
-        LocalConfig.Performance.MaxNoiseOctaves = (StepSize >= 4) ? 1 : 2;
+        // Removed to prevent height-shifting artifacts on distant chunks (LOD mesh holes)
+        // LocalConfig.Performance.MaxNoiseOctaves = (StepSize >= 4) ? 1 : 2;
     }
 
     static FVoxelDensityGenerator FallbackGen;
@@ -323,8 +325,8 @@ void FVoxelGeneratorTask::BuildDensityField()
             const int32 curIdx = ColIdx + k;
             const int32 Y = curIdx / EffSize;
             const int32 X = curIdx % EffSize;
-            CX[k] = FMath::RoundToFloat(WorldOrigin.X + (X - 1.f) * EffVoxSz);
-            CY[k] = FMath::RoundToFloat(WorldOrigin.Y + (Y - 1.f) * EffVoxSz);
+            CX[k] = WorldOrigin.X + (X - 1.f) * EffVoxSz;
+            CY[k] = WorldOrigin.Y + (Y - 1.f) * EffVoxSz;
         }
 
         __m256 CX_v = _mm256_loadu_ps(CX);
@@ -332,11 +334,12 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         FVoxelNoiseSIMD::FBiomeWeights_AVX2 Weights_v;
         __m256 Temp_v, Eros_v;
-        FVoxelNoiseSIMD::EvaluateColumn_BiomeWeights_AVX2(CX_v, CY_v, LocalConfig, PermTable, Weights_v, Temp_v, Eros_v);
+        // FIX: Use accurate Config (not LocalConfig) for height estimation to prevent distant LOD mesh holes
+        FVoxelNoiseSIMD::EvaluateColumn_BiomeWeights_AVX2(CX_v, CY_v, Config, PermTable, Weights_v, Temp_v, Eros_v);
 
         // SIMD NEUTRAL: request both crater-modified AND neutral heights in a single pass.
         __m256 SurfH_v, NeutralH_v;
-        FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(CX_v, CY_v, Weights_v, LocalConfig, PermTable, Temp_v, Eros_v, SurfH_v, CenterH, &NeutralH_v);
+        FVoxelNoiseSIMD::EvaluateColumn_SurfaceHeight_AVX2(CX_v, CY_v, Weights_v, Config, PermTable, Temp_v, Eros_v, SurfH_v, CenterH, &NeutralH_v);
 
         float Forest[8], Desert[8], Peaks[8], Cliffs[8], Mesa[8], Craters[8], Ocean[8], SurfH[8], NeutralH[8], Temp[8], Eros[8];
         _mm256_storeu_ps(Forest,   Weights_v.Forest);
@@ -380,10 +383,10 @@ void FVoxelGeneratorTask::BuildDensityField()
             // Tier 4 fallback: If any unsupported biome is active, re-calculate scalar.
             if (Item.SurfH == 0.f)
             {
-                Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, LocalConfig, Temp[k], Eros[k]);
-                Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], LocalConfig, Temp[k], Eros[k]);
+                Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, Config, Temp[k], Eros[k]);
+                Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], Config, Temp[k], Eros[k]);
             }
-            Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX[k], CY[k], Item.NeutralH, Item.Weights, LocalConfig, &SkylandCacheMap);
+            Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX[k], CY[k], Item.NeutralH, Item.Weights, Config, &SkylandCacheMap);
             
 
             ColumnWeights[curIdx]  = Item.Weights;
@@ -398,13 +401,14 @@ void FVoxelGeneratorTask::BuildDensityField()
     {
         const int32 Y  = ColIdx / EffSize;
         const int32 X  = ColIdx % EffSize;
-        const float CX = FMath::RoundToFloat(WorldOrigin.X + (X - 1.f) * EffVoxSz);
-        const float CY = FMath::RoundToFloat(WorldOrigin.Y + (Y - 1.f) * EffVoxSz);
+        const float CX = WorldOrigin.X + (X - 1.f) * EffVoxSz;
+        const float CY = WorldOrigin.Y + (Y - 1.f) * EffVoxSz;
 
         FColumnCacheItem& Item = PrecalcColumns[ColIdx];
 
+        // FIX: Use accurate Config for fallback height estimation
         float Temp = -999.f, Erosion = -999.f;
-        Item.Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(CX, CY, LocalConfig, &Temp, &Erosion);
+        Item.Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(CX, CY, Config, &Temp, &Erosion);
         if (!LocalConfig.Performance.bEnableForest)  Item.Weights.SetWeight(EVoxelBiome::Forest,  0.f);
         if (!LocalConfig.Performance.bEnableDesert)  Item.Weights.SetWeight(EVoxelBiome::Desert,  0.f);
         if (!LocalConfig.Performance.bEnablePeaks)   Item.Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
@@ -413,9 +417,9 @@ void FVoxelGeneratorTask::BuildDensityField()
         if (!LocalConfig.Performance.bEnableCraters) Item.Weights.SetWeight(EVoxelBiome::Craters, 0.f);
         Item.Weights.Normalize();
 
-        Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, LocalConfig, Temp, Erosion);
-        Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, LocalConfig, Temp, Erosion);
-        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, LocalConfig, &SkylandCacheMap);
+        Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, Config, Temp, Erosion);
+        Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, Config, Temp, Erosion);
+        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, Config, &SkylandCacheMap);
 
         ColumnWeights[ColIdx]  = Item.Weights;
         ColumnSurfaceH[ColIdx] = Item.SurfH;
@@ -482,8 +486,8 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         const int32 Y  = FlatXY / EffSize;
         const int32 X  = FlatXY % EffSize;
-        const float WX = FMath::RoundToFloat(WorldOrigin.X + (X-1.f)*EffVoxSz);
-        const float WY = FMath::RoundToFloat(WorldOrigin.Y + (Y-1.f)*EffVoxSz);
+        const float WX = WorldOrigin.X + (X-1.f)*EffVoxSz;
+        const float WY = WorldOrigin.Y + (Y-1.f)*EffVoxSz;
 
         const FColumnCacheItem& Item = PrecalcColumns[FlatXY];
         const FVoxelBiomeWeightMap Weights = Item.Weights;
@@ -531,7 +535,7 @@ void FVoxelGeneratorTask::BuildDensityField()
             const float OvH     = LocalConfig.Performance.bEnableOverhangs ? LocalConfig.Overhangs.MaxDistFromSurface : 0.f;
             const float SkyLB2  = NeutralH + SC.MinAltitudeAboveTerrain
                                 - SC.BaseIslandSize * SC.ThicknessRatio - 400.f;
-            if (MinWZ > SurfH + OvH + 200.f && MaxWZ < SkyLB2)
+            if (Ctx.StepSize == 1 && MinWZ > SurfH + OvH + 200.f && MaxWZ < SkyLB2)
             {
                 for (int32 Z=0; Z<EffSize; ++Z)
                 {

@@ -310,7 +310,7 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         }
     }
 
-    const int32 WaitRadius = ChunkRadius; // Restore to ChunkRadius to wait for full crater/rim
+    const int32 WaitRadius = FMath::Max(ChunkRadius, WorldOwner->DistantRenderDistanceXY);
 
     for (const FIntVector& C : VisualCoords)
     {

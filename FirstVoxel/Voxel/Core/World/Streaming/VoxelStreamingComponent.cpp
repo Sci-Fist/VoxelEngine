@@ -1,4 +1,13 @@
 // VoxelStreamingComponent.cpp
+// FIX STREAM-1 — BuildDesiredChunkSet used RoundToInt for GZ; all other discovery
+//               code uses FloorToInt. ~50% of Zone C columns produced a GZ that
+//               was 1 higher than the generated chunk, causing the streaming system
+//               to destroy the correct chunk and immediately request the wrong one.
+//               Symptom: regular chunk-scale checkerboard visible in the distance.
+// FIX STREAM-2 — CheckCloseRangeVisibility distance gate (48m) blocked distant
+//               chunks from ever being removed from ChunksNeedingVisibilityCheck,
+//               causing unbounded set growth. Gate removed — all ready chunks are
+//               cleared regardless of distance (ApplyMesh already set them visible).
 #include "VoxelStreamingComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
@@ -107,20 +116,18 @@ void UVoxelStreamingComponent::CheckCloseRangeVisibility()
     AVoxelWorld* World = WorldOwner.Get();
     if (!World || ChunksNeedingVisibilityCheck.IsEmpty()) return;
 
-    APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
-    if (!Player) return;
-    const FVector Pos = Player->GetActorLocation();
-    const float Threshold = World->ChunkSize * World->VoxelSize * 3.0f;
-
     const TMap<FIntVector, AVoxelChunk*>* LoadedChunks = World->GetLoadedChunks();
     TArray<FIntVector> ToRemove;
 
+    // FIX STREAM-2: Removed the 48m distance gate. ApplyMesh already calls
+    // SetVisibility(true) for ALL chunks regardless of distance. The gate was
+    // only preventing distant chunks from ever being cleared from this set,
+    // causing unbounded growth. Now we drain all ready chunks immediately.
     for (const FIntVector& Coord : ChunksNeedingVisibilityCheck)
     {
         AVoxelChunk*const* P = LoadedChunks->Find(Coord);
         if (!P || !*P) { ToRemove.Add(Coord); continue; }
         AVoxelChunk* Chunk = *P;
-        if (FVector::Dist(Chunk->GetActorLocation(), Pos) >= Threshold) continue;
         if (Chunk->IsReady() && !Chunk->IsGenerating())
         {
             if (UProceduralMeshComponent* PM = Chunk->GetProceduralMesh())
@@ -256,11 +263,14 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
         const int32 x     = -MaxRad + (Index % GridDim);
         const int32 y     = -MaxRad + (Index / GridDim);
         const int32 radSq = x*x + y*y;
-        const int32 GZ    = FMath::RoundToInt(CachedColumns[Index].SurfaceHeight / ChunkWorldSize);
+        // FIX STREAM-1: was RoundToInt — disagreed with FloorToInt used in
+        // PerformWorldDiscoveryAndBoundsCalculation, causing ~50% of Zone C
+        // columns to target the wrong chunk Z and destroy the correct one.
+        const int32 GZ    = FMath::FloorToInt(CachedColumns[Index].SurfaceHeight / ChunkWorldSize);
 
         if (radSq <= RenderDistanceXY * RenderDistanceXY)
         {
-            for (int32 z = -RenderDistanceZ; z <= 2; ++z)
+            for (int32 z = -RenderDistanceZ; z <= 16; ++z)
                 OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ+z));
         }
         else if (radSq <= MidRenderDistanceXY * MidRenderDistanceXY)
@@ -270,15 +280,9 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
         }
         else if (radSq <= MaxRad * MaxRad)
         {
-            const auto& Wh = CachedColumns[Index];
-            const float SteepW = Wh.Weights.GetWeight(EVoxelBiome::Peaks) + Wh.Weights.GetWeight(EVoxelBiome::Cliffs);
-            
-            OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ));
-            if (SteepW > 0.3f)
-            {
-                // Add vertical buffer layer above for tall mountains to prevent bounding cap culls
-                OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ + 1));
-            }
+            // Expanded fully to 17 chunks total to robust height deviations safely
+            for (int32 z = -8; z <= 8; ++z)
+                OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ + z));
         }
     }
 
@@ -346,8 +350,9 @@ void UVoxelStreamingComponent::UpdateLODs(const FVector& PlayerPos, const FIntVe
         }
         else
         {
-            if      (rSq > World->MidRenderDistanceXY * World->MidRenderDistanceXY) LOD = FMath::Max(LOD, 2);
-            else if (rSq > RenderDistanceXY    * RenderDistanceXY)    LOD = FMath::Max(LOD, 1);
+            if      (rSq > 96 * 96) LOD = FMath::Max(LOD, 3);
+            else if (rSq > World->MidRenderDistanceXY * World->MidRenderDistanceXY) LOD = FMath::Max(LOD, 2);
+            else if (rSq > World->RenderDistanceXY    * World->RenderDistanceXY)    LOD = FMath::Max(LOD, 1);
         }
 
         DesiredLODs.Add(It.Key, LOD);

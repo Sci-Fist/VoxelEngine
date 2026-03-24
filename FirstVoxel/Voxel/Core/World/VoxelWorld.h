@@ -75,11 +75,11 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Zone B vertical half-range (chunks). 4 = ±64m. Thin slice — just terrain surface + a little above/below."))
-    int32 MidRenderDistanceZ = 4;
+    int32 MidRenderDistanceZ = 8;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Zone C radius (LOD 2 silhouette). 80 chunks = 1280m. Valheim-level horizon view distance."))
-    int32 DistantRenderDistanceXY = 48;
+    int32 DistantRenderDistanceXY = 128;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ClampMin="2", ClampMax="4",
@@ -293,7 +293,7 @@ public:
     FVector SnapToVoxelGrid         (const FVector& WorldPos) const;
     float   GetSafeSpawnHeightOffset () const;
 
-    void SpawnChunk        (const FIntVector& Coord, bool bSyncCollision = false);
+    void SpawnChunk        (FIntVector Coord, bool bSyncCollision = false);
     void DestroyChunk      (const FIntVector& Coord);
     void RebuildChunk      (const FIntVector& Coord);
     UFUNCTION(BlueprintPure, Category="Voxel") bool IsWaitingForInitialSpawn() const;
