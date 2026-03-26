@@ -32,7 +32,9 @@ public:
         const TArray<FBox>& Bounds, 
         const FMatrix& ViewProjection, 
         const FVector& CameraPos,
-        const FRHITexture* HZBTexture = nullptr);
+        const FRHITexture* HZBTexture = nullptr,
+        const FRHITexture* SkyViewLUT = nullptr,
+        const FRHITexture* TransmittanceLUT = nullptr);
 
     /** 
      * Retrieves results for a previous request. Returns true if ready.

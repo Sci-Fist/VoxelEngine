@@ -24,6 +24,8 @@ class FVoxelCullingCS : public FGlobalShader
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D, HZBTexture)
         SHADER_PARAMETER_SAMPLER(SamplerState, HZBSampler)
         SHADER_PARAMETER(FVector2D, HZBSize)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SkyViewLUT)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, TransmittanceLUT)
     END_SHADER_PARAMETER_STRUCT()
 
 public:
@@ -66,7 +68,9 @@ int32 UVoxelCullingManager::RequestCulling_RenderThread(
     const TArray<FBox>& Bounds, 
     const FMatrix& ViewProjection, 
     const FVector& CameraPos,
-    const FRHITexture* HZBTexture)
+    const FRHITexture* HZBTexture,
+    const FRHITexture* SkyViewLUT,
+    const FRHITexture* TransmittanceLUT)
 {
     if (!bInitialized || Bounds.Num() == 0) return -1;
 
@@ -106,6 +110,9 @@ int32 UVoxelCullingManager::RequestCulling_RenderThread(
         Params.HZBSize = FVector2D(1.f, 1.f);
     }
     Params.HZBSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+    
+    Params.SkyViewLUT = SkyViewLUT ? (FRHITexture*)SkyViewLUT : GBlackTexture->GetTextureRHI();
+    Params.TransmittanceLUT = TransmittanceLUT ? (FRHITexture*)TransmittanceLUT : GWhiteTexture->GetTextureRHI();
 
     SetShaderParameters(RHICmdList, ComputeShader, ComputeShader.GetComputeShader(), Params);
 

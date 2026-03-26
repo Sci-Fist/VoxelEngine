@@ -148,6 +148,7 @@ void FVoxelMeshGenerator::GenerateMesh(
     float                         InVoxelSize,
     const FVector&                ChunkOrigin,
     const FVector&                CameraPos,
+    uint32                        FrameNumber,
     FVoxelMeshOutput&             OutMesh,
     const FVoxelGenerationConfig& Config,
     int32                         InStepSize,
@@ -220,6 +221,20 @@ void FVoxelMeshGenerator::GenerateMesh(
             if (EdgeCount < 1) continue;
  
             CellPos /= (float)EdgeCount;
+ 
+            // ── Directive C: TSR Jittering ──────────────────────────────────
+            // Jitter vertex based on FrameNumber for temporal super-resolution.
+            // Only applied for LOD 1+ to avoid sub-voxel artifacts on near terrain.
+            if (InStepSize >= 2)
+            {
+                const float JitterScale = 0.08f * EffVoxelSize; // 8% jitter
+                uint32 Seed = FrameNumber ^ (X * 73856093) ^ (Y * 19349663) ^ (Z * 83492791);
+                float jX = (((Seed >> 0)  & 0xFF) - 128) * (1.f/128.f) * JitterScale;
+                float jY = (((Seed >> 8)  & 0xFF) - 128) * (1.f/128.f) * JitterScale;
+                float jZ = (((Seed >> 16) & 0xFF) - 128) * (1.f/128.f) * JitterScale;
+                CellPos += FVector(jX, jY, jZ);
+            }
+
             const int32 CI    = Idx(X, Y, Z, S);
             CellVertices[CI]  = CellPos;
             CellNormals[CI]   = ComputeNormal(Densities, X, Y, Z, EffectiveSize);

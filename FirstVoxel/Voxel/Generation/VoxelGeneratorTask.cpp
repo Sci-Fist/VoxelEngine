@@ -182,11 +182,13 @@ FVoxelGeneratorTask::FVoxelGeneratorTask(
     int32 InChunkSize, float InVoxelSize, int32 InStepSize,
     const FVoxelGenerationConfig& InConfig, IVoxelDensityProvider* InProvider,
     float InFoliageDensity, float InMaxFoliageSlope, struct FVoxelDataMap* InDataMap,
+    uint32 InFrameNumber,
     bool InIsDistantHeightmesh)
     : ChunkCoord(InChunkCoord), WorldOrigin(InWorldOrigin), CameraPos(InCameraPos), ChunkSize(InChunkSize)
     , VoxelSize(InVoxelSize), StepSize(InStepSize), Config(InConfig)
     , DensityProvider(InProvider), FoliageDensity(InFoliageDensity)
     , MaxFoliageSlope(InMaxFoliageSlope), DataMap(InDataMap)
+    , FrameNumber(InFrameNumber)
     , bIsDistantHeightmesh(InIsDistantHeightmesh)
 {
     for (EVoxelBiome Biome : GBiomeOrder)
@@ -653,12 +655,12 @@ void FVoxelGeneratorTask::BuildMesh()
     if (bIsDistantHeightmesh)
     {
         FVoxelMeshGenerator::GenerateHeightmapMesh(
-            ColumnSurfaceH, ColumnWeights, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
+            ColumnSurfaceH, ColumnWeights, ChunkSize, VoxelSize, WorldOrigin, FrameNumber, MeshOutput, Config, StepSize);
     }
     else
     {
         FVoxelMeshGenerator::GenerateMesh(
-            Densities, ChunkSize, VoxelSize, WorldOrigin, CameraPos, MeshOutput, Config, StepSize,
+            Densities, ChunkSize, VoxelSize, WorldOrigin, CameraPos, FrameNumber, MeshOutput, Config, StepSize,
             &ScratchBuffers,
             &ColumnWeights); // PERF-1: pass precomputed weights → ColumnColors skips noise
     }

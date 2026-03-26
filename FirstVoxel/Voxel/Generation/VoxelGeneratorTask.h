@@ -32,6 +32,7 @@ public:
         float                         InFoliageDensity,
         float                         InMaxFoliageSlope,
         struct FVoxelDataMap*         InDataMap,
+        uint32                        InFrameNumber,
         bool                          bIsDistantHeightmesh = false);
 
     ~FVoxelGeneratorTask();
@@ -67,6 +68,7 @@ private:
     float                  FoliageDensity;
     float                  MaxFoliageSlope;
     struct FVoxelDataMap*  DataMap;
+    uint32                 FrameNumber;
     bool                   bIsDistantHeightmesh;
 
     // Outputs

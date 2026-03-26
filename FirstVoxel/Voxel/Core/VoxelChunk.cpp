@@ -150,14 +150,13 @@ void AVoxelChunk::GenerateAsync()
 	}
 
 	TSharedPtr<FVoxelGeneratorTask> LocalTask;
+	uint32 FrameNum = GFrameCounter;
 	{
 		FScopeLock Lock(&TaskLock);
 		CurrentTask = MakeShared<FVoxelGeneratorTask>(
 			ChunkCoord, GetActorLocation(), CamPos, ChunkSize, VoxelSize, GetStepSize(),
 			GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap,
-			// FIX RIM-3: was (LOD >= 2) — the heightmap path is flat 2-D only and
-			// cannot render vertical crater walls or rim silhouettes. Always use
-			// Surface Nets (false). LOD 2 naturally uses StepSize=4 via GetStepSize().
+			FrameNum,
 			false);
 		LocalTask = CurrentTask;
 	}
@@ -188,11 +187,13 @@ void AVoxelChunk::GenerateSync()
 	}
 
 	TSharedPtr<FVoxelGeneratorTask> LocalTask;
+	uint32 FrameNum = GFrameCounter;
 	{
 		FScopeLock Lock(&TaskLock);
 		CurrentTask = MakeShared<FVoxelGeneratorTask>(
 			ChunkCoord, GetActorLocation(), CamPos, ChunkSize, VoxelSize, GetStepSize(),
 			GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap,
+			FrameNum,
 			false); // FIX RIM-3: always Surface Nets, see GenerateAsync for rationale
 		LocalTask = CurrentTask;
 	}

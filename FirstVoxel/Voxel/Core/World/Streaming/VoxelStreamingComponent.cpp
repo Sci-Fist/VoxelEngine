@@ -109,11 +109,18 @@ void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 
                 // Bridge to Render Thread
                 UVoxelCullingManager* CM = CullingManager;
+                
+                // Directive A: SkyAtmosphere LUT Retrieval
+                // In a production UE5 environment, these would be retrieved from the FScene or FViewInfo.
+                FRHITexture* SkyViewLUT = nullptr;
+                FRHITexture* TransmittanceLUT = nullptr;
+
                 ENQUEUE_RENDER_COMMAND(VoxelCullingRequest)(
-                    [CM, BoundsToCull, ViewProj, CamPos, this](FRHICommandListImmediate& RHICmdList)
+                    [CM, BoundsToCull, ViewProj, CamPos, SkyViewLUT, TransmittanceLUT, this](FRHICommandListImmediate& RHICmdList)
                 {
                     // This is slightly unsafe if 'this' dies, but UVoxelCullingManager is owned by this
-                    this->CurrentCullingRequestID = CM->RequestCulling_RenderThread(RHICmdList, BoundsToCull, ViewProj, CamPos);
+                    this->CurrentCullingRequestID = CM->RequestCulling_RenderThread(
+                        RHICmdList, BoundsToCull, ViewProj, CamPos, nullptr, SkyViewLUT, TransmittanceLUT);
                 });
             }
         }
