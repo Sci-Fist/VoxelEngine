@@ -183,6 +183,7 @@ void UVoxelMapWidget::RequestRefresh()
     bGenerating = true;
 
     const FVector Pos   = CachedPlayerPawn->GetActorLocation();
+    UE_LOG(LogTemp, Log, TEXT("VoxelMapWidget: RequestRefresh started at [%.0f, %.0f]. Res=%d Radius=%.0f"), Pos.X, Pos.Y, MapResolution, MapWorldRadius);
     PlayerWorldPos      = Pos;
     const float  Radius = MapWorldRadius;
     const int32  Res    = MapResolution;
@@ -249,9 +250,15 @@ void UVoxelMapWidget::UploadPendingPixels()
 
     TArray<FColor> Local;
     { FScopeLock Lock(&PixelLock);
-      if (PendingPixels.Num() != MapResolution*MapResolution) return;
+      if (PendingPixels.Num() != MapResolution*MapResolution)
+      {
+          UE_LOG(LogTemp, Warning, TEXT("VoxelMapWidget: PendingPixels size mismatch! Expected %d, got %d"), MapResolution*MapResolution, PendingPixels.Num());
+          return;
+      }
       Local = MoveTemp(PendingPixels);
       bTextureDirty = false; }
+
+    UE_LOG(LogTemp, Log, TEXT("VoxelMapWidget: Uploading %d pixels to texture..."), Local.Num());
 
     FTexture2DMipMap& Mip = MapTexture->GetPlatformData()->Mips[0];
     FColor* Data = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
@@ -280,7 +287,15 @@ int32 UVoxelMapWidget::NativePaint(
     const FWidgetStyle& Style, bool bParent) const
 {
     if (!bMapOpen) return Layer;
-    // FIX #21: no UE_LOG here — NativePaint runs every frame
+
+    static float LastPaintLog = 0.f;
+    float CurTime = GetWorld()->GetTimeSeconds();
+    if (CurTime - LastPaintLog > 2.0f) // Throttle to 0.5 Hz
+    {
+        UE_LOG(LogTemp, Log, TEXT("VoxelMapWidget: NativePaint active. Tex=%p BrushRes=%p bGenerating=%s"), 
+            (UTexture2D*)MapTexture, MapBrush.GetResourceObject(), bGenerating ? TEXT("True") : TEXT("False"));
+        LastPaintLog = CurTime;
+    }
 
     const FVector2D VSz   = Geo.GetLocalSize();
     const float     Short = FMath::Min(VSz.X, VSz.Y);
@@ -293,16 +308,15 @@ int32 UVoxelMapWidget::NativePaint(
     { FSlateBrush B; B.TintColor=FSlateColor(FLinearColor(0,0,0,0.75f));
       FSlateDrawElement::MakeBox(Out,Layer,MakePaintGeomFull(Geo,VSz),&B,ESlateDrawEffect::None,FLinearColor(0,0,0,0.75f)); }
     ++Layer;
-    PaintPanelBackground(Out,Layer,PanR); Layer+=2;
-    PaintMapTexture    (Out,Layer,MapR);  ++Layer;
-    PaintCompass       (Out,Layer,MapR);  ++Layer;
+    PaintPanelBackground(Out,Layer,Geo,PanR); Layer+=2;
+    PaintMapTexture    (Out,Layer,Geo,MapR);  ++Layer;
+    PaintCompass       (Out,Layer,Geo,MapR);  ++Layer;
     PaintOverlayText   (Out,Layer,Geo,PanR); Layer+=4;
     return Layer;
 }
 
-void UVoxelMapWidget::PaintPanelBackground(FSlateWindowElementList& Out, int32 L, const FSlateRect& PR) const
+void UVoxelMapWidget::PaintPanelBackground(FSlateWindowElementList& Out, int32 L, const FGeometry& G, const FSlateRect& PR) const
 {
-    const FGeometry& G = GetCachedGeometry();
     const FVector2D Pos(PR.Left,PR.Top), Sz(PR.GetSize());
     FSlateBrush Fill; Fill.TintColor=FSlateColor(FLinearColor(0.06f,0.06f,0.08f,0.96f));
     FSlateDrawElement::MakeBox(Out,L,MakePaintGeom(G,Pos,Sz),&Fill,ESlateDrawEffect::None,FLinearColor(0.06f,0.06f,0.08f,0.96f));
@@ -313,9 +327,8 @@ void UVoxelMapWidget::PaintPanelBackground(FSlateWindowElementList& Out, int32 L
     Line(Pos,{B,Sz.Y}); Line(Pos+FVector2D(Sz.X-B,0),{B,Sz.Y});
 }
 
-void UVoxelMapWidget::PaintMapTexture(FSlateWindowElementList& Out, int32 L, const FSlateRect& MR) const
+void UVoxelMapWidget::PaintMapTexture(FSlateWindowElementList& Out, int32 L, const FGeometry& G, const FSlateRect& MR) const
 {
-    const FGeometry& G = GetCachedGeometry();
     const FVector2D Pos(MR.Left,MR.Top), Sz(MR.GetSize());
     if (MapTexture && MapBrush.GetResourceObject())
         FSlateDrawElement::MakeBox(Out,L,MakePaintGeom(G,Pos,Sz),&MapBrush,ESlateDrawEffect::None,FLinearColor::White);
@@ -333,9 +346,8 @@ void UVoxelMapWidget::PaintMapTexture(FSlateWindowElementList& Out, int32 L, con
     Line(Pos,{B,Sz.Y}); Line(Pos+FVector2D(Sz.X-B,0),{B,Sz.Y});
 }
 
-void UVoxelMapWidget::PaintCompass(FSlateWindowElementList& Out, int32 L, const FSlateRect& MR) const
+void UVoxelMapWidget::PaintCompass(FSlateWindowElementList& Out, int32 L, const FGeometry& G, const FSlateRect& MR) const
 {
-    const FGeometry& G = GetCachedGeometry();
     const FSlateFontInfo Font = GetFont(FontSize-2);
     const FLinearColor Col(0.9f,0.9f,0.6f,1.f);
     const FVector2D LSz(20,20);
@@ -350,12 +362,11 @@ void UVoxelMapWidget::PaintCompass(FSlateWindowElementList& Out, int32 L, const 
 }
 
 void UVoxelMapWidget::PaintOverlayText(FSlateWindowElementList& Out, int32 L,
-                                        const FGeometry& Geo, const FSlateRect& PR) const
+                                        const FGeometry& G, const FSlateRect& PR) const
 {
-    const FGeometry& G = GetCachedGeometry();
     const FSlateFontInfo Font=GetFont(), FontBig=GetFont(FontSize+4), FontSm=GetFont(FontSize-2);
     const FLinearColor TC(0.9f,0.9f,0.9f,1.f), DC(0.6f,0.6f,0.6f,1.f), YC(1.f,1.f,0.7f,1.f);
-    const FSlateRect MR = ComputeMapRect(Geo);
+    const FSlateRect MR = ComputeMapRect(G);
     const float TX = PR.Left+14.f;
     float TY = MR.Bottom+10.f;
     const float LH = FontSize+5.f;

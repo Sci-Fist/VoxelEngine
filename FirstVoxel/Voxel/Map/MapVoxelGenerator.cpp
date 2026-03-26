@@ -50,6 +50,8 @@ void FVoxelMapGenerator::GeneratePixelBuffer(
     OutPixels.SetNumUninitialized(Resolution * Resolution);
 
     const float PixelWorldSize = (WorldRadius * 2.f) / (float)Resolution;
+    UE_LOG(LogTemp, Log, TEXT("VoxelMapGenerator: GeneratePixelBuffer start. Center=[%.0f, %.0f] Res=%d Radius=%.0f LoadedChunks=%d"), 
+        CenterX, CenterY, Resolution, WorldRadius, LoadedChunkCoords.Num());
     const float SeaLevel       = Config.SeaLevel;
     const float MaxHeight      = Config.SkylandsLayer.MaxTerrainReference;
     const int32 DotRadius      = FMath::Max(2, Resolution / 64);

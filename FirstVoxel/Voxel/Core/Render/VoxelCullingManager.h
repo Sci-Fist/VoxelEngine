@@ -6,6 +6,7 @@
 #include "RenderResource.h"
 #include "ShaderParameters.h"
 #include "GlobalShader.h"
+#include "RHIReadback.h"
 #include "VoxelCullingManager.generated.h"
 
 /** 

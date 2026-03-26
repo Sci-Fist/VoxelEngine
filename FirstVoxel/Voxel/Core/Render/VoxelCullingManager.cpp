@@ -1,11 +1,14 @@
 // VoxelCullingManager.cpp
 #include "VoxelCullingManager.h"
 #include "RHI.h"
+#include "RenderCore.h"
 #include "RenderResource.h"
-#include "ShaderParameterUtils.h"
-#include "RHIStaticStates.h"
-#include "RendererInterface.h"
+#include "Shader.h"
+#include "ShaderCore.h"
 #include "GlobalShader.h"
+#include "ShaderParameterStruct.h"
+#include "DataDrivenShaderPlatformInfo.h"
+#include "RHIReadback.h"
 
 /** 
  * Shader implementation class for VoxelCulling.usf
@@ -21,11 +24,11 @@ class FVoxelCullingCS : public FGlobalShader
         SHADER_PARAMETER(FMatrix, ViewProjectionMatrix)
         SHADER_PARAMETER(FVector, CameraPos)
         SHADER_PARAMETER(FVector4, HorizonPlane)
-        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, HZBTexture)
+        SHADER_PARAMETER_TEXTURE(Texture2D, HZBTexture)
         SHADER_PARAMETER_SAMPLER(SamplerState, HZBSampler)
         SHADER_PARAMETER(FVector2D, HZBSize)
-        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SkyViewLUT)
-        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, TransmittanceLUT)
+        SHADER_PARAMETER_TEXTURE(Texture2D, SkyViewLUT)
+        SHADER_PARAMETER_TEXTURE(Texture2D, TransmittanceLUT)
     END_SHADER_PARAMETER_STRUCT()
 
 public:
@@ -90,7 +93,6 @@ int32 UVoxelCullingManager::RequestCulling_RenderThread(
 
     // 3. Set Parameters & Dispatch
     TShaderMapRef<FVoxelCullingCS> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-    RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
     FVoxelCullingCS::FParameters Params;
     Params.InputBounds = InputSRV;
@@ -114,7 +116,7 @@ int32 UVoxelCullingManager::RequestCulling_RenderThread(
     Params.SkyViewLUT = SkyViewLUT ? (FRHITexture*)SkyViewLUT : GBlackTexture->GetTextureRHI();
     Params.TransmittanceLUT = TransmittanceLUT ? (FRHITexture*)TransmittanceLUT : GWhiteTexture->GetTextureRHI();
 
-    SetShaderParameters(RHICmdList, ComputeShader, ComputeShader.GetComputeShader(), Params);
+    SetComputeShaderParameters(RHICmdList, ComputeShader, Params);
 
     uint32 GroupCount = FMath::DivideAndRoundUp((uint32)NumChunks, 64u);
     RHICmdList.DispatchComputeShader(GroupCount, 1, 1);

@@ -432,7 +432,7 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 
 	FVector CamLoc; FRotator CamRot;
 	PC->GetPlayerViewPoint(CamLoc, CamRot);
-	const FVector End = CamLoc + CamRot.Vector() * 1500.f;
+	const FVector End = CamLoc + CamRot.Vector() * 2000.f;
 
 	FHitResult Hit;
 	FCollisionQueryParams Params;
@@ -441,9 +441,15 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 
 	if (!GetWorld()->LineTraceSingleByChannel(Hit, CamLoc, End, ECC_Visibility, Params))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: LineTrace failed! No collision hit."));
+		UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: LineTrace failed! No collision hit within 1500 units."));
 		return;
 	}
+
+    if (AActor* HitActor = Hit.GetActor())
+    {
+        UE_LOG(LogTemp, Log, TEXT("ApplyCurrentTool: Hit Actor [%s] at distance %.1f. ImpactNormal [%s]"), 
+            *HitActor->GetName(), Hit.Distance, *Hit.ImpactNormal.ToString());
+    }
 
 	const FVector ImpactPoint = Hit.ImpactPoint;
 	const float   CurrentTime = GetWorld()->GetTimeSeconds();
@@ -453,7 +459,7 @@ void AFirstVoxelCharacter::ApplyCurrentTool()
 		if (CurrentTime - DigLastActionTime > 0.20f)
 		{
 			FVector EditCenter = ImpactPoint - Hit.ImpactNormal * InteractionRadius * 0.5f;
-			UE_LOG(LogTemp, Warning, TEXT("ApplyCurrentTool: Dig at %s radius %f"), *EditCenter.ToString(), InteractionRadius);
+			UE_LOG(LogTemp, Log, TEXT("ApplyCurrentTool: Dig executing at %s radius %.1f"), *EditCenter.ToString(), InteractionRadius);
 			World->SetVoxelSphere(EditCenter, InteractionRadius, -1.f, true);
 			DigLastActionTime = CurrentTime;
 		}

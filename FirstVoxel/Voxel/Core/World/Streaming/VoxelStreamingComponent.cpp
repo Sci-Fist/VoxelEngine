@@ -9,6 +9,7 @@
 //               causing unbounded set growth. Gate removed — all ready chunks are
 //               cleared regardless of distance (ApplyMesh already set them visible).
 #include "VoxelStreamingComponent.h"
+#include "Voxel/Core/Render/VoxelCullingManager.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
@@ -332,6 +333,7 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
 
     const int32 PrePassRad = SkylandsRenderDistanceXY;
     const int32 GridDim = 2 * MaxRad + 1;
+    const int32 NumCols = GridDim * GridDim;
 
     ParallelFor(NumCols, [&](int32 Index)
     {

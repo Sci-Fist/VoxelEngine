@@ -150,13 +150,13 @@ private:
     /** Returns the square pixel region for the map image inside AllottedGeometry. */
     FSlateRect ComputeMapRect(const FGeometry& Geom) const;
 
-    /** Draws the panel background + border. */
+    /** draws the panel background + border. */
     void PaintPanelBackground(FSlateWindowElementList& Out, int32 Layer,
-                              const FSlateRect& PanelRect) const;
+                              const FGeometry& Geom, const FSlateRect& PanelRect) const;
 
     /** Draws the map texture inside MapRect. */
     void PaintMapTexture(FSlateWindowElementList& Out, int32 Layer,
-                         const FSlateRect& MapRect) const;
+                         const FGeometry& Geom, const FSlateRect& MapRect) const;
 
     /** Draws coordinate text, biome name, and legend below the map image. */
     void PaintOverlayText(FSlateWindowElementList& Out, int32 Layer,
@@ -164,7 +164,7 @@ private:
 
     /** Draws compass rose N/S/E/W labels around the map edges. */
     void PaintCompass(FSlateWindowElementList& Out, int32 Layer,
-                      const FSlateRect& MapRect) const;
+                      const FGeometry& Geom, const FSlateRect& MapRect) const;
 
     FSlateFontInfo GetFont(int32 Size = 0) const;
 };
