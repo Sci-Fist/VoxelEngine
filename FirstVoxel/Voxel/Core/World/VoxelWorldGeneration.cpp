@@ -251,16 +251,17 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
                 }
                 else if (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY)
                 {
-                    EffMinZ = MidRenderDistanceZ;
-                    EffMaxZ = MidRenderDistanceZ;
+                    EffMinZ = MidRenderDistanceZ + ExtraMinZ;
+                    EffMaxZ = MidRenderDistanceZ + ExtraMaxZ;
                 }
                 else // FIX RIM-2: Zone C
                 {    // Expanded fully to matching Zone B scale tolerance
-                    EffMinZ = 8;
-                    EffMaxZ = 8;
+                    EffMinZ = 8 + ExtraMinZ;
+                    EffMaxZ = 8 + ExtraMaxZ;
                 }
 
-                for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
+                const int32 ColMaxZ = FMath::Max(MaxCoord.Z, SkyZ_Max);
+                for (int32 z = MinCoord.Z; z <= ColMaxZ; ++z)
                 {
                     const FIntVector C(x, y, z);
                     if (LoadedChunks.Contains(C)) continue;
@@ -294,6 +295,19 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
              const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
              const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
 
+             int32 ExtraMinZ = 0;
+             int32 ExtraMaxZ = 0;
+             const float dx = WX - Cfg.Craters.ForcedCraterCenter.X;
+             const float dy = WY - Cfg.Craters.ForcedCraterCenter.Y;
+             const float DistSq = dx * dx + dy * dy;
+             const float CraterRad = Cfg.Craters.CentralCraterRadius;
+
+             if (CraterRad > 0.f && DistSq < CraterRad * CraterRad * 2.25f)
+             {
+                 ExtraMinZ = FMath::CeilToInt(FMath::Abs(Cfg.Craters.CentralCraterDepth) / GridSize) + 3;
+                 ExtraMaxZ = FMath::CeilToInt(Cfg.Craters.CentralCraterRimHeight    / GridSize) + 4;
+             }
+
              // Cascaded Z bounds setup based on radial distance
              const int32 dx_c = x - Center.X;
              const int32 dy_c = y - Center.Y;
@@ -304,21 +318,22 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 
              if (DistSq_C <= RenderDistanceXY * RenderDistanceXY)
              {
-                 EffMinZ = 2;
-                 EffMaxZ = 12;
+                 EffMinZ = 2 + ExtraMinZ;
+                 EffMaxZ = 12 + ExtraMaxZ;
              }
              else if (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY)
              {
-                 EffMinZ = MidRenderDistanceZ;
-                 EffMaxZ = MidRenderDistanceZ;
+                 EffMinZ = MidRenderDistanceZ + ExtraMinZ;
+                 EffMaxZ = MidRenderDistanceZ + ExtraMaxZ;
              }
              else // FIX RIM-2 (scalar): Zone C distant silhouette
              {
-                 EffMinZ = 8;
-                 EffMaxZ = 8;
+                 EffMinZ = 8 + ExtraMinZ;
+                 EffMaxZ = 8 + ExtraMaxZ;
              }
 
-             for (int32 z = MinCoord.Z; z <= MaxCoord.Z; ++z)
+             const int32 ColMaxZ = FMath::Max(MaxCoord.Z, SkyZ_Max);
+             for (int32 z = MinCoord.Z; z <= ColMaxZ; ++z)
              {
                  const FIntVector C(x, y, z);
                  if (LoadedChunks.Contains(C)) continue;
@@ -422,7 +437,7 @@ void AVoxelWorld::FinalizeGenerationSetup()
             FTickerDelegate::CreateLambda([WeakThis](float)->bool
             {
                 AVoxelWorld* S = WeakThis.Get();
-                if (!S || S->bShutdown) { if(S) S->DrainTickerHandle.Reset(); return false; }
+                if (!IsValid(S) || S->bShutdown) { if(S) S->DrainTickerHandle.Reset(); return false; }
                 S->DrainGenerationQueue();
                 if (S->QueueHead >= S->GenerationQueue.Num())
                 { 
@@ -472,22 +487,41 @@ void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
     Chunk->SetChunkCoord(Coord);
     Chunk->SetActorLocation(ChunkCoordToWorld(Coord));
 
-    // FIX Distant Chunk Lag: Compute initial LOD BEFORE generating, instead of generating at LOD 0 and later downgrading.
-    if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
+    // FIX Distant Chunk Lag: Compute initial LOD BEFORE generating.
+    // FIX SPAWN-LOD: During initial spawn the player is parked at Z=100000 so
+    // Player->GetActorLocation() gives an astronomically large DistSq for every
+    // chunk, forcing them all to LOD 2 (StepSize=4). At StepSize=4 the density
+    // grid is 7×7×7 — thin rim walls (1-2 voxels) fall below the Nyquist limit
+    // and are completely invisible. Fix: use SpawnTargetPos (the real geographic
+    // spawn centre) during bWaitingForInitialSpawn so each chunk gets the correct
+    // geographic LOD assignment. Zone C (rim) gets LOD 1 not LOD 2 → StepSize=2
+    // → 11×11×11 grid → rim walls reliably captured.
     {
-        const FVector PlayerPos = Player->GetActorLocation();
+        // Cache pawn pointer ONCE — calling GetPlayerPawn twice is a TOCTOU:
+        // the pawn can become pending-kill between the null-check and the
+        // dereference, causing the ACCESS_VIOLATION crash in DrainGenerationQueue.
+        APawn* CachedPawn = UGameplayStatics::GetPlayerPawn(this, 0);
+        const FVector RefPos = bWaitingForInitialSpawn
+            ? SpawnTargetPos
+            : (IsValid(CachedPawn) ? CachedPawn->GetActorLocation() : SpawnTargetPos);
+
         const FVector ChunkPos = ChunkCoordToWorld(Coord) + FVector(ChunkSize * VoxelSize * 0.5f);
-        const float DistSq = FVector::DistSquared(PlayerPos, ChunkPos);
+        const float DistSq = FVector::DistSquared2D(RefPos, ChunkPos);
 
         int32 TargetLOD = 0;
-        if (DistSq > LOD2Distance * LOD2Distance) TargetLOD = 2;
+        if      (DistSq > LOD2Distance * LOD2Distance) TargetLOD = 2;
         else if (DistSq > LOD1Distance * LOD1Distance) TargetLOD = 1;
 
-        // Force maximum LOD 1 for high elevations so they retain 3D mesh overhangs instead of flat fits
+        // Zone C distant terrain: cap at LOD 1 so StepSize=2 (not 4) gives
+        // enough density resolution to capture thin vertical walls and rim faces.
+        if (TargetLOD >= 2) TargetLOD = 1;
+
+        // High elevation chunks retain 3-D mesh overhangs
         if (Coord.Z >= 4) TargetLOD = FMath::Min(TargetLOD, 1);
 
-        if (DistSq < (Chunk->ChunkSize * Chunk->VoxelSize * 3.2f) * (Chunk->ChunkSize * Chunk->VoxelSize * 3.2f))
-            TargetLOD = 0; // Safeguard
+        // Immediate-vicinity safeguard: always full detail within 3 chunk radii
+        const float SafeDist = Chunk->ChunkSize * Chunk->VoxelSize * 3.2f;
+        if (DistSq < SafeDist * SafeDist) TargetLOD = 0;
 
         Chunk->SetLOD(TargetLOD);
     }
@@ -556,7 +590,7 @@ void AVoxelWorld::DrainGenerationQueue()
     // 8/frame keeps the GameThread fed without starving rendering.
     const bool bFastDrain = bWaitingForInitialSpawn;
     // PERF: Capping fast drain to 256 per frame protects the GameThread while fast-forwarding initial queue
-    const int32 Limit = bFastDrain ? 1024 : (!GetWorld()->IsGameWorld() ? 4 : 8);
+    const int32 Limit = bFastDrain ? 256 : (!GetWorld()->IsGameWorld() ? 4 : 8);
     const int32 MaxConc = bFastDrain ? 2048 : MaxConcurrentGenerations;
 
     // PERF-4: compute once per drain cycle — ConfigureChunk reads by const-ref.
@@ -565,7 +599,12 @@ void AVoxelWorld::DrainGenerationQueue()
     while (N < Limit && QueueHead < GenerationQueue.Num())
     {
         if ((int32)ActiveGenerations >= MaxConc) break;
-        SpawnChunk(GenerationQueue[QueueHead++]);
+        if (!GenerationQueue.IsValidIndex(QueueHead)) break;
+        
+        // Isolate dereference into local variable to separate instruction trace branches
+        const FIntVector NextCoord = GenerationQueue[QueueHead++];
+        SpawnChunk(NextCoord);
+        
         N++;
     }
     // PERF-5: Never RemoveAt(0,N) — that's an O(remaining) element shift.

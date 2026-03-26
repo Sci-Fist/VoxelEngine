@@ -88,7 +88,7 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Skylands XY radius (chunks). 20 chunks = 320m sky island coverage."))
-    int32 SkylandsRenderDistanceXY = 20;
+    int32 SkylandsRenderDistanceXY = 48;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
         meta=(ToolTip="Extra Z chunks above skylands SkyAlt for full sky band. 8 = 128m sky coverage."))
@@ -239,6 +239,7 @@ private:
     // Avoids O(N loaded chunks) scan every frame.
     TSet<FIntVector>               ChunksNeedingVisibilityCheck;
     FVoxelChunkManager             ChunkManager;
+    UPROPERTY()
     FVoxelChunkPool                ChunkPool;
     TArray<FIntVector>             DirtyRebuildQueue;
     void MarkChunkDirty(const FIntVector& Coord);

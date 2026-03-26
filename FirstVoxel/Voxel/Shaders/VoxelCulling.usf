@@ -1,0 +1,43 @@
+/*=============================================================================
+	VoxelCulling.usf: Compute shader for voxel chunk occlusion culling.
+=============================================================================*/
+
+#include "/Engine/Public/Platform.ush"
+
+// Input: Buffer of chunk bounding boxes (Min/Max)
+struct FChunkBounds
+{
+    float3 Min;
+    float3 Max;
+};
+
+StructuredBuffer<FChunkBounds> InputBounds;
+RWStructuredBuffer<uint> OutputVisibility; // 1 if visible, 0 if occluded
+
+// External parameters
+float4x4 ViewProjectionMatrix;
+float3 CameraPos;
+float4 HorizonPlane; // {Normal.xyz, Offset}
+
+[numthreads(64, 1, 1)]
+void MainCS(uint3 ThreadId : SV_DispatchThreadID)
+{
+    // Proper AABB-Plane intersection test
+    float3 MinP = InputBounds[ChunkIndex].Min;
+    float3 MaxP = InputBounds[ChunkIndex].Max;
+    
+    // Find the corner of the AABB that is furthest in the direction of the plane normal
+    float3 P;
+    P.x = (HorizonPlane.x >= 0) ? MaxP.x : MinP.x;
+    P.y = (HorizonPlane.y >= 0) ? MaxP.y : MinP.y;
+    P.z = (HorizonPlane.z >= 0) ? MaxP.z : MinP.z;
+    
+    float DistToPlane = dot(float4(P, 1.0f), HorizonPlane);
+    
+    // Visible if the furthest point is "above" the culling plane (or within a tolerance)
+    bool bVisible = (DistToPlane > -500.0f); // 5m tolerance for safety
+    
+    // TODO: HZB Occlusion Check (requires HZB texture binding)
+    
+    OutputVisibility[ChunkIndex] = bVisible ? 1 : 0;
+}

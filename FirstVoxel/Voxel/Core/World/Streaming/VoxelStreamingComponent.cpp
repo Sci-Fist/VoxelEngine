@@ -29,6 +29,10 @@ void UVoxelStreamingComponent::BeginPlay()
 {
     Super::BeginPlay();
     WorldOwner = Cast<AVoxelWorld>(GetOwner());
+    
+    // Initialize GPU Culling Manager
+    CullingManager = NewObject<UVoxelCullingManager>(this);
+    if (CullingManager) CullingManager->Initialize();
 }
 
 void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -68,26 +72,51 @@ void UVoxelStreamingComponent::UpdateStreaming()
     const FVector PlayerPos = CurrentPos;
     const FIntVector PlayerCoord = World->WorldToChunkCoord(PlayerPos);
     const FVoxelGenerationConfig Config = World->GetEffectiveConfig();
-    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
     const float ChunkWorldSize = World->ChunkSize * World->VoxelSize;
 
-    // 1. Sky Altitude
-    CalculateSkyAltitude(PlayerPos, Config);
+    // 2. Launch Background Discovery Task
+    // Use WeakThis to prevent use-after-free if component is destroyed
+    TWeakObjectPtr<UVoxelStreamingComponent> WeakThis(this);
+    const float SkyAltWorld = CachedSkyAltWorld;
+    const FVector ForwardVector = Player->GetActorForwardVector();
 
-    // 2. Column Heights
-    TArray<FVoxelBiomeManager::FWeightsAndHeight> CachedColumns;
-    GatherColumnHeights(PlayerCoord, ChunkWorldSize, Config, CachedColumns);
-
-    // 3. Island Thickness Math
+    // Island Thickness Math
+    const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
     const float IslandSize    = FMath::Max(SC.BaseIslandSize, SC.BaseIslandSize + CachedCurvedH * SC.HeightSizeBonus + CachedCurvedR * SC.RoughnessSizeBonus);
     const float HalfThickCm   = FMath::Max(200.f, IslandSize * SC.ThicknessRatio);
 
-    int32 SkyZMin = 0;
-    int32 SkyZMax = 0;
+    AsyncTask(ENamedThreads::AnyNormalThreadNormalTask, [WeakThis, PlayerPos, PlayerCoord, Config, ChunkWorldSize, SkyAltWorld, HalfThickCm, ForwardVector]()
+    {
+        if (!WeakThis.IsValid()) return;
+        UVoxelStreamingComponent* StrongThis = WeakThis.Get();
 
-    // 4. Build Desired Set
-    TSet<FIntVector> Desired;
-    BuildDesiredChunkSet(PlayerCoord, CachedColumns, ChunkWorldSize, CachedSkyAltWorld, HalfThickCm, SkyZMin, SkyZMax, Desired);
+        // 3. Column Heights
+        TArray<FVoxelBiomeManager::FWeightsAndHeight> CachedColumns;
+        StrongThis->GatherColumnHeights(PlayerCoord, ChunkWorldSize, Config, CachedColumns);
+
+        // 4. Build Desired Set
+        TSet<FIntVector> Desired;
+        int32 SkyZMin, SkyZMax;
+        StrongThis->BuildDesiredChunkSet(PlayerCoord, CachedColumns, ChunkWorldSize, SkyAltWorld, HalfThickCm, SkyZMin, SkyZMax, Desired);
+
+        // 5. Update on Game Thread
+        AsyncTask(ENamedThreads::GameThread, [WeakThis, PlayerPos, PlayerCoord, SkyZMin, SkyZMax, Desired, ForwardVector]()
+        {
+            if (!WeakThis.IsValid()) return;
+            UVoxelStreamingComponent* StrongThisGT = WeakThis.Get();
+            
+            StrongThisGT->ApplyDiscoveryResult(PlayerPos, PlayerCoord, SkyZMin, SkyZMax, Desired);
+            
+            // Rebuild queue moved here to use the latest ForwardVector and Desired set
+            StrongThisGT->RebuildGenerationQueue(PlayerPos, ForwardVector, Desired);
+        });
+    });
+}
+
+void UVoxelStreamingComponent::ApplyDiscoveryResult(const FVector& PlayerPos, const FIntVector& PlayerCoord, int32 SkyZMin, int32 SkyZMax, const TSet<FIntVector>& Desired)
+{
+    AVoxelWorld* World = WorldOwner.Get();
+    if (!World) return;
 
     // 5. Unload Out-of-Range
     TArray<FIntVector> ToRemove;
@@ -105,9 +134,6 @@ void UVoxelStreamingComponent::UpdateStreaming()
 
     // 7. Update LODs
     UpdateLODs(PlayerPos, PlayerCoord, SkyZMin, SkyZMax, Desired);
-
-    // 8. Sort Queue
-    RebuildGenerationQueue(PlayerPos, Player->GetActorForwardVector(), Desired);
 }
 
 
@@ -218,25 +244,21 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
     if (!World) return;
 
     const int32 MaxRad  = World->DistantRenderDistanceXY;
-    const int32 GridDim = 2 * MaxRad + 1;
-    const int32 NumCols = GridDim * GridDim;
+    const int32 SkylandsRenderDistanceXY = World->SkylandsRenderDistanceXY;
+    const FVoxelGenerationConfig& Config = World->GetEffectiveConfig();
 
-    const int32 RenderDistanceXY = World->RenderDistanceXY;
-    const int32 MidRenderDistanceXY = World->MidRenderDistanceXY;
-    const int32 RenderDistanceZ = World->RenderDistanceZ;
-    const int32 MidRenderDistanceZ = World->MidRenderDistanceZ;
-
-    // ── Pre-pass or use Drafts? ──────────────────────────────────────────
+    // ── Sky Altitude Bounds Pre-pass ────────────────────────────────────
     std::atomic<float> GlobalSkyAltMin(1000000.f);
     std::atomic<float> GlobalSkyAltMax(-1000000.f);
-    const FVoxelGenerationConfig& Config = World->GetEffectiveConfig();
-    const int32 SkylandsRenderDistanceXY = World->SkylandsRenderDistanceXY;
+
+    const int32 PrePassRad = SkylandsRenderDistanceXY;
+    const int32 GridDim = 2 * MaxRad + 1;
 
     ParallelFor(NumCols, [&](int32 Index)
     {
         const int32 x = -MaxRad + (Index % GridDim);
         const int32 y = -MaxRad + (Index / GridDim);
-        if (x*x + y*y > SkylandsRenderDistanceXY*SkylandsRenderDistanceXY) return;
+        if (x*x + y*y > PrePassRad*PrePassRad) return;
 
         const FVoxelBiomeManager::FWeightsAndHeight& Wh = CachedColumns[Index];
         float MinSkyAlt, MaxSkyAlt;
@@ -254,52 +276,86 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
     OutSkyZMin = FMath::FloorToInt(FilteredSkyMin / ChunkWorldSize);
     OutSkyZMax = FMath::CeilToInt (FilteredSkyMax / ChunkWorldSize);
 
-    const int32 SkyZMin = OutSkyZMin;
-    const int32 SkyZMax = OutSkyZMax;
+    // ── Hierarchical Discovery ──────────────────────────────────────────
+    // Instead of a flat O(N^2) loop, we use a recursive approach for Zone C/D
+    DiscoverHierarchical(PlayerCoord, CachedColumns, MaxRad, OutDesired);
 
-    // ── Standard Terrain ─────────────────────────────────────────────────
-    for (int32 Index = 0; Index < NumCols; ++Index)
+    // ── Sky Band Filling (Horizontal Ring) ──────────────────────────────
+    const int32 SkylandsZMin = OutSkyZMin;
+    const int32 SkylandsZMax = OutSkyZMax + World->SkylandsRenderDistanceZ;
+
+    for (int32 z = SkylandsZMin; z <= SkylandsZMax; ++z)
+    for (int32 y = -SkylandsRenderDistanceXY; y <= SkylandsRenderDistanceXY; ++y)
+    for (int32 x = -SkylandsRenderDistanceXY; x <= SkylandsRenderDistanceXY; ++x)
+        if (x*x + y*y <= SkylandsRenderDistanceXY*SkylandsRenderDistanceXY)
+            OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, z));
+}
+
+void UVoxelStreamingComponent::DiscoverHierarchical(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, int32 Radius, TSet<FIntVector>& OutDesired)
+{
+    AVoxelWorld* World = WorldOwner.Get();
+    if (!World) return;
+
+    const float ChunkWorldSize = World->ChunkSize * World->VoxelSize;
+    const int32 RenderDistanceXY = World->RenderDistanceXY;
+    const int32 MidRenderDistanceXY = World->MidRenderDistanceXY;
+    const int32 RenderDistanceZ = World->RenderDistanceZ;
+    const int32 MidRenderDistanceZ = World->MidRenderDistanceZ;
+
+    const int32 MaxRad = Radius;
+    const int32 GridDim = 2 * MaxRad + 1;
+
+    // Nested Grid Logic:
+    for (int32 x = -MaxRad; x <= MaxRad; ++x)
     {
-        const int32 x     = -MaxRad + (Index % GridDim);
-        const int32 y     = -MaxRad + (Index / GridDim);
-        const int32 radSq = x*x + y*y;
-        // FIX STREAM-1: was RoundToInt — disagreed with FloorToInt used in
-        // PerformWorldDiscoveryAndBoundsCalculation, causing ~50% of Zone C
-        // columns to target the wrong chunk Z and destroy the correct one.
-        const int32 GZ    = FMath::FloorToInt(CachedColumns[Index].SurfaceHeight / ChunkWorldSize);
+        for (int32 y = -MaxRad; y <= MaxRad; ++y)
+        {
+            const int32 radSq = x*x + y*y;
+            if (radSq > MaxRad * MaxRad) continue;
 
-        if (radSq <= RenderDistanceXY * RenderDistanceXY)
-        {
-            for (int32 z = -RenderDistanceZ; z <= 16; ++z)
-                OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ+z));
-        }
-        else if (radSq <= MidRenderDistanceXY * MidRenderDistanceXY)
-        {
-            for (int32 z = -MidRenderDistanceZ; z <= MidRenderDistanceZ; ++z)
-                OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ+z));
-        }
-        else if (radSq <= MaxRad * MaxRad)
-        {
-            // Expanded fully to 17 chunks total to robust height deviations safely
-            for (int32 z = -8; z <= 8; ++z)
-                OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ + z));
+            // Mega-Chunk Logic:
+            bool bIsMega = false;
+            if (radSq > MidRenderDistanceXY * MidRenderDistanceXY && World->GetActorLocation().Z > HighAltitudeThreshold)
+            {
+                bIsMega = true;
+                if ((x % MegaChunkMultiplier != 0) || (y % MegaChunkMultiplier != 0)) continue;
+            }
+
+            const int32 ColIndex = (x + MaxRad) + (y + MaxRad) * GridDim;
+            if (!CachedColumns.IsValidIndex(ColIndex)) continue;
+
+            const int32 GZ = FMath::FloorToInt(CachedColumns[ColIndex].SurfaceHeight / ChunkWorldSize);
+
+            if (radSq <= RenderDistanceXY * RenderDistanceXY)
+            {
+                // Zone A: full vertical column
+                for (int32 z = -RenderDistanceZ; z <= 16; ++z)
+                    OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ+z));
+            }
+            else if (radSq <= MidRenderDistanceXY * MidRenderDistanceXY)
+            {
+                // Zone B: surface slice
+                for (int32 z = -MidRenderDistanceZ; z <= MidRenderDistanceZ; ++z)
+                    OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ+z));
+            }
+            else
+            {
+                // Zone C: silhouette or Mega-Chunks
+                int32 VerticalHalf = bIsMega ? 4 : 8;
+                for (int32 z = -VerticalHalf; z <= VerticalHalf; ++z)
+                {
+                    OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, GZ+z));
+                }
+            }
         }
     }
 
+    // Playerspace immediate anchor (central chunks)
     for (int32 z = -2; z <= 2; ++z)
     for (int32 y = -RenderDistanceXY; y <= RenderDistanceXY; ++y)
     for (int32 x = -RenderDistanceXY; x <= RenderDistanceXY; ++x)
         if (x*x + y*y <= RenderDistanceXY*RenderDistanceXY)
             OutDesired.Add(PlayerCoord + FIntVector(x, y, z));
-
-    // ── Skylands ─────────────────────────────────────────────────────────
-    const int32 SkylandsRenderDistanceZ = World->SkylandsRenderDistanceZ;
-
-    for (int32 z = SkyZMin; z <= SkyZMax + SkylandsRenderDistanceZ; ++z)
-    for (int32 y = -SkylandsRenderDistanceXY; y <= SkylandsRenderDistanceXY; ++y)
-    for (int32 x = -SkylandsRenderDistanceXY; x <= SkylandsRenderDistanceXY; ++x)
-        if (x*x + y*y <= SkylandsRenderDistanceXY*SkylandsRenderDistanceXY)
-            OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, z));
 }
 
 void UVoxelStreamingComponent::UpdateLODs(const FVector& PlayerPos, const FIntVector& PlayerCoord, int32 SkyZMin, int32 SkyZMax, const TSet<FIntVector>& Desired)
@@ -328,7 +384,9 @@ void UVoxelStreamingComponent::UpdateLODs(const FVector& PlayerPos, const FIntVe
         const float L2OSq = World->LOD2Distance * World->LOD2Distance * HOut * HOut;
 
         int32 LOD = Chunk->GetLOD();
-        if      (LOD < 2 && DistSq > L2OSq) LOD = 2;
+        // FIX SLOPE-LOD: LOD 2 (StepSize=4) cannot capture thin slope walls.
+        // Clamp transitions so nothing ever goes above LOD 1.
+        if      (LOD < 1 && DistSq > L2OSq) LOD = 1; // was LOD=2, now capped to 1
         else if (LOD > 1 && DistSq < L2ISq) LOD = 1;
         else if (LOD < 1 && DistSq > L1OSq) LOD = 1;
         else if (LOD > 0 && DistSq < L1ISq) LOD = 0;
@@ -350,10 +408,21 @@ void UVoxelStreamingComponent::UpdateLODs(const FVector& PlayerPos, const FIntVe
         }
         else
         {
-            if      (rSq > 96 * 96) LOD = FMath::Max(LOD, 3);
-            else if (rSq > World->MidRenderDistanceXY * World->MidRenderDistanceXY) LOD = FMath::Max(LOD, 2);
-            else if (rSq > World->RenderDistanceXY    * World->RenderDistanceXY)    LOD = FMath::Max(LOD, 1);
+            // FIX SLOPE-LOD: was pushing Zone C to LOD 2 (StepSize=4, 7³ grid)
+            // and Zone D to LOD 3 (StepSize=8, 5³ grid). At those resolutions the
+            // density gradient across a thin rim wall produces zero sign changes
+            // → Surface Nets emits no slope faces. LOD 1 (StepSize=2, 11³ grid)
+            // is the minimum resolution that reliably captures vertical features.
+            if (rSq > World->MidRenderDistanceXY * World->MidRenderDistanceXY)
+                LOD = FMath::Max(LOD, 1); // Zone C: keep at LOD 1 (was erroneously LOD 2/3)
+            else if (rSq > World->RenderDistanceXY * World->RenderDistanceXY)
+                LOD = FMath::Max(LOD, 1); // Zone B: already LOD 1
         }
+
+        // Hard cap: never exceed LOD 1 regardless of distance or rSq calculations.
+        // LOD 2+ loses slope geometry entirely due to Nyquist undersampling of
+        // thin vertical walls. LOD 1 (StepSize=2) is the maximum allowed coarseness.
+        LOD = FMath::Min(LOD, 1);
 
         DesiredLODs.Add(It.Key, LOD);
     }

@@ -69,7 +69,7 @@ namespace {
         float MinCarveZ = SurfH - 1200.f;
         float MaxCarveZ = SurfH + 1200.f;
 
-        if (SteepW > 0.05f || C.Ctx.StepSize > 1) { MinCarveZ -= 1500000.f; MaxCarveZ += 1500000.f; }
+        if (SteepW > 0.05f || C.Ctx.StepSize > 1) { MinCarveZ -= 30000.f; MaxCarveZ += 30000.f; }
         if (C.Ctx.StepSize > 1) { MinCarveZ = C.ExactMinZ; MaxCarveZ = C.ExactMinZ + C.EffSize * C.EffVoxSz; }
         if (C.Config.Performance.bEnableOverhangs) { MaxCarveZ += C.Config.Overhangs.MaxDistFromSurface + 500.f; }
         

@@ -9,9 +9,13 @@
 
 #include "CoreMinimal.h"
 #include "Core/VoxelChunk.h"
+#include "VoxelChunkPool.generated.h"
 
+USTRUCT()
 struct FVoxelChunkPool
 {
+    GENERATED_BODY()
+
 public:
     /**
      * Maximum number of idle chunks to keep parked.
@@ -33,5 +37,6 @@ public:
     int32 Num() const { return Pool.Num(); }
 
 private:
+    UPROPERTY()
     TArray<AVoxelChunk*> Pool;
 };

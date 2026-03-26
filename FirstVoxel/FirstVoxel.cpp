@@ -31,6 +31,9 @@
 #include "FirstVoxel.h"
 #include "Modules/ModuleManager.h"
 #include "Voxel/VoxelLogger.h"
+#include "Misc/Paths.h"
+#include "ShaderCore.h"
+#include "Voxel/VoxelLogger.h"
 
 // Define the main log category for the FirstVoxel module
 // This is used throughout the codebase for UE_LOG output
@@ -58,6 +61,10 @@ public:
 		// Initialize the voxel session logging system
 		// This creates a timestamped log file for debugging generation issues
 		UVoxelLogger::InitLogger();
+
+		// Map the shader directory so the engine can find our custom USF files
+		FString ShaderDir = FPaths::Combine(FPaths::ProjectDir(), TEXT("Source/FirstVoxel/Voxel/Shaders"));
+		AddShaderSourceDirectoryMapping(TEXT("/Voxel"), ShaderDir);
 		
 		// Log successful module startup to the UE output log
 		UE_LOG(LogFirstVoxel, Log, TEXT("FirstVoxel module started; log file initialised."));

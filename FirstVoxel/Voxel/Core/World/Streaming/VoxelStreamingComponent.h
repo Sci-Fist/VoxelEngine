@@ -7,6 +7,7 @@
 #include "VoxelStreamingComponent.generated.h"
 
 class AVoxelWorld;
+class UVoxelCullingManager;
 
 UCLASS( ClassGroup=(Voxel), meta=(BlueprintSpawnableComponent) )
 class FIRSTVOXEL_API UVoxelStreamingComponent : public UActorComponent
@@ -27,6 +28,7 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Voxel|Streaming")
     void CheckCloseRangeVisibility();
+    void ApplyDiscoveryResult(const FVector& PlayerPos, const FIntVector& PlayerCoord, int32 SkyZMin, int32 SkyZMax, const TSet<FIntVector>& Desired);
 
     void AddChunkNeedingVisibilityCheck(const FIntVector& Coord);
     void ClearVisibilityChecks();
@@ -43,13 +45,21 @@ private:
     float CachedCurvedR = 0.f;
 
     TSet<FIntVector> ChunksNeedingVisibilityCheck;
+    TSet<FIntVector> PendingDiscoveryTasks;
+
+    // ── Hierarchical Discovery Settings ──────────────────────────────────
+    float HighAltitudeThreshold = 10000.f; // 100m
+    int32 MegaChunkMultiplier = 4;        // 4x4x4 chunks
 
     TWeakObjectPtr<AVoxelWorld> WorldOwner;
+    UPROPERTY(Transient)
+    UVoxelCullingManager* CullingManager;
 
     // ── Refactored Helpers for UpdateStreaming ────────────────────────────
     void CalculateSkyAltitude(const FVector& PlayerPos, const struct FVoxelGenerationConfig& Config);
     void GatherColumnHeights(const FIntVector& PlayerCoord, float ChunkWorldSize, const struct FVoxelGenerationConfig& Config, TArray<FVoxelBiomeManager::FWeightsAndHeight>& OutColumns);
     void BuildDesiredChunkSet(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired);
+    void DiscoverHierarchical(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, int32 Radius, TSet<FIntVector>& OutDesired);
     void UpdateLODs(const FVector& PlayerPos, const FIntVector& PlayerCoord, int32 SkyZMin, int32 SkyZMax, const TSet<FIntVector>& Desired);
     void RebuildGenerationQueue(const FVector& PlayerPos, const FVector& PlayerForward, const TSet<FIntVector>& Desired);
 };

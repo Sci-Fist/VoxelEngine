@@ -64,7 +64,13 @@ public class FirstVoxel : ModuleRules
 			// Voxel Engine Core
 			"ProceduralMeshComponent",   // Dynamic mesh generation for voxel terrain
 			"Json",              // JSON serialization for save/load
-			"JsonUtilities"      // Helper utilities for JSON operations
+			"JsonUtilities",     // Helper utilities for JSON operations
+			
+			// GPU Culling & Shaders
+			"RHI",               // GPU interface
+			"RenderCore",        // Rendering core functionality
+			"Renderer",          // Unreal renderer access
+			"Projects"           // For shader directory mapping
 		});
 
 		// =============================================================================

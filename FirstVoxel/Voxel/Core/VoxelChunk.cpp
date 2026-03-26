@@ -49,6 +49,13 @@ AVoxelChunk::AVoxelChunk()
 	ProceduralMesh->SetCastShadow(true);
 	ProceduralMesh->SetCanEverAffectNavigation(true);
 	ProceduralMesh->SetVisibility(false);
+	// FIX BOUNDS-CULL: UE5 frustum-culls the entire component when the camera
+	// moves far enough that the computed bounding box (derived from section 0 /
+	// FlatMesh) no longer intersects the frustum. SlopeMesh (section 1) vertices
+	// can extend slightly beyond that box, so slope faces disappear at distance
+	// while flat faces remain visible. BoundsScale=2 doubles the box radius,
+	// ensuring both sections stay inside the cull volume at all render distances.
+	ProceduralMesh->SetBoundsScale(2.0f);
 
 
 	WaterMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("WaterMesh"));

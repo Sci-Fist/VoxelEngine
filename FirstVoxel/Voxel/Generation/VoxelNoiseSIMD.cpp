@@ -271,6 +271,8 @@ namespace FVoxelNoiseSIMD
                 D = _mm256_add_ps(D, Ov_Add);
             }
         }
+        // 3. Clamp to [-10.f, 10.f] to prevent density weight overflows in marching cubes interpolation
+        D = _mm256_max_ps(_mm256_set1_ps(-10.f), _mm256_min_ps(_mm256_set1_ps(10.f), D));
         return D;
     }
 
@@ -1274,8 +1276,8 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 Mask_Rim   = _mm256_cmp_ps(NormDist, RimEnd_v, _CMP_LT_OQ);
                 __m256 Smooth     = SmoothStep_AVX2(FloorEnd_v, RimEnd_v, NormDist);
                 
-                // if < FloorEnd, 0.0f
-                FlattenBlend = _mm256_blendv_ps(Smooth, _mm256_setzero_ps(), Mask_Floor);
+                // if < FloorEnd, 0.20f (20% natural terrain blend)
+                FlattenBlend = _mm256_blendv_ps(Smooth, _mm256_set1_ps(0.20f), Mask_Floor);
                 // if >= RimEnd, 1.0f
                 FlattenBlend = _mm256_blendv_ps(_mm256_set1_ps(1.f), FlattenBlend, Mask_Rim);
 
