@@ -1,0 +1,23 @@
+// HorizonMasking.ush
+// Calculated distance-based masking for atmospheric horizon blending
+
+#ifndef VOXEL_HORIZON_MASKING
+#define VOXEL_HORIZON_MASKING
+
+float GetHorizonMask(float3 WorldPos, float3 CameraPos, float PlanetRadius, float FadeStartDist)
+{
+    float Distance = distance(WorldPos, CameraPos);
+    
+    // Calculate distance to the tangent horizon from current altitude
+    // Assumes Earth-like curvature approximations for the voxel horizon
+    float Altitude = max(0.0, length(CameraPos) - PlanetRadius);
+    float HorizonDist = sqrt(pow(PlanetRadius + Altitude, 2) - pow(PlanetRadius, 2));
+
+    // Shift mask based on fade parameters
+    // 1.0 = fully visible, 0.0 = masked by atmosphere/horizon
+    float Mask = saturate((HorizonDist - Distance) / FadeStartDist);
+    
+    return Mask;
+}
+
+#endif

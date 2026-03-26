@@ -51,14 +51,18 @@ private:
     float HighAltitudeThreshold = 10000.f; // 100m
     int32 MegaChunkMultiplier = 4;        // 4x4x4 chunks
 
+    // ── GPU Culling State ──────────────────────────────────────────────
+    int32 CurrentCullingRequestID = -1;
+    TArray<FIntVector> PendingCullingChunks;
+
     TWeakObjectPtr<AVoxelWorld> WorldOwner;
     UPROPERTY(Transient)
     UVoxelCullingManager* CullingManager;
 
     // ── Refactored Helpers for UpdateStreaming ────────────────────────────
     void CalculateSkyAltitude(const FVector& PlayerPos, const struct FVoxelGenerationConfig& Config);
-    void GatherColumnHeights(const FIntVector& PlayerCoord, float ChunkWorldSize, const struct FVoxelGenerationConfig& Config, TArray<FVoxelBiomeManager::FWeightsAndHeight>& OutColumns);
-    void BuildDesiredChunkSet(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired);
+    void GatherColumnHeights(const FIntVector& PlayerCoord, float ChunkWorldSize, const struct FVoxelGenerationConfig& Config, int32 Radius, TArray<FVoxelBiomeManager::FWeightsAndHeight>& OutColumns);
+    void BuildDesiredChunkSet(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32 Radius, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired);
     void DiscoverHierarchical(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, int32 Radius, TSet<FIntVector>& OutDesired);
     void UpdateLODs(const FVector& PlayerPos, const FIntVector& PlayerCoord, int32 SkyZMin, int32 SkyZMax, const TSet<FIntVector>& Desired);
     void RebuildGenerationQueue(const FVector& PlayerPos, const FVector& PlayerForward, const TSet<FIntVector>& Desired);

@@ -21,6 +21,9 @@ class FVoxelCullingCS : public FGlobalShader
         SHADER_PARAMETER(FMatrix, ViewProjectionMatrix)
         SHADER_PARAMETER(FVector, CameraPos)
         SHADER_PARAMETER(FVector4, HorizonPlane)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, HZBTexture)
+        SHADER_PARAMETER_SAMPLER(SamplerState, HZBSampler)
+        SHADER_PARAMETER(FVector2D, HZBSize)
     END_SHADER_PARAMETER_STRUCT()
 
 public:
@@ -48,16 +51,32 @@ void UVoxelCullingManager::Shutdown()
 
 void UVoxelCullingManager::PerformCulling_RenderThread(FRHICommandListImmediate& RHICmdList, const TArray<FBox>& Bounds, TArray<bool>& OutVisibility)
 {
-    if (!bInitialized || Bounds.Num() == 0) return;
+    // Legacy support: immediately request and wait (still stalls, but uses new infra)
+    int32 ReqID = RequestCulling_RenderThread(RHICmdList, Bounds, FMatrix::Identity, FVector::ZeroVector);
+    
+    // This is the stall we want to avoid in the caller!
+    while (!GetResults(ReqID, OutVisibility))
+    {
+        FPlatformProcess::Sleep(0.001f);
+    }
+}
 
+int32 UVoxelCullingManager::RequestCulling_RenderThread(
+    FRHICommandListImmediate& RHICmdList, 
+    const TArray<FBox>& Bounds, 
+    const FMatrix& ViewProjection, 
+    const FVector& CameraPos,
+    const FRHITexture* HZBTexture)
+{
+    if (!bInitialized || Bounds.Num() == 0) return -1;
+
+    int32 RequestID = NextRequestID++;
     int32 NumChunks = Bounds.Num();
-    OutVisibility.SetNum(NumChunks);
 
     // 1. Create Input Buffer (Bounds)
     TResourceArray<FBox> BoundsData;
     BoundsData.Append(Bounds);
     
-    FIntVector InputStride(sizeof(FBox), 0, 0);
     FStructuredBufferRHIRef InputBuffer = RHICreateStructuredBuffer(sizeof(FBox), BoundsData.GetResourceDataSize(), BUF_Static | BUF_ShaderResource, BoundsData);
     FShaderResourceViewRHIRef InputSRV = RHICreateShaderResourceView(InputBuffer);
 
@@ -72,22 +91,81 @@ void UVoxelCullingManager::PerformCulling_RenderThread(FRHICommandListImmediate&
     FVoxelCullingCS::FParameters Params;
     Params.InputBounds = InputSRV;
     Params.OutputVisibility = OutputUAV;
-    
-    // Placeholder ViewProjection and Horizon Plane - in real use these come from FSceneView
-    Params.ViewProjectionMatrix = FMatrix::Identity; 
-    Params.CameraPos = FVector::ZeroVector;
-    Params.HorizonPlane = FVector4(0, 0, 1, 0); // Flat ground plane
+    Params.ViewProjectionMatrix = ViewProjection;
+    Params.CameraPos = CameraPos;
+    Params.HorizonPlane = FVector4(0, 0, 1, 0); 
+
+    if (HZBTexture)
+    {
+        Params.HZBTexture = (FRHITexture*)HZBTexture;
+        Params.HZBSize = FVector2D(HZBTexture->GetSizeXYZ().X, HZBTexture->GetSizeXYZ().Y);
+    }
+    else
+    {
+        Params.HZBTexture = GBlackTexture->GetTextureRHI();
+        Params.HZBSize = FVector2D(1.f, 1.f);
+    }
+    Params.HZBSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 
     SetShaderParameters(RHICmdList, ComputeShader, ComputeShader.GetComputeShader(), Params);
 
     uint32 GroupCount = FMath::DivideAndRoundUp((uint32)NumChunks, 64u);
     RHICmdList.DispatchComputeShader(GroupCount, 1, 1);
 
-    // 4. Readback (Sync for now, should be async in production)
-    uint32* Data = (uint32*)RHICmdList.LockStructuredBuffer(OutputBuffer, 0, NumChunks * sizeof(uint32), RLM_ReadOnly);
-    for (int32 i = 0; i < NumChunks; ++i)
+    // 4. Copy to Readback
+    RHICmdList.Transition(FRHITransitionInfo(OutputBuffer, ERHIAccess::UAVMask, ERHIAccess::CopySrc));
+    
+    TSharedPtr<FRHIGPUBufferReadback> Readback = GetOrCreateReadback();
+    Readback->EnqueueCopy(RHICmdList, OutputBuffer);
+
+    FCullingRequest Req;
+    Req.RequestID = RequestID;
+    Req.NumChunks = NumChunks;
+    Req.Readback  = Readback;
+    Req.Results.SetNumUninitialized(NumChunks);
+    Req.bReady    = false;
+    
+    PendingRequests.Add(Req);
+
+    return RequestID;
+}
+
+bool UVoxelCullingManager::GetResults(int32 RequestID, TArray<bool>& OutVisibility)
+{
+    for (int32 i = 0; i < PendingRequests.Num(); ++i)
     {
-        OutVisibility[i] = (Data[i] != 0);
+        if (PendingRequests[i].RequestID == RequestID)
+        {
+            FCullingRequest& Req = PendingRequests[i];
+            
+            if (Req.Readback->IsReady())
+            {
+                uint32* Data = (uint32*)Req.Readback->Lock(Req.NumChunks * sizeof(uint32));
+                for (int32 j = 0; j < Req.NumChunks; ++j)
+                {
+                    Req.Results[j] = (Data[j] != 0);
+                }
+                Req.Readback->Unlock();
+                
+                OutVisibility = Req.Results;
+                
+                // Return readback buffer to pool
+                ReadbackPool.Add(Req.Readback);
+                PendingRequests.RemoveAt(i);
+                return true;
+            }
+            
+            return false;
+        }
     }
-    RHICmdList.UnlockStructuredBuffer(OutputBuffer);
+    return false;
+}
+
+TSharedPtr<FRHIGPUBufferReadback> UVoxelCullingManager::GetOrCreateReadback()
+{
+    if (ReadbackPool.Num() > 0)
+    {
+        return ReadbackPool.Pop();
+    }
+    return MakeShared<FRHIGPUBufferReadback>(TEXT("VoxelCullingReadback"));
 }

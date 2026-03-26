@@ -23,6 +23,7 @@ public:
     FVoxelGeneratorTask(
         const FIntVector&             InChunkCoord,
         const FVector&                InWorldOrigin,
+        const FVector&                InCameraPos,
         int32                         InChunkSize,
         float                         InVoxelSize,
         int32                         InStepSize,
@@ -57,6 +58,7 @@ private:
     // Inputs
     FIntVector             ChunkCoord;
     FVector                WorldOrigin;
+    FVector                CameraPos;
     int32                  ChunkSize;
     float                  VoxelSize;
     int32                  StepSize;

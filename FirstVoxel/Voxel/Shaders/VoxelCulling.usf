@@ -1,8 +1,5 @@
-/*=============================================================================
-	VoxelCulling.usf: Compute shader for voxel chunk occlusion culling.
-=============================================================================*/
-
 #include "/Engine/Public/Platform.ush"
+#include "HorizonMasking.ush"
 
 // Input: Buffer of chunk bounding boxes (Min/Max)
 struct FChunkBounds
@@ -18,26 +15,57 @@ RWStructuredBuffer<uint> OutputVisibility; // 1 if visible, 0 if occluded
 float4x4 ViewProjectionMatrix;
 float3 CameraPos;
 float4 HorizonPlane; // {Normal.xyz, Offset}
+float2 HZBSize;
+Texture2D<float> HZBTexture;
+SamplerState HZBSampler;
 
 [numthreads(64, 1, 1)]
 void MainCS(uint3 ThreadId : SV_DispatchThreadID)
 {
-    // Proper AABB-Plane intersection test
+    uint ChunkIndex = ThreadId.x;
+    
+    // Bounds check
+    // ... in a real scenario we'd check against a count parameter ...
+
     float3 MinP = InputBounds[ChunkIndex].Min;
     float3 MaxP = InputBounds[ChunkIndex].Max;
+    float3 Center = (MinP + MaxP) * 0.5f;
+    float Radius = length(MaxP - MinP) * 0.5f;
     
-    // Find the corner of the AABB that is furthest in the direction of the plane normal
-    float3 P;
-    P.x = (HorizonPlane.x >= 0) ? MaxP.x : MinP.x;
-    P.y = (HorizonPlane.y >= 0) ? MaxP.y : MinP.y;
-    P.z = (HorizonPlane.z >= 0) ? MaxP.z : MinP.z;
+    // 1. Curvature-Aware Horizon Culling (Directive B)
+    // Using hardcoded PlanetRadius (6371km) and FadeStart (50km) for now
+    float Mask = GetHorizonMask(Center, CameraPos, 6371000.0, 50000.0);
+    bool bVisible = (Mask > 0.001f);
+
+    // 2. Horizon Plane Culling (Legacy/Conservative)
+    if (bVisible)
+    {
+        float3 P;
+        P.x = (HorizonPlane.x >= 0) ? MaxP.x : MinP.x;
+        P.y = (HorizonPlane.y >= 0) ? MaxP.y : MinP.y;
+        P.z = (HorizonPlane.z >= 0) ? MaxP.z : MinP.z;
+        
+        float DistToPlane = dot(float4(P, 1.0f), HorizonPlane);
+        if (DistToPlane < -500.0f) bVisible = false;
+    }
     
-    float DistToPlane = dot(float4(P, 1.0f), HorizonPlane);
-    
-    // Visible if the furthest point is "above" the culling plane (or within a tolerance)
-    bool bVisible = (DistToPlane > -500.0f); // 5m tolerance for safety
-    
-    // TODO: HZB Occlusion Check (requires HZB texture binding)
+    // 3. HZB Occlusion Check
+    if (bVisible)
+    {
+        float4 ClipPos = mul(ViewProjectionMatrix, float4(Center, 1.0f));
+        if (ClipPos.w > 0)
+        {
+            float2 ViewportPos = (ClipPos.xy / ClipPos.w * float2(0.5f, -0.5f) + 0.5f) * HZBSize;
+            float HZBDepth = HZBTexture.SampleLevel(HZBSampler, ViewportPos / HZBSize, 0).r;
+            float InstanceDepth = ClipPos.z / ClipPos.w;
+            
+            // Unreal uses Reverse-Z (1 = near, 0 = far)
+            if (InstanceDepth < HZBDepth - 0.00001f)
+            {
+                bVisible = false;
+            }
+        }
+    }
     
     OutputVisibility[ChunkIndex] = bVisible ? 1 : 0;
 }

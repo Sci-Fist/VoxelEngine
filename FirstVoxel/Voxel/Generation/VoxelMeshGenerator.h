@@ -205,12 +205,11 @@ struct FVoxelMeshGenerator
         int32                         InChunkSize,
         float                         InVoxelSize,
         const FVector&                ChunkOrigin,
+        const FVector&                CameraPos,
         FVoxelMeshOutput&             OutMesh,
         const struct FVoxelGenerationConfig& Config,
         int32                         InStepSize = 1,
         struct FVoxelMeshScratchBuffers* Scratch = nullptr,
-        // PERF-1: optional precomputed weights (EffSize×EffSize = S×S grid).
-        // When provided, ColumnColors skips GetBiomeWeightsStatic entirely.
         const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights = nullptr);
 
     static void GenerateHeightmapMesh(

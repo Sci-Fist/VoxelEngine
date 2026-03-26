@@ -42,14 +42,81 @@ void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
     AVoxelWorld* World = WorldOwner.Get();
     if (!World || !GetWorld()->IsGameWorld()) return;
 
-    // Check if waiting for initial spawn — if so, streaming updates are paused
     if (World->IsWaitingForInitialSpawn()) return;
 
+    // ── 1. Handle Pending Culling Results ────────────────────────────────
+    if (CurrentCullingRequestID != -1 && CullingManager)
+    {
+        TArray<bool> VisibilityResults;
+        if (CullingManager->GetResults(CurrentCullingRequestID, VisibilityResults))
+        {
+            const TMap<FIntVector, AVoxelChunk*>* LoadedChunks = World->GetLoadedChunks();
+            for (int32 i = 0; i < PendingCullingChunks.Num(); ++i)
+            {
+                if (VisibilityResults.IsValidIndex(i))
+                {
+                    AVoxelChunk*const* P = LoadedChunks->Find(PendingCullingChunks[i]);
+                    if (P && *P)
+                    {
+                        if (UProceduralMeshComponent* PM = (*P)->GetProceduralMesh())
+                        {
+                            bool bVisible = VisibilityResults[i];
+                            if (PM->IsVisible() != bVisible)
+                                PM->SetVisibility(bVisible);
+                        }
+                    }
+                }
+            }
+            CurrentCullingRequestID = -1;
+            PendingCullingChunks.Empty();
+        }
+    }
+
+    // ── 2. Schedule New Culling Pass ─────────────────────────────────────
     StreamingTimer += DeltaTime;
     if (StreamingTimer >= StreamingInterval)
     {
         StreamingTimer = 0.f;
         UpdateStreaming();
+
+        // If no request is active, start a new one
+        if (CurrentCullingRequestID == -1 && CullingManager)
+        {
+            const TMap<FIntVector, AVoxelChunk*>* LoadedChunks = World->GetLoadedChunks();
+            TArray<FBox> BoundsToCull;
+            PendingCullingChunks.Empty();
+
+            for (auto& It : *LoadedChunks)
+            {
+                if (It.Value && It.Value->IsReady())
+                {
+                    PendingCullingChunks.Add(It.Key);
+                    BoundsToCull.Add(It.Value->GetComponentsBoundingBox());
+                }
+            }
+
+            if (PendingCullingChunks.Num() > 0)
+            {
+                // In a real scenario, we'd grab ViewProjection from the local player
+                // For this implementation, we'll use a placeholder or the manager defaults
+                FMatrix ViewProj = FMatrix::Identity;
+                FVector CamPos = FVector::ZeroVector;
+                if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
+                {
+                    if (PC->PlayerCameraManager) CamPos = PC->PlayerCameraManager->GetCameraLocation();
+                    // Note: Matrix retrieval usually involves FSceneView but we'll use a simplified projection for now
+                }
+
+                // Bridge to Render Thread
+                UVoxelCullingManager* CM = CullingManager;
+                ENQUEUE_RENDER_COMMAND(VoxelCullingRequest)(
+                    [CM, BoundsToCull, ViewProj, CamPos, this](FRHICommandListImmediate& RHICmdList)
+                {
+                    // This is slightly unsafe if 'this' dies, but UVoxelCullingManager is owned by this
+                    this->CurrentCullingRequestID = CM->RequestCulling_RenderThread(RHICmdList, BoundsToCull, ViewProj, CamPos);
+                });
+            }
+        }
     }
 
     CheckCloseRangeVisibility();
@@ -74,30 +141,35 @@ void UVoxelStreamingComponent::UpdateStreaming()
     const FVoxelGenerationConfig Config = World->GetEffectiveConfig();
     const float ChunkWorldSize = World->ChunkSize * World->VoxelSize;
 
+    // ── Pre-calculate Dynamic Discovery Radius ─────────────────────────
+    // Urgent: Scale discovery radius dynamically based on Camera.Z
+    const float AltBase = 10000.f; // 100m
+    const float AltMax  = 30000.f; // 300m
+    const float AltFactor = FMath::Clamp((PlayerPos.Z - AltBase) / (AltMax - AltBase), 0.f, 2.0f);
+    const int32 DynamicRadius = World->DistantRenderDistanceXY + FMath::RoundToInt(AltFactor * World->DistantRenderDistanceXY);
+
     // 2. Launch Background Discovery Task
-    // Use WeakThis to prevent use-after-free if component is destroyed
     TWeakObjectPtr<UVoxelStreamingComponent> WeakThis(this);
     const float SkyAltWorld = CachedSkyAltWorld;
     const FVector ForwardVector = Player->GetActorForwardVector();
 
-    // Island Thickness Math
     const FSkylandsLayerConfig& SC = Config.SkylandsLayer;
     const float IslandSize    = FMath::Max(SC.BaseIslandSize, SC.BaseIslandSize + CachedCurvedH * SC.HeightSizeBonus + CachedCurvedR * SC.RoughnessSizeBonus);
     const float HalfThickCm   = FMath::Max(200.f, IslandSize * SC.ThicknessRatio);
 
-    AsyncTask(ENamedThreads::AnyNormalThreadNormalTask, [WeakThis, PlayerPos, PlayerCoord, Config, ChunkWorldSize, SkyAltWorld, HalfThickCm, ForwardVector]()
+    AsyncTask(ENamedThreads::AnyNormalThreadNormalTask, [WeakThis, PlayerPos, PlayerCoord, Config, ChunkWorldSize, SkyAltWorld, HalfThickCm, ForwardVector, DynamicRadius]()
     {
         if (!WeakThis.IsValid()) return;
         UVoxelStreamingComponent* StrongThis = WeakThis.Get();
 
-        // 3. Column Heights
+        // 3. Column Heights (Pass DynamicRadius)
         TArray<FVoxelBiomeManager::FWeightsAndHeight> CachedColumns;
-        StrongThis->GatherColumnHeights(PlayerCoord, ChunkWorldSize, Config, CachedColumns);
+        StrongThis->GatherColumnHeights(PlayerCoord, ChunkWorldSize, Config, DynamicRadius, CachedColumns);
 
-        // 4. Build Desired Set
+        // 4. Build Desired Set (Pass DynamicRadius)
         TSet<FIntVector> Desired;
         int32 SkyZMin, SkyZMax;
-        StrongThis->BuildDesiredChunkSet(PlayerCoord, CachedColumns, ChunkWorldSize, SkyAltWorld, HalfThickCm, SkyZMin, SkyZMax, Desired);
+        StrongThis->BuildDesiredChunkSet(PlayerCoord, CachedColumns, ChunkWorldSize, SkyAltWorld, HalfThickCm, DynamicRadius, SkyZMin, SkyZMax, Desired);
 
         // 5. Update on Game Thread
         AsyncTask(ENamedThreads::GameThread, [WeakThis, PlayerPos, PlayerCoord, SkyZMin, SkyZMax, Desired, ForwardVector]()
@@ -199,12 +271,12 @@ void UVoxelStreamingComponent::CalculateSkyAltitude(const FVector& PlayerPos, co
     }
 }
 
-void UVoxelStreamingComponent::GatherColumnHeights(const FIntVector& PlayerCoord, float ChunkWorldSize, const FVoxelGenerationConfig& Config, TArray<FVoxelBiomeManager::FWeightsAndHeight>& OutColumns)
+void UVoxelStreamingComponent::GatherColumnHeights(const FIntVector& PlayerCoord, float ChunkWorldSize, const FVoxelGenerationConfig& Config, int32 Radius, TArray<FVoxelBiomeManager::FWeightsAndHeight>& OutColumns)
 {
     AVoxelWorld* World = WorldOwner.Get();
     if (!World) return;
 
-    const int32 MaxRad  = World->DistantRenderDistanceXY;
+    const int32 MaxRad  = Radius;
     const int32 GridDim = 2 * MaxRad + 1;
     const int32 NumCols = GridDim * GridDim;
 
@@ -238,12 +310,12 @@ void UVoxelStreamingComponent::GatherColumnHeights(const FIntVector& PlayerCoord
     });
 }
 
-void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired)
+void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32 Radius, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired)
 {
     AVoxelWorld* World = WorldOwner.Get();
     if (!World) return;
 
-    const int32 MaxRad  = World->DistantRenderDistanceXY;
+    const int32 MaxRad  = Radius;
     const int32 SkylandsRenderDistanceXY = World->SkylandsRenderDistanceXY;
     const FVoxelGenerationConfig& Config = World->GetEffectiveConfig();
 

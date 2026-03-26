@@ -147,6 +147,7 @@ void FVoxelMeshGenerator::GenerateMesh(
     int32                         InChunkSize,
     float                         InVoxelSize,
     const FVector&                ChunkOrigin,
+    const FVector&                CameraPos,
     FVoxelMeshOutput&             OutMesh,
     const FVoxelGenerationConfig& Config,
     int32                         InStepSize,
@@ -314,6 +315,21 @@ void FVoxelMeshGenerator::GenerateMesh(
         int32 ValidCount = (cb0?1:0) + (cb1?1:0) + (cb2?1:0) + (cb3?1:0);
 
         const FVector OutwardNormal = bD0Solid ? Axis : -Axis;
+
+        // ── Directive C: Directional Face Occlusion ──────────────────────
+        // At high altitudes, aggressively cull backfaces and bottom faces.
+        const FVector ViewDir = (CellVertices[i0] + ChunkOrigin - CameraPos).GetSafeNormal();
+        const float   CosTheta = FVector::DotProduct(OutwardNormal, ViewDir);
+        
+        // If facing away from camera (> 90 degrees)
+        if (CosTheta > 0.1f) 
+        {
+            // Aggressive culling for non-upward faces at high altitude
+            if (CameraPos.Z > 10000.f && OutwardNormal.Z < 0.2f) return;
+            
+            // Standard backface culling for all distances if extremely pointing away
+            if (CosTheta > 0.7f) return;
+        }
 
         const bool bSwap = false; // Regular CW continuous corner loop requires false
 

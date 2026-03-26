@@ -92,15 +92,31 @@ namespace {
         const int32 Count = OutEndZIdx - OutStartZIdx;
         if (Count > 0)
         {
-            FVoxelNoiseSIMD::EvaluateColumn_Surface_AVX2(
-                WX, WY, 
-                ExactMinZ + OutStartZIdx * EffVoxSz, EffVoxSz, 
-                Count, &C.SF_Densities[OutStartZIdx], 
-                C.Ctx.SurfaceHeight, C.Config.SurfaceGradientScale, SteepW,
-                C.Config.SeaLevel, C.Ctx.CachedSeedOffset,
-                FVoxelNoiseSIMD::GetPermutationTable(),
-                C.Config.Overhangs.MaxDistFromSurface, C.Config.Overhangs.Amplitude, C.Config.Overhangs.NoiseFrequency
-            );
+            if (C.Ctx.StepSize >= 4)
+            {
+                // Directive C: Geometric Downsampling for distant chunks (LOD 2+)
+                FVoxelNoiseSIMD::EvaluateColumn_Surface_Upsampled_AVX2(
+                    WX, WY, 
+                    ExactMinZ + OutStartZIdx * EffVoxSz, EffVoxSz, 
+                    Count, &C.SF_Densities[OutStartZIdx], 
+                    C.Ctx.SurfaceHeight, C.Config.SurfaceGradientScale, SteepW,
+                    C.Config.SeaLevel, C.Ctx.CachedSeedOffset,
+                    FVoxelNoiseSIMD::GetPermutationTable(),
+                    C.Config.Overhangs.MaxDistFromSurface, C.Config.Overhangs.Amplitude, C.Config.Overhangs.NoiseFrequency
+                );
+            }
+            else
+            {
+                FVoxelNoiseSIMD::EvaluateColumn_Surface_AVX2(
+                    WX, WY, 
+                    ExactMinZ + OutStartZIdx * EffVoxSz, EffVoxSz, 
+                    Count, &C.SF_Densities[OutStartZIdx], 
+                    C.Ctx.SurfaceHeight, C.Config.SurfaceGradientScale, SteepW,
+                    C.Config.SeaLevel, C.Ctx.CachedSeedOffset,
+                    FVoxelNoiseSIMD::GetPermutationTable(),
+                    C.Config.Overhangs.MaxDistFromSurface, C.Config.Overhangs.Amplitude, C.Config.Overhangs.NoiseFrequency
+                );
+            }
         }
     }
 
@@ -162,11 +178,12 @@ namespace {
 // ============================================================
 FVoxelGeneratorTask::FVoxelGeneratorTask(
     const FIntVector& InChunkCoord, const FVector& InWorldOrigin,
+    const FVector& InCameraPos,
     int32 InChunkSize, float InVoxelSize, int32 InStepSize,
     const FVoxelGenerationConfig& InConfig, IVoxelDensityProvider* InProvider,
     float InFoliageDensity, float InMaxFoliageSlope, struct FVoxelDataMap* InDataMap,
     bool InIsDistantHeightmesh)
-    : ChunkCoord(InChunkCoord), WorldOrigin(InWorldOrigin), ChunkSize(InChunkSize)
+    : ChunkCoord(InChunkCoord), WorldOrigin(InWorldOrigin), CameraPos(InCameraPos), ChunkSize(InChunkSize)
     , VoxelSize(InVoxelSize), StepSize(InStepSize), Config(InConfig)
     , DensityProvider(InProvider), FoliageDensity(InFoliageDensity)
     , MaxFoliageSlope(InMaxFoliageSlope), DataMap(InDataMap)
@@ -641,7 +658,7 @@ void FVoxelGeneratorTask::BuildMesh()
     else
     {
         FVoxelMeshGenerator::GenerateMesh(
-            Densities, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize,
+            Densities, ChunkSize, VoxelSize, WorldOrigin, CameraPos, MeshOutput, Config, StepSize,
             &ScratchBuffers,
             &ColumnWeights); // PERF-1: pass precomputed weights → ColumnColors skips noise
     }

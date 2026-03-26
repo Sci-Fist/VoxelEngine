@@ -142,11 +142,18 @@ void AVoxelChunk::GenerateAsync()
 
 	if (!DenseChunk.IsValid()) DenseChunk = MakeShared<FVoxelDensityChunk>();
 
+	FVector CamPos = FVector::ZeroVector;
+	if (GetWorld() && GetWorld()->GetFirstPlayerController())
+	{
+		if (APlayerCameraManager* CM = GetWorld()->GetFirstPlayerController()->PlayerCameraManager)
+			CamPos = CM->GetCameraLocation();
+	}
+
 	TSharedPtr<FVoxelGeneratorTask> LocalTask;
 	{
 		FScopeLock Lock(&TaskLock);
 		CurrentTask = MakeShared<FVoxelGeneratorTask>(
-			ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
+			ChunkCoord, GetActorLocation(), CamPos, ChunkSize, VoxelSize, GetStepSize(),
 			GenerationConfig, Provider, FoliageDensity, MaxFoliageSlope, DataMap,
 			// FIX RIM-3: was (LOD >= 2) — the heightmap path is flat 2-D only and
 			// cannot render vertical crater walls or rim silhouettes. Always use
@@ -172,11 +179,19 @@ void AVoxelChunk::GenerateSync()
 {
 	static FVoxelDensityGenerator GSync;
 	if (!DenseChunk.IsValid()) DenseChunk = MakeShared<FVoxelDensityChunk>();
+
+	FVector CamPos = FVector::ZeroVector;
+	if (GetWorld() && GetWorld()->GetFirstPlayerController())
+	{
+		if (APlayerCameraManager* CM = GetWorld()->GetFirstPlayerController()->PlayerCameraManager)
+			CamPos = CM->GetCameraLocation();
+	}
+
 	TSharedPtr<FVoxelGeneratorTask> LocalTask;
 	{
 		FScopeLock Lock(&TaskLock);
 		CurrentTask = MakeShared<FVoxelGeneratorTask>(
-			ChunkCoord, GetActorLocation(), ChunkSize, VoxelSize, GetStepSize(),
+			ChunkCoord, GetActorLocation(), CamPos, ChunkSize, VoxelSize, GetStepSize(),
 			GenerationConfig, &GSync, FoliageDensity, MaxFoliageSlope, DataMap,
 			false); // FIX RIM-3: always Surface Nets, see GenerateAsync for rationale
 		LocalTask = CurrentTask;
