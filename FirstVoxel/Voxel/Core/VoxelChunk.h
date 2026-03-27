@@ -358,6 +358,7 @@ private:
 	 * generation persisting after a dirty rebuild produces fewer sections.
 	 */
 	void UploadSection(int32 SectionIndex, const FVoxelMeshData& Data, UMaterialInterface* Mat, const FString& SectionName = FString(), class UProceduralMeshComponent* TargetMesh = nullptr);
+	void CreateCollisionForChunk(const FVoxelMeshOutput& MeshData);
 
 	/** Build water surface mesh from WaterData. Internal — call RebuildWaterMesh() instead. */
 	void BuildWaterMeshInternal();

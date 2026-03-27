@@ -258,6 +258,9 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 	UploadSection(0, Out.FlatMesh,  FlatMat,  TEXT("Flat"),  nullptr);
 	UploadSection(1, Out.SlopeMesh, SlopeMat, TEXT("Slope"), nullptr);
 
+	// Directive 2: Collision Decimation
+	CreateCollisionForChunk(Out);
+
 	// ── Per-biome foliage ─────────────────────────────────────────────────
 	const TArray<TArray<FTransform>>& PFT = CompletedTask->GetPerFoliageTransforms();
 	const TArray<UStaticMesh*>&       PFM = CompletedTask->GetPerFoliageMeshes();
@@ -408,17 +411,106 @@ void AVoxelChunk::ApplyMesh(TSharedPtr<FVoxelGeneratorTask> CompletedTask)
 }
 
 void AVoxelChunk::UploadSection(int32 Idx, const FVoxelMeshData& Data,
-                                UMaterialInterface* Mat, const FString&,
+                                UMaterialInterface* Mat, const FString& SectionName,
                                 UProceduralMeshComponent* Target)
 {
 	UProceduralMeshComponent* M = Target ? Target : ProceduralMesh;
 	if (!IsValid(M)) return;
 	if (Data.Vertices.Num() == 0) { M->ClearMeshSection(Idx); return; } // FIX-3
-	const bool bCol = (M == ProceduralMesh);
+	
+	// For Sections 0 and 1 (Visual), we now disable collision in favor of the dedicated collision section (Section 2)
+	const bool bCol = false; 
+	
 	M->ClearMeshSection(Idx); // Force instant PhysX buffer flush before rewrite
 	M->CreateMeshSection(Idx, Data.Vertices, Data.Triangles, Data.Normals,
 	                     Data.UVs, Data.VertexColors, Data.Tangents, bCol);
 	if (Mat) M->SetMaterial(Idx, Mat);
+}
+
+void AVoxelChunk::CreateCollisionForChunk(const FVoxelMeshOutput& MeshData)
+{
+	if (!ProceduralMesh) return;
+
+	// For LOD 0 and LOD 1, we use full-resolution collision.
+	// For LOD 2+, we implement vertex clustering.
+	if (LOD < 2)
+	{
+		// Merge Flat and Slope into a single collision section (Section 2)
+		FVoxelMeshData Combined;
+		Combined.Vertices = MeshData.FlatMesh.Vertices;
+		Combined.Triangles = MeshData.FlatMesh.Triangles;
+		
+		int32 VertOffset = Combined.Vertices.Num();
+		Combined.Vertices.Append(MeshData.SlopeMesh.Vertices);
+		for (int32 Tri : MeshData.SlopeMesh.Triangles) Combined.Triangles.Add(Tri + VertOffset);
+
+		ProceduralMesh->CreateMeshSection(2, Combined.Vertices, Combined.Triangles, TArray<FVector>(), TArray<FVector2D>(), TArray<FColor>(), TArray<FProcMeshTangent>(), true);
+		ProceduralMesh->SetMeshSectionVisible(2, false); // Invisible collision proxy
+		return;
+	}
+
+	// LOD 2+ vertex clustering implementation
+	FVoxelMeshData Decimated;
+	TMap<FIntVector, int32> ClusteredMap;
+	const float ClusterSize = VoxelSize * 2.0f; // Cluster into 2-voxel blocks
+	const float InvCluster = 1.0f / ClusterSize;
+
+	auto ProcessMesh = [&](const FVoxelMeshData& Src)
+	{
+		TArray<int32> Remap; Remap.SetNumUninitialized(Src.Vertices.Num());
+
+		for (int32 i = 0; i < Src.Vertices.Num(); ++i)
+		{
+			FIntVector Key(
+				FMath::FloorToInt(Src.Vertices[i].X * InvCluster),
+				FMath::FloorToInt(Src.Vertices[i].Y * InvCluster),
+				FMath::FloorToInt(Src.Vertices[i].Z * InvCluster)
+			);
+
+			if (int32* FoundIndex = ClusteredMap.Find(Key))
+			{
+				Remap[i] = *FoundIndex;
+			}
+			else
+			{
+				int32 NewIdx = Decimated.Vertices.Add(Src.Vertices[i]);
+				ClusteredMap.Add(Key, NewIdx);
+				Remap[i] = NewIdx;
+			}
+		}
+
+		for (int32 i = 0; i < Src.Triangles.Num(); i += 3)
+		{
+			int32 i0 = Remap[Src.Triangles[i]];
+			int32 i1 = Remap[Src.Triangles[i+1]];
+			int32 i2 = Remap[Src.Triangles[i+2]];
+
+			// Skip degenerate triangles
+			if (i0 == i1 || i1 == i2 || i2 == i0) continue;
+
+			Decimated.Triangles.Add(i0);
+			Decimated.Triangles.Add(i1);
+			Decimated.Triangles.Add(i2);
+		}
+	};
+
+	ProcessMesh(MeshData.FlatMesh);
+	ProcessMesh(MeshData.SlopeMesh);
+
+	if (Decimated.Vertices.Num() > 0)
+	{
+		ProceduralMesh->CreateMeshSection(2, Decimated.Vertices, Decimated.Triangles, TArray<FVector>(), TArray<FVector2D>(), TArray<FColor>(), TArray<FProcMeshTangent>(), true);
+		ProceduralMesh->SetMeshSectionVisible(2, false);
+		
+		UE_LOG(LogVoxelChunk, Log, TEXT("Chunk (%d,%d,%d) Collision Decimated: %d -> %d vertices"), 
+			ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z, 
+			MeshData.FlatMesh.Vertices.Num() + MeshData.SlopeMesh.Vertices.Num(), 
+			Decimated.Vertices.Num());
+	}
+	else
+	{
+		ProceduralMesh->ClearMeshSection(2);
+	}
 }
 
 void AVoxelChunk::DestroyAndRebuildMesh() { GenerateAsync(); }

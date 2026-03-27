@@ -310,8 +310,7 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     SpawnCoords.Sort(SortCoords);
     VisualCoords.Sort(SortCoords);
 
-    TArray<FIntVector> PriorityQueue;
-
+    TArray<FVoxelGenerationQueueEntry> PriorityQueue;
     InitialSpawnCoords_Visual.Empty();
 
     for (const FIntVector& C : SpawnCoords)
@@ -321,7 +320,7 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         {
             const bool bSync = (C.X == GroundCoord.X && C.Y == GroundCoord.Y && C.Z <= GroundCoord.Z && C.Z >= GroundCoord.Z - 2);
             if (bSync) WorldOwner->SpawnChunk(C, true);
-            else PriorityQueue.Add(C);
+            else PriorityQueue.Add(FVoxelGenerationQueueEntry(C, 10000.0f)); // Max priority for mandatory spawn chunks
         }
     }
 
@@ -338,15 +337,16 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
 
             if (!WorldOwner->GetLoadedChunks()->Contains(C))
             {
-                PriorityQueue.Add(C);
+                PriorityQueue.Add(FVoxelGenerationQueueEntry(C, 5000.0f)); // High priority for visual spawn area
             }
         }
     }
 
     if (PriorityQueue.Num() > 0)
     {
-        TArray<FIntVector> NewQueue = PriorityQueue;
+        TArray<FVoxelGenerationQueueEntry> NewQueue = PriorityQueue;
         NewQueue.Append(WorldOwner->GetGenerationQueue());
+        NewQueue.Heapify(); // Re-heapify after merging
         WorldOwner->SetGenerationQueue(NewQueue);
     }
 

@@ -18,6 +18,19 @@
 #include "Voxel/Core/VoxelChunkManager.h"
 #include "VoxelWorld.generated.h"
 
+/** Entry for the spatial priority generation queue. */
+struct FVoxelGenerationQueueEntry
+{
+    FIntVector Coord;
+    float Priority;
+
+    FVoxelGenerationQueueEntry() : Coord(0), Priority(0.f) {}
+    FVoxelGenerationQueueEntry(FIntVector InCoord, float InPriority) : Coord(InCoord), Priority(InPriority) {}
+
+    // Max-Heap behavior: highest priority at the top.
+    bool operator<(const FVoxelGenerationQueueEntry& Other) const { return Priority < Other.Priority; }
+};
+
 class AVoxelChunk;
 class UMaterialInterface;
 class UStaticMesh;
@@ -41,75 +54,38 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
     float VoxelSize = 100.f;
 
     // ── Render Distance — Three-zone system ──────────────────────────────────
-    //
-    //  Zone A (LOD 0 — full detail):
-    //    Radius = RenderDistanceXY chunks × 1600 cm = 2240 cm = ~22m
-    //    Vertical = RenderDistanceZ × 1600 cm above/below terrain = ±16000cm
-    //    This is the immediate play area — everything looks sharp.
-    //
-    //  Zone B (LOD 1 — half resolution):
-    //    Radius = MidRenderDistanceXY × 1600 cm = ~640m
-    //    Vertical = MidRenderDistanceZ × 1600 cm = ±6400cm around terrain
-    //    Distant terrain still looks good, hills and forests readable.
-    //
-    //  Zone C (LOD 2 — quarter resolution):
-    //    Radius = DistantRenderDistanceXY × 1600 cm = ~1280m
-    //    Vertical = only 1 chunk above/below surface (silhouette only)
-    //    Far horizon like Valheim — you can see the shape of distant lands.
-    //
-    //  Skylands:
-    //    Radius = SkylandsRenderDistanceXY = ~320m
-    //    Vertical = SkylandsRenderDistanceZ chunks above SkyAlt (sky band)
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Zone A radius (LOD 0 full detail). 24 chunks = 384m."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 RenderDistanceXY = 16;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Zone A vertical half-range above/below terrain (chunks). 16 = ±256m, covers caves and skylands from crater floor."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 RenderDistanceZ = 16;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Zone B radius (LOD 1 half-resolution). 40 chunks = 640m. Middle ground between playspace and horizon."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 MidRenderDistanceXY = 24;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Zone B vertical half-range (chunks). 4 = ±64m. Thin slice — just terrain surface + a little above/below."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 MidRenderDistanceZ = 8;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Zone C radius (LOD 2 silhouette). 80 chunks = 1280m. Valheim-level horizon view distance."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 DistantRenderDistanceXY = 128;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ClampMin="2", ClampMax="4",
-              ToolTip="LOD for chunks beyond MidRenderDistanceXY. 2 = quarter-resolution silhouette (recommended)."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 DistantLOD = 2;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Skylands XY radius (chunks). 20 chunks = 320m sky island coverage."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 SkylandsRenderDistanceXY = 48;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming",
-        meta=(ToolTip="Extra Z chunks above skylands SkyAlt for full sky band. 8 = 128m sky coverage."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 SkylandsRenderDistanceZ = 8;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Performance",
-        meta=(ClampMin="4", ClampMax="128",
-              ToolTip="Parallel chunk generation slots. 12 recommended — reduces memory contention and cache thrashing vs 48. Fewer concurrent tasks = faster individual completion."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Performance")
     int32 MaxConcurrentGenerations = 12;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD",
-        meta=(ToolTip="World distance (cm) at which LOD 0 transitions to LOD 1. 40000 = 400m (Zone A/B boundary)."))
-    float LOD1Distance = 22400.f;   // = RenderDistanceXY * ChunkSize * VoxelSize
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD")
+    float LOD1Distance = 22400.f;
 
-    // FIX RIM-4: was 64000 cm (640 m) — larger than the old MaxRadius (384 m) so LOD 2
-    // never actually fired. Now correctly set to MidRenderDistanceXY(24) * ChunkSize(16)
-    // * VoxelSize(100) = 38400 cm (384 m): chunks beyond Zone B boundary get LOD 2
-    // (StepSize=4, quarter-res Surface Nets) for the new Zone C distant horizon.
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD",
-        meta=(ToolTip="World distance (cm) at which LOD 1 transitions to LOD 2. 38400 = 384m (Zone B/C boundary). Chunks beyond this distance use StepSize=4 (quarter-resolution Surface Nets)."))
-    float LOD2Distance = 38400.f;   // = MidRenderDistanceXY(24) * ChunkSize(16) * VoxelSize(100)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|LOD")
+    float LOD2Distance = 38400.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Materials")
     UMaterialInterface* MasterFlatMaterial  = nullptr;
@@ -132,16 +108,7 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Generation")
     bool bRegenerateViewportAfterPIE = true;
 
-    FVoxelGenerationConfig GetEffectiveConfig() const
-    {
-        if (BiomePreset != nullptr)
-        {
-            FVoxelGenerationConfig Out = BiomePreset->Config;
-            Out.Seed = GenerationConfig.Seed; // Local seed override
-            return Out;
-        }
-        return GenerationConfig;
-    }
+    FVoxelGenerationConfig GetEffectiveConfig() const;
 
 private:
     mutable FVoxelGenerationConfig MergedConfig;
@@ -155,16 +122,16 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
     bool bSpawnInNaturalCrater = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn", meta=(ClampMin="1000.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
     float CraterSpawnSearchRadius = 60000.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn", meta=(ClampMin="100.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
     float CraterSpawnSearchStep = 4000.f;
 
     FIntVector WorldToChunkCoord(const FVector& WorldPos) const;
     FVector    ChunkCoordToWorld(const FIntVector& Coord)  const;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn", meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
     float CraterSpawnMinWeight = 0.25f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Spawn")
@@ -184,31 +151,19 @@ public:
     UFUNCTION(BlueprintCallable, Category="Voxel|Testing") void RunVoxelTests();
 
     FVoxelDataMap* GetVoxelDataMap() { return &DataMap; }
-    
-    /** 
-     * Access the map of loaded chunks. 
-     * WARNING: Accessing this map requires locking LoadedChunksLock when called from background threads.
-     */
     const TMap<FIntVector, AVoxelChunk*>* GetLoadedChunks() const { return &LoadedChunks; }
     
-    /** Lock for protecting access to LoadedChunks map across threads. */
     mutable FRWLock LoadedChunksLock;
 
     int32 GetQueueCount() const { return GenerationQueue.Num(); }
-    int32 GetQueueHead()  const { return QueueHead; }
 
     bool ContainsEmptyChunk(const FIntVector& Coord) const { return EmptyChunks.Contains(Coord); }
     const TSet<FIntVector>& GetEmptyChunks() const { return EmptyChunks; }
 
-    void SetGenerationQueue(const TArray<FIntVector>& InQueue) { GenerationQueue = InQueue; QueueHead = 0; }
-    const TArray<FIntVector>& GetGenerationQueue() const { return GenerationQueue; }
+    void SetGenerationQueue(const TArray<FVoxelGenerationQueueEntry>& InQueue) { GenerationQueue = InQueue; }
+    const TArray<FVoxelGenerationQueueEntry>& GetGenerationQueue() const { return GenerationQueue; }
 
-    void ClearEmptyChunksInRange(int32 MinZ, int32 MaxZ) 
-    {
-        TArray<FIntVector> ToRemove;
-        for (const FIntVector& C : EmptyChunks) if (C.Z >= MinZ && C.Z <= MaxZ) ToRemove.Add(C);
-        for (const FIntVector& C : ToRemove) EmptyChunks.Remove(C);
-    }
+    void ClearEmptyChunksInRange(int32 MinZ, int32 MaxZ);
 
     struct FVoxelDensityGenerator* GetDensityGenerator() const { return DensityGenerator.Get(); }
     FVector GetSpawnTargetPos() const { return SpawnTargetPos; }
@@ -223,29 +178,25 @@ public:
     UFUNCTION(BlueprintCallable, Category="Voxel|Persistence") void LoadFromFile(const FString& SlotName);
     UFUNCTION(CallInEditor, Category="Voxel|Actions") void RebuildWorld();
     UFUNCTION(CallInEditor, Category="Voxel|Actions") void ClearModifications();
-    UFUNCTION(CallInEditor, Category="Voxel|Persistence", meta=(DisplayName="Save Slot")) void SaveDefaultSlot();
-    UFUNCTION(CallInEditor, Category="Voxel|Persistence", meta=(DisplayName="Load Slot")) void LoadDefaultSlot();
+    UFUNCTION(CallInEditor, Category="Voxel|Persistence") void SaveDefaultSlot();
+    UFUNCTION(CallInEditor, Category="Voxel|Persistence") void LoadDefaultSlot();
     UFUNCTION(CallInEditor, Category="Voxel|Actions") void RunTests();
     void TestSmoothLODTransitions();
 
     UFUNCTION(BlueprintCallable, Category="Voxel|Terrain") float GetTerrainHeight(float X, float Y) const;
     float GetSurfaceZ(float X, float Y) const;
 
-
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Voxel") class UVoxelWaterComponent* WaterComponent = nullptr;
     UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") UStaticMesh* TreeMesh  = nullptr;
     UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") UStaticMesh* GrassMesh = nullptr;
-    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy", meta=(ClampMin="0.0", ClampMax="1.0")) float FoliageDensity  = 0.05f;
-    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy", meta=(ClampMin="0.0", ClampMax="1.0")) float MaxFoliageSlope = 0.8f;
+    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") float FoliageDensity  = 0.05f;
+    UPROPERTY(EditAnywhere, Category="Voxel|Foliage|Legacy") float MaxFoliageSlope = 0.8f;
     UPROPERTY(VisibleAnywhere, Category="Voxel") class USceneComponent* Root;
 
 private:
     FVoxelDataMap DataMap;
     TMap<FIntVector, AVoxelChunk*> LoadedChunks;
     TSet<FIntVector>               EmptyChunks;
-    // FIX-1: pending-set for visibility check — only chunks that just became ready.
-    // ApplyMesh() adds coordinates here; CheckCloseRangeVisibility() drains it.
-    // Avoids O(N loaded chunks) scan every frame.
     TSet<FIntVector>               ChunksNeedingVisibilityCheck;
     FVoxelChunkManager             ChunkManager;
     UPROPERTY()
@@ -253,13 +204,10 @@ private:
     TArray<FIntVector>             DirtyRebuildQueue;
     void MarkChunkDirty(const FIntVector& Coord);
 
-    TArray<FIntVector> GenerationQueue;
-    int32              QueueHead = 0;
-    TAtomic<int32>     ActiveGenerations{0};
-    // PERF-4: populated once per DrainGenerationQueue call so ConfigureChunk
-    // reads a const-ref instead of deep-copying the large config struct N times.
+    TArray<FVoxelGenerationQueueEntry> GenerationQueue;
+    TSet<class AVoxelChunk*>           ActiveChunkGenerations;
+    TAtomic<int32>                     ActiveGenerations{0};
     mutable FVoxelGenerationConfig CachedEffectiveConfig;
-
 
     bool bInitialized = false;
     FThreadSafeBool bShutdown{false};
@@ -275,7 +223,6 @@ private:
 
     UPROPERTY(VisibleAnywhere, Category="Voxel|Spawn")
     class UVoxelSpawnHandlerComponent* SpawnHandlerComponent = nullptr;
-
 
     void ProcessInitialPlayerSpawn();
     FVector SpawnTargetPos    = FVector::ZeroVector;
@@ -297,8 +244,6 @@ public:
     
     UFUNCTION(BlueprintPure, Category="Voxel") float GetGenerationProgress()    const;
     UFUNCTION(BlueprintPure, Category="Voxel") FString GetGenerationStatusString() const;
-    int32 GetInitialSpawnReadyCount() const { return InitialSpawnCollisionReadyCount.Load(); }
-    int32 GetInitialSpawnTotalCount() const { return InitialSpawnCoords.Num(); }
 
 private:
     void UpdateChunkStreaming();
@@ -315,4 +260,13 @@ private:
     void PerformWorldDiscoveryAndBoundsCalculation();
     void FinalizeGenerationSetup();
     void CheckCloseRangeVisibility();
+
+    // Spawn HUD stats
+    TSet<FIntVector> InitialSpawnCoords;
+    TAtomic<int32> InitialSpawnCollisionReadyCount{0};
+    TAtomic<int32> InitialSpawnVisualReadyCount{0};
+    bool bWaitingForInitialSpawn = false;
+public:
+    int32 GetInitialSpawnReadyCount() const { return InitialSpawnCollisionReadyCount.Load(); }
+    int32 GetInitialSpawnTotalCount() const { return InitialSpawnCoords.Num(); }
 };

@@ -589,6 +589,9 @@ void FVoxelGeneratorTask::BuildDensityField()
         }
 
         // ── SIMD Pass Chaining (@/improve componentisation) ────────────────────
+        // Periodic cancellation check inside ParallelFor
+        if (FlatXY % 8 == 0 && bCancelled) return;
+
         float SF_Densities[256];
         const float SteepW = Ctx.BiomeWeights.Cliffs + Ctx.BiomeWeights.Peaks;
         const float ExactMinZ = WorldOrigin.Z - EffVoxSz;
