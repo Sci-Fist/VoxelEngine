@@ -45,7 +45,8 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
         if (bAllReady)
         {
             UE_LOG(LogVoxelWorld, Log, TEXT("VoxelSpawnHandler: All initial chunks ready (%d col, %d vis). Dropping player."), 
-                InitialSpawnCollisionReadyCount, InitialSpawnVisualReadyCount);
+                InitialSpawnCollisionReadyCount.GetValue(), InitialSpawnVisualReadyCount.GetValue());
+
             
             if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
             {
@@ -218,8 +219,9 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
 
     if (bWaitingForInitialSpawn) return;
     InitialSpawnCoords.Empty();
-    InitialSpawnCollisionReadyCount = 0;
-    InitialSpawnVisualReadyCount = 0;
+    InitialSpawnCollisionReadyCount.Reset();
+    InitialSpawnVisualReadyCount.Reset();
+
     bWaitingForInitialSpawn = true;
 
     const FIntVector SpawnCoord = WorldOwner->WorldToChunkCoord(FVector(Pos.X, Pos.Y, TargetZ));
@@ -351,12 +353,14 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     int32 PreCollision = 0;
     for (const FIntVector& C : InitialSpawnCoords)
         if (AVoxelChunk*const* P = WorldOwner->GetLoadedChunks()->Find(C)) if ((*P)->IsReady()) PreCollision++;
-    InitialSpawnCollisionReadyCount = PreCollision;
+    InitialSpawnCollisionReadyCount.Set(PreCollision);
+
 
     int32 PreVisual = 0;
     for (const FIntVector& C : InitialSpawnCoords_Visual)
         if (AVoxelChunk*const* P = WorldOwner->GetLoadedChunks()->Find(C)) if ((*P)->IsReady()) PreVisual++;
-    InitialSpawnVisualReadyCount = PreVisual;
+    InitialSpawnVisualReadyCount.Set(PreVisual);
+
 
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelSpawnHandler: Waiting for %d collision + %d visual spawn chunks. Pre-ready: collision=%d, visual=%d"),
         InitialSpawnCoords.Num(), InitialSpawnCoords_Visual.Num(), PreCollision, PreVisual);
@@ -367,8 +371,9 @@ void UVoxelSpawnHandlerComponent::ClearState()
     bWaitingForInitialSpawn = false;
     InitialSpawnCoords.Empty();
     InitialSpawnCoords_Visual.Empty();
-    InitialSpawnCollisionReadyCount = 0;
-    InitialSpawnVisualReadyCount = 0;
+    InitialSpawnCollisionReadyCount.Reset();
+    InitialSpawnVisualReadyCount.Reset();
+
     SpawnWaitAccum = 0.f;
     SpawnDelayAccum = 0.f;
 }

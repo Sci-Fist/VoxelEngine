@@ -28,13 +28,15 @@ public:
     bool IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
     void SetWaitingForInitialSpawn(bool bWait) { bWaitingForInitialSpawn = bWait; }
 
-    int32 GetCollisionReadyCount() const { return InitialSpawnCollisionReadyCount; }
-    int32 GetVisualReadyCount() const { return InitialSpawnVisualReadyCount; }
+    int32 GetCollisionReadyCount() const { return InitialSpawnCollisionReadyCount.GetValue(); }
+    int32 GetVisualReadyCount() const { return InitialSpawnVisualReadyCount.GetValue(); }
+
     int32 GetTotalCollisionCount() const { return InitialSpawnCoords.Num(); }
     int32 GetTotalVisualCount() const { return InitialSpawnCoords_Visual.Num(); }
 
-    void IncrementCollisionReady() { ++InitialSpawnCollisionReadyCount; }
-    void IncrementVisualReady() { ++InitialSpawnVisualReadyCount; }
+    void IncrementCollisionReady() { InitialSpawnCollisionReadyCount.Increment(); }
+    void IncrementVisualReady() { InitialSpawnVisualReadyCount.Increment(); }
+
 
     bool ContainsCoord(const FIntVector& Coord) const { return InitialSpawnCoords.Contains(Coord) || InitialSpawnCoords_Visual.Contains(Coord); }
     bool ContainsCollisionCoord(const FIntVector& Coord) const { return InitialSpawnCoords.Contains(Coord); }
@@ -46,7 +48,8 @@ public:
     const TSet<FIntVector>& GetInitialSpawnCoords() const { return InitialSpawnCoords; }
     const TSet<FIntVector>& GetInitialSpawnCoordsVisual() const { return InitialSpawnCoords_Visual; }
 
-    void ResetCounters() { InitialSpawnCollisionReadyCount = 0; InitialSpawnVisualReadyCount = 0; }
+    void ResetCounters() { InitialSpawnCollisionReadyCount.Reset(); InitialSpawnVisualReadyCount.Reset(); }
+
 
 private:
     bool bWaitingForInitialSpawn = false;
@@ -54,8 +57,9 @@ private:
     TSet<FIntVector> InitialSpawnCoords;
     TSet<FIntVector> InitialSpawnCoords_Visual;
 
-    int32 InitialSpawnCollisionReadyCount = 0;
-    int32 InitialSpawnVisualReadyCount = 0;
+    FThreadSafeCounter InitialSpawnCollisionReadyCount;
+    FThreadSafeCounter InitialSpawnVisualReadyCount;
+
 
     float SpawnWaitAccum = 0.f;
     float SpawnDelayAccum = 0.f;
