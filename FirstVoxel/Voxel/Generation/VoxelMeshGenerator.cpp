@@ -153,9 +153,11 @@ void FVoxelMeshGenerator::GenerateMesh(
     const FVoxelGenerationConfig& Config,
     int32                         InStepSize,
     FVoxelMeshScratchBuffers*     Scratch,
-    const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights)
+    const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights,
+    const TFunctionRef<bool()>&   IsCancelled)
 {
     OutMesh.Reset();
+    if (IsCancelled()) return;
 
     const int32 EffectiveSize    = InChunkSize / InStepSize;
     const float EffVoxelSize     = InVoxelSize * (float)InStepSize;
@@ -190,6 +192,7 @@ void FVoxelMeshGenerator::GenerateMesh(
     // ── PASS 1: vertex placement ──────────────────────────────────────────
     ParallelFor(EffectiveSize + 2, [&](int32 Z)
     {
+        if (IsCancelled()) return;
         for (int32 Y = 0; Y <= EffectiveSize + 1; ++Y)
         for (int32 X = 0; X <= EffectiveSize + 1; ++X)
         {
@@ -453,8 +456,10 @@ void FVoxelMeshGenerator::GenerateMesh(
 
     // ── PASS 2: quad emission ─────────────────────────────────────────────
     for (int32 Z = 1; Z <= EffectiveSize; ++Z)
-    for (int32 Y = 1; Y <= EffectiveSize; ++Y)
-    for (int32 X = 1; X <= EffectiveSize; ++X)
+    {
+        if (IsCancelled()) return;
+        for (int32 Y = 1; Y <= EffectiveSize; ++Y)
+        for (int32 X = 1; X <= EffectiveSize; ++X)
     {
         // X-axis edges
         { const float D0 = Densities[Idx(X,Y,Z,S)], D1 = Densities[Idx(X+1,Y,Z,S)];

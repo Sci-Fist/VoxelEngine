@@ -185,6 +185,7 @@ public:
 
 	void GenerateAsync();
 	void CancelGeneration();
+	void Reset();
 	void GenerateSync();
 	void DestroyAndRebuildMesh();
 	void ClearMesh();

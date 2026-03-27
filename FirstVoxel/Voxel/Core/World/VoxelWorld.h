@@ -154,14 +154,15 @@ public:
     const TMap<FIntVector, AVoxelChunk*>* GetLoadedChunks() const { return &LoadedChunks; }
     
     mutable FRWLock LoadedChunksLock;
+    mutable FCriticalSection GenerationQueueLock;
 
-    int32 GetQueueCount() const { return GenerationQueue.Num(); }
+    int32 GetQueueCount() const { FScopeLock Lock(&GenerationQueueLock); return GenerationQueue.Num(); }
 
     bool ContainsEmptyChunk(const FIntVector& Coord) const { return EmptyChunks.Contains(Coord); }
     const TSet<FIntVector>& GetEmptyChunks() const { return EmptyChunks; }
 
-    void SetGenerationQueue(const TArray<FVoxelGenerationQueueEntry>& InQueue) { GenerationQueue = InQueue; }
-    const TArray<FVoxelGenerationQueueEntry>& GetGenerationQueue() const { return GenerationQueue; }
+    void SetGenerationQueue(const TArray<FVoxelGenerationQueueEntry>& InQueue) { FScopeLock Lock(&GenerationQueueLock); GenerationQueue = InQueue; }
+    TArray<FVoxelGenerationQueueEntry> GetGenerationQueue() const { FScopeLock Lock(&GenerationQueueLock); return GenerationQueue; }
 
     void ClearEmptyChunksInRange(int32 MinZ, int32 MaxZ);
 

@@ -9,8 +9,7 @@
 void FVoxelChunkPool::ReturnChunk(AVoxelChunk* Chunk)
 {
     if (!IsValid(Chunk)) return;
-    Chunk->CancelGeneration();
-    Chunk->ClearMesh();
+    Chunk->Reset();
     Chunk->SetActorHiddenInGame(true);
     Chunk->SetActorEnableCollision(false);
 

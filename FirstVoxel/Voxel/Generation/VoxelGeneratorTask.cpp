@@ -665,7 +665,8 @@ void FVoxelGeneratorTask::BuildMesh()
         FVoxelMeshGenerator::GenerateMesh(
             Densities, ChunkSize, VoxelSize, WorldOrigin, CameraPos, FrameNumber, MeshOutput, Config, StepSize,
             &ScratchBuffers,
-            &ColumnWeights); // PERF-1: pass precomputed weights → ColumnColors skips noise
+            &ColumnWeights,
+            [this]() { return bCancelled.Load(); }); // Directive 3: Pass preemption guard
     }
     UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: [%d,%d,%d] Flat=%d Slope=%d"),
         ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,

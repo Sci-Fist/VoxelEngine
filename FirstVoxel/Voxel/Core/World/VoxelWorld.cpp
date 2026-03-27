@@ -104,10 +104,12 @@ void AVoxelWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
         if (AVoxelChunk* Chunk = It.Value)
             if (Chunk->IsGenerating()) Chunk->CancelGeneration();
     LoadedChunks.Empty();
-    GenerationQueue.Empty();
-    ActiveGenerations = 0;
     if (StreamingComponent) StreamingComponent->ClearState();
     if (SpawnHandlerComponent) SpawnHandlerComponent->ClearState();
+    {
+        FScopeLock Lock(&GenerationQueueLock);
+        GenerationQueue.Empty();
+    }
     Super::EndPlay(EndPlayReason);
 }
 
@@ -170,6 +172,7 @@ void AVoxelWorld::DrainGenerationQueue()
     if (bShutdown) return;
     if (ActiveGenerations >= MaxConcurrentGenerations) return;
 
+    FScopeLock Lock(&GenerationQueueLock);
     while (GenerationQueue.Num() > 0)
     {
         // Peek at the highest priority to see if we should preempt
@@ -222,7 +225,10 @@ void AVoxelWorld::ClearWorld()
     TArray<FIntVector> Keys; LoadedChunks.GetKeys(Keys);
     for (const FIntVector& C : Keys) DestroyChunk(C);
     LoadedChunks.Empty(); 
-    GenerationQueue.Empty(); 
+    {
+        FScopeLock Lock(&GenerationQueueLock);
+        GenerationQueue.Empty(); 
+    }
     EmptyChunks.Empty();
     ActiveGenerations = 0;
     ChunksNeedingVisibilityCheck.Empty();

@@ -127,6 +127,24 @@ void AVoxelChunk::CancelGeneration()
 	}
 }
 
+void AVoxelChunk::Reset()
+{
+	CancelGeneration();
+	ClearMesh();
+	
+	// FIX-PROXY: Recursive cleanup of physics state to prevent "Ghost Meshes"
+	if (ProceduralMesh)
+	{
+		ProceduralMesh->ClearAllMeshSections();
+		ProceduralMesh->RecreatePhysicsState();
+	}
+	if (WaterMesh)
+	{
+		WaterMesh->ClearAllMeshSections();
+		WaterMesh->RecreatePhysicsState();
+	}
+}
+
 void AVoxelChunk::GenerateAsync()
 {
 	if (bGenerating) return;

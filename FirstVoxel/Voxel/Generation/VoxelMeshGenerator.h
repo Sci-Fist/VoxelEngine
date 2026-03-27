@@ -211,7 +211,8 @@ struct FVoxelMeshGenerator
         const struct FVoxelGenerationConfig& Config,
         int32                         InStepSize = 1,
         struct FVoxelMeshScratchBuffers* Scratch = nullptr,
-        const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights = nullptr);
+        const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights = nullptr,
+        TFunctionRef<bool()>          IsCancelled = []() { return false; });
 
     static void GenerateHeightmapMesh(
         const TArray<float>&          Heights,
