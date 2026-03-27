@@ -264,7 +264,12 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
                 for (int32 z = MinCoord.Z; z <= ColMaxZ; ++z)
                 {
                     const FIntVector C(x, y, z);
-                    if (LoadedChunks.Contains(C)) continue;
+                    bool bAlreadyLoaded = false;
+                    {
+                        FReadScopeLock ReadLock(LoadedChunksLock);
+                        if (LoadedChunks.Contains(C)) bAlreadyLoaded = true;
+                    }
+                    if (bAlreadyLoaded) continue;
 
                     bool bValid = false;
                     if (z >= (GroundZ - EffMinZ) && z <= (GroundZ + EffMaxZ)) bValid = true;
@@ -466,7 +471,10 @@ void AVoxelWorld::FinalizeGenerationSetup()
 // ============================================================
 void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
 {
-    if (LoadedChunks.Contains(Coord)) return;
+    {
+        FReadScopeLock ReadLock(LoadedChunksLock);
+        if (LoadedChunks.Contains(Coord)) return;
+    }
     AVoxelChunk* Chunk = ChunkPool.RetrieveOrCreateChunk(GetWorld(), ChunkCoordToWorld(Coord), this);
     if (!Chunk) return;
 
@@ -528,7 +536,10 @@ void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
     }
 
     ConfigureChunk(Chunk);
-    LoadedChunks.Add(Coord, Chunk);
+    {
+        FWriteScopeLock WriteLock(LoadedChunksLock);
+        LoadedChunks.Add(Coord, Chunk);
+    }
 
     ActiveGenerations++;
     TWeakObjectPtr<AVoxelWorld> WeakThis(this);
@@ -561,9 +572,14 @@ void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
 // ============================================================
 void AVoxelWorld::DestroyChunk(const FIntVector& Coord)
 {
-    AVoxelChunk** P = LoadedChunks.Find(Coord);
-    if (!P || !*P) return;
-    AVoxelChunk* Chunk = *P;
+    AVoxelChunk* Chunk = nullptr;
+    {
+        FWriteScopeLock WriteLock(LoadedChunksLock);
+        AVoxelChunk** P = LoadedChunks.Find(Coord);
+        if (!P || !*P) return;
+        Chunk = *P;
+        LoadedChunks.Remove(Coord);
+    }
 
     if (WaterSystemComponent)
     {
@@ -573,7 +589,7 @@ void AVoxelWorld::DestroyChunk(const FIntVector& Coord)
     }
     if (Chunk->IsGenerating()) Chunk->CancelGeneration();
 
-    LoadedChunks.Remove(Coord);
+    // LoadedChunks.Remove(Coord); // Removed here, now handled in atomic block above
     // FIX N6: remove from DenseChunks so memory doesn't accumulate
     ChunkManager.RemoveChunk(Coord);
     ChunkPool.ReturnChunk(Chunk);
@@ -629,7 +645,12 @@ void AVoxelWorld::DiscoverExistingChunks()
     if (!GetWorld()) return;
     int32 N = 0;
     for (TActorIterator<AVoxelChunk> It(GetWorld()); It; ++It)
-        if (*It && (*It)->GetOwner()==this) { LoadedChunks.Add((*It)->GetChunkCoord(),*It); N++; }
+        if (*It && (*It)->GetOwner()==this) 
+        { 
+            FWriteScopeLock WriteLock(LoadedChunksLock);
+            LoadedChunks.Add((*It)->GetChunkCoord(),*It); 
+            N++; 
+        }
     UE_LOG(LogVoxelWorld,Log,TEXT("VoxelWorld: Discovered %d chunks"),N);
 }
 

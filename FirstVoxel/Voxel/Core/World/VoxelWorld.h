@@ -184,7 +184,16 @@ public:
     UFUNCTION(BlueprintCallable, Category="Voxel|Testing") void RunVoxelTests();
 
     FVoxelDataMap* GetVoxelDataMap() { return &DataMap; }
+    
+    /** 
+     * Access the map of loaded chunks. 
+     * WARNING: Accessing this map requires locking LoadedChunksLock when called from background threads.
+     */
     const TMap<FIntVector, AVoxelChunk*>* GetLoadedChunks() const { return &LoadedChunks; }
+    
+    /** Lock for protecting access to LoadedChunks map across threads. */
+    mutable FRWLock LoadedChunksLock;
+
     int32 GetQueueCount() const { return GenerationQueue.Num(); }
     int32 GetQueueHead()  const { return QueueHead; }
 
