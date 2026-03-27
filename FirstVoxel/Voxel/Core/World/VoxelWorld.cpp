@@ -193,13 +193,11 @@ void AVoxelWorld::Tick(float DeltaTime)
             if (HUD->bShowLoadBar)
             {
                 const int32 TotalQ = GenerationQueue.Num();
-                const bool bW = SpawnHandlerComponent ? SpawnHandlerComponent->IsWaitingForInitialSpawn() : bWaitingForInitialSpawn;
+                const bool bW = IsWaitingForInitialSpawn();
                 if (!bW && TotalQ > 0 && QueueHead >= TotalQ && ActiveGenerations == 0)
                 {
                     HUD->LoadProgress = 1.f;
                     HUD->bShowLoadBar = false;
-
-                    // Old drop logic removed; handled above immediately on core ready.
                 }
                 else if (TotalQ > 0)
                 {

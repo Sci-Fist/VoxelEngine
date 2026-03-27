@@ -49,7 +49,8 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
             
             if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
             {
-                Player->SetActorLocation(FVector(SpawnTarget.X, SpawnTarget.Y, TargetCoordsZ + 200.f), false, nullptr, ETeleportType::TeleportPhysics);
+                const FVector TargetPos = World->GetSpawnTargetPos();
+                Player->SetActorLocation(FVector(TargetPos.X, TargetPos.Y, TargetCoordsZ + 200.f), false, nullptr, ETeleportType::TeleportPhysics);
                 Player->SetActorEnableCollision(true);
                 if (ACharacter* Char = Cast<ACharacter>(Player))
                 {
@@ -84,15 +85,14 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
         
         FVector HoverPos = SpawnPlayer->GetActorLocation();
         const FVoxelGenerationConfig EffConfig = WorldOwner->GetEffectiveConfig();
-        const float CenterX = EffConfig.Craters.ForcedCraterCenter.X;
-        const float CenterY = EffConfig.Craters.ForcedCraterCenter.Y;
+        const FVector TargetPos = WorldOwner->GetSpawnTargetPos();
 
-        if (FMath::Abs(HoverPos.X - CenterX) > 10.f ||
-            FMath::Abs(HoverPos.Y - CenterY) > 10.f ||
+        if (FMath::Abs(HoverPos.X - TargetPos.X) > 10.f ||
+            FMath::Abs(HoverPos.Y - TargetPos.Y) > 10.f ||
             FMath::Abs(HoverPos.Z - TargetCoordsZ) > 10.f)
         {
-            HoverPos.X = CenterX;
-            HoverPos.Y = CenterY;
+            HoverPos.X = TargetPos.X;
+            HoverPos.Y = TargetPos.Y;
             HoverPos.Z = TargetCoordsZ;
             SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
         }

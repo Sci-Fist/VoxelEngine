@@ -392,12 +392,12 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     }
 #endif
 
-    if (bWaitingForInitialSpawn)
+    if (bWaitingForInitialSpawn && SpawnHandlerComponent)
     {
         TArray<FIntVector> TempQueue;
-        TempQueue.Reserve(InitialSpawnCoords.Num() + InitialSpawnCoords_Visual.Num());
+        TempQueue.Reserve(SpawnHandlerComponent->GetTotalCollisionCount() + SpawnHandlerComponent->GetTotalVisualCount());
         
-        for (const FIntVector& C : InitialSpawnCoords)
+        for (const FIntVector& C : SpawnHandlerComponent->GetInitialSpawnCoords())
         {
             if (!LoadedChunks.Contains(C) && !QSet.Contains(C))
             {
@@ -406,7 +406,7 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
             }
         }
 
-        for (const FIntVector& C : InitialSpawnCoords_Visual)
+        for (const FIntVector& C : SpawnHandlerComponent->GetInitialSpawnCoordsVisual())
         {
             if (!LoadedChunks.Contains(C) && !QSet.Contains(C))
             {

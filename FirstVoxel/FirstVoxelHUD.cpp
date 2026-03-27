@@ -104,11 +104,18 @@ void AFirstVoxelHUD::DrawLoadingScreen(UFont* Font)
     int32 Head = 0, Total = 0;
     
     // FIX: query SpawnHandler for accurate local load screen tallies
-    class UVoxelSpawnHandlerComponent* SH = W->GetSpawnHandlerComponent();
     if (SH)
     {
-        Head  = SH->GetVisualReadyCount();
-        Total = SH->GetTotalVisualCount();
+        if (W->IsWaitingForInitialSpawn())
+        {
+            Head  = SH->GetVisualReadyCount();
+            Total = SH->GetTotalVisualCount();
+        }
+        else
+        {
+            Head  = W->GetQueueHead();
+            Total = W->GetQueueCount();
+        }
     }
     else
     {
