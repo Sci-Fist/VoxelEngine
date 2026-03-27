@@ -2,3 +2,7 @@ Log/
 *.log
 .aider*
 .vscode/
+.cline/
+convo/
+build_log*.txt
+build_output.txt
