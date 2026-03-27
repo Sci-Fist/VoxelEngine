@@ -41,6 +41,7 @@ public:
      * Retrieves results for a previous request. Returns true if ready.
      */
     bool GetResults(int32 RequestID, TArray<bool>& OutVisibility);
+    void ClearState();
 
 private:
     struct FCullingRequest
@@ -54,9 +55,10 @@ private:
 
     TArray<FCullingRequest> PendingRequests;
     TArray<TSharedPtr<FRHIGPUBufferReadback>> ReadbackPool;
-    int32 NextRequestID = 1;
+    TAtomic<int32> NextRequestID{1};
 
     bool bInitialized = false;
 
+    FCriticalSection RequestsLock;
     TSharedPtr<FRHIGPUBufferReadback> GetOrCreateReadback();
 };

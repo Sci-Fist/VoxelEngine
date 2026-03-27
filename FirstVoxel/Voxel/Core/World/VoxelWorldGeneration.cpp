@@ -474,7 +474,8 @@ void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
     if (Chunk->GetProceduralMesh())
     {
         Chunk->GetProceduralMesh()->SetVisibility(false);
-        Chunk->GetProceduralMesh()->bUseAsyncCooking = !bSyncCollision;
+        // FORCE-FIX: always false to prevent falling through terrain while cooking.
+        Chunk->GetProceduralMesh()->bUseAsyncCooking = false; 
     }
     Chunk->SetOwner(this);
 #if WITH_EDITOR
@@ -536,7 +537,7 @@ void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
     {
         if (AVoxelWorld* S = WeakThis.Get())
         {
-            S->ActiveGenerations = FMath::Max(0, S->ActiveGenerations.Load() - 1);
+            S->ActiveGenerations.FetchSub(1);
             // FIX-1: Feed the pending-set so CheckCloseRange visibility only
             // iterates chunks that JUST became ready, not all loaded chunks.
             S->ChunksNeedingVisibilityCheck.Add(ChunkCoord);

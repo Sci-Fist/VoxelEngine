@@ -34,6 +34,14 @@ void UVoxelStreamingComponent::BeginPlay()
     // Initialize GPU Culling Manager
     CullingManager = NewObject<UVoxelCullingManager>(this);
     if (CullingManager) CullingManager->Initialize();
+
+    CullingProxy = MakeShared<FCullingStateProxy>();
+}
+
+void UVoxelStreamingComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (CullingManager) CullingManager->Shutdown();
+    Super::EndPlay(EndPlayReason);
 }
 
 void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -46,10 +54,11 @@ void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
     if (World->IsWaitingForInitialSpawn()) return;
 
     // ── 1. Handle Pending Culling Results ────────────────────────────────
-    if (CurrentCullingRequestID != -1 && CullingManager)
+    if (CullingProxy.IsValid() && CullingProxy->RequestID.Load() != -1 && CullingManager)
     {
+        const int32 ReqID = CullingProxy->RequestID.Load();
         TArray<bool> VisibilityResults;
-        if (CullingManager->GetResults(CurrentCullingRequestID, VisibilityResults))
+        if (CullingManager->GetResults(ReqID, VisibilityResults))
         {
             const TMap<FIntVector, AVoxelChunk*>* LoadedChunks = World->GetLoadedChunks();
             for (int32 i = 0; i < PendingCullingChunks.Num(); ++i)
@@ -68,7 +77,7 @@ void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
                     }
                 }
             }
-            CurrentCullingRequestID = -1;
+            CullingProxy->RequestID.Store(-1);
             PendingCullingChunks.Empty();
         }
     }
@@ -81,7 +90,7 @@ void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
         UpdateStreaming();
 
         // If no request is active, start a new one
-        if (CurrentCullingRequestID == -1 && CullingManager)
+        if (CullingProxy.IsValid() && CullingProxy->RequestID.Load() == -1 && CullingManager)
         {
             const TMap<FIntVector, AVoxelChunk*>* LoadedChunks = World->GetLoadedChunks();
             TArray<FBox> BoundsToCull;
@@ -110,6 +119,7 @@ void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 
                 // Bridge to Render Thread
                 UVoxelCullingManager* CM = CullingManager;
+                TSharedPtr<FCullingStateProxy> LocalProxy = CullingProxy;
                 
                 // Directive A: SkyAtmosphere LUT Retrieval
                 // In a production UE5 environment, these would be retrieved from the FScene or FViewInfo.
@@ -117,11 +127,14 @@ void UVoxelStreamingComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
                 FRHITexture* TransmittanceLUT = nullptr;
 
                 ENQUEUE_RENDER_COMMAND(VoxelCullingRequest)(
-                    [CM, BoundsToCull, ViewProj, CamPos, SkyViewLUT, TransmittanceLUT, this](FRHICommandListImmediate& RHICmdList)
+                    [CM, BoundsToCull, ViewProj, CamPos, SkyViewLUT, TransmittanceLUT, LocalProxy](FRHICommandListImmediate& RHICmdList)
                 {
-                    // This is slightly unsafe if 'this' dies, but UVoxelCullingManager is owned by this
-                    this->CurrentCullingRequestID = CM->RequestCulling_RenderThread(
-                        RHICmdList, BoundsToCull, ViewProj, CamPos, nullptr, SkyViewLUT, TransmittanceLUT);
+                    // Safe capture via TSharedPtr — result will only be stored if LocalProxy (and thus component/world) was still alive at time of dispatch
+                    if (LocalProxy.IsValid())
+                    {
+                        LocalProxy->RequestID.Store(CM->RequestCulling_RenderThread(
+                            RHICmdList, BoundsToCull, ViewProj, CamPos, nullptr, SkyViewLUT, TransmittanceLUT));
+                    }
                 });
             }
         }
@@ -165,10 +178,12 @@ void UVoxelStreamingComponent::UpdateStreaming()
     const float IslandSize    = FMath::Max(SC.BaseIslandSize, SC.BaseIslandSize + CachedCurvedH * SC.HeightSizeBonus + CachedCurvedR * SC.RoughnessSizeBonus);
     const float HalfThickCm   = FMath::Max(200.f, IslandSize * SC.ThicknessRatio);
 
-    AsyncTask(ENamedThreads::AnyNormalThreadNormalTask, [WeakThis, PlayerPos, PlayerCoord, Config, ChunkWorldSize, SkyAltWorld, HalfThickCm, ForwardVector, DynamicRadius]()
+    const int32 Generation = CurrentStreamingGeneration.Load();
+    AsyncTask(ENamedThreads::AnyNormalThreadNormalTask, [WeakThis, PlayerPos, PlayerCoord, Config, ChunkWorldSize, SkyAltWorld = CachedSkyAltWorld, HalfThickCm, ForwardVector, DynamicRadius = DynamicRadius, Generation]()
     {
         if (!WeakThis.IsValid()) return;
         UVoxelStreamingComponent* StrongThis = WeakThis.Get();
+        if (StrongThis->CurrentStreamingGeneration.Load() != Generation) return;
 
         // 3. Column Heights (Pass DynamicRadius)
         TArray<FVoxelBiomeManager::FWeightsAndHeight> CachedColumns;
@@ -180,10 +195,11 @@ void UVoxelStreamingComponent::UpdateStreaming()
         StrongThis->BuildDesiredChunkSet(PlayerCoord, CachedColumns, ChunkWorldSize, SkyAltWorld, HalfThickCm, DynamicRadius, SkyZMin, SkyZMax, Desired);
 
         // 5. Update on Game Thread
-        AsyncTask(ENamedThreads::GameThread, [WeakThis, PlayerPos, PlayerCoord, SkyZMin, SkyZMax, Desired, ForwardVector]()
+        AsyncTask(ENamedThreads::GameThread, [WeakThis, PlayerPos, PlayerCoord, SkyZMin, SkyZMax, Desired, ForwardVector, Generation]()
         {
             if (!WeakThis.IsValid()) return;
             UVoxelStreamingComponent* StrongThisGT = WeakThis.Get();
+            if (StrongThisGT->CurrentStreamingGeneration.Load() != Generation) return;
             
             StrongThisGT->ApplyDiscoveryResult(PlayerPos, PlayerCoord, SkyZMin, SkyZMax, Desired);
             
@@ -577,4 +593,13 @@ void UVoxelStreamingComponent::RebuildGenerationQueue(const FVector& PlayerPos, 
     NewQueue.Reserve(Sorted.Num());
     for (const auto& P : Sorted) NewQueue.Add(P.Value);
     World->SetGenerationQueue(NewQueue);
+}
+void UVoxelStreamingComponent::ClearState()
+{
+    CurrentStreamingGeneration.FetchAdd(1);
+    if (CullingProxy.IsValid()) CullingProxy->RequestID.Store(-1);
+    PendingCullingChunks.Empty();
+    ChunksNeedingVisibilityCheck.Empty();
+    PendingDiscoveryTasks.Empty();
+    if (CullingManager) CullingManager->ClearState();
 }

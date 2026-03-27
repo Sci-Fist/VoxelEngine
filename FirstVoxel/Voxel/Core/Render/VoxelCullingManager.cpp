@@ -52,17 +52,28 @@ void UVoxelCullingManager::Initialize()
 void UVoxelCullingManager::Shutdown()
 {
     bInitialized = false;
+    FScopeLock Lock(&RequestsLock);
+    PendingRequests.Empty();
+    ReadbackPool.Empty();
 }
 
 void UVoxelCullingManager::PerformCulling_RenderThread(FRHICommandListImmediate& RHICmdList, const TArray<FBox>& Bounds, TArray<bool>& OutVisibility)
 {
-    // Legacy support: immediately request and wait (still stalls, but uses new infra)
+    // DEPRECATED: This method stalls the render thread. 
+    // New callers should use RequestCulling_RenderThread and poll GetResults later.
+    
     int32 ReqID = RequestCulling_RenderThread(RHICmdList, Bounds, FMatrix::Identity, FVector::ZeroVector);
     
-    // This is the stall we want to avoid in the caller!
+    // Safety timeout to avoid infinite stall if RHI misbehaves
+    double StartTime = FPlatformTime::Seconds();
     while (!GetResults(ReqID, OutVisibility))
     {
-        FPlatformProcess::Sleep(0.001f);
+        if (FPlatformTime::Seconds() - StartTime > 0.033) // Max 33ms stall (one frame)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("VoxelCullingManager: PerformCulling_RenderThread timed out! This method IS STALLING THE RENDER THREAD."));
+            break;
+        }
+        FPlatformProcess::Sleep(0.0001f);
     }
 }
 
@@ -77,8 +88,9 @@ int32 UVoxelCullingManager::RequestCulling_RenderThread(
 {
     if (!bInitialized || Bounds.Num() == 0) return -1;
 
-    int32 RequestID = NextRequestID++;
-    int32 NumChunks = Bounds.Num();
+    const int32 RequestID = NextRequestID.Load();
+    NextRequestID.FetchAdd(1);
+    const int32 NumChunks = Bounds.Num();
 
     // 1. Create Input Buffer (Bounds)
     TResourceArray<FBox> BoundsData;
@@ -127,20 +139,24 @@ int32 UVoxelCullingManager::RequestCulling_RenderThread(
     TSharedPtr<FRHIGPUBufferReadback> Readback = GetOrCreateReadback();
     Readback->EnqueueCopy(RHICmdList, OutputBuffer);
 
-    FCullingRequest Req;
-    Req.RequestID = RequestID;
-    Req.NumChunks = NumChunks;
-    Req.Readback  = Readback;
-    Req.Results.SetNumUninitialized(NumChunks);
-    Req.bReady    = false;
-    
-    PendingRequests.Add(Req);
+    {
+        FScopeLock Lock(&RequestsLock);
+        FCullingRequest Req;
+        Req.RequestID = RequestID;
+        Req.NumChunks = NumChunks;
+        Req.Readback  = Readback;
+        Req.Results.SetNumUninitialized(NumChunks);
+        Req.bReady    = false;
+        
+        PendingRequests.Add(Req);
+    }
 
     return RequestID;
 }
 
 bool UVoxelCullingManager::GetResults(int32 RequestID, TArray<bool>& OutVisibility)
 {
+    FScopeLock Lock(&RequestsLock);
     for (int32 i = 0; i < PendingRequests.Num(); ++i)
     {
         if (PendingRequests[i].RequestID == RequestID)
@@ -172,9 +188,16 @@ bool UVoxelCullingManager::GetResults(int32 RequestID, TArray<bool>& OutVisibili
 
 TSharedPtr<FRHIGPUBufferReadback> UVoxelCullingManager::GetOrCreateReadback()
 {
+    FScopeLock Lock(&RequestsLock);
     if (ReadbackPool.Num() > 0)
     {
         return ReadbackPool.Pop();
     }
     return MakeShared<FRHIGPUBufferReadback>(TEXT("VoxelCullingReadback"));
+}
+
+void UVoxelCullingManager::ClearState()
+{
+    FScopeLock Lock(&RequestsLock);
+    PendingRequests.Empty();
 }

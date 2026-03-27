@@ -23,6 +23,7 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Voxel|Spawn")
     void ProcessInitialPlayerSpawn();
+    void ClearState();
 
     bool IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
     void SetWaitingForInitialSpawn(bool bWait) { bWaitingForInitialSpawn = bWait; }

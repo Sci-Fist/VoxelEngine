@@ -349,3 +349,13 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         InitialSpawnCoords.Num(), InitialSpawnCoords_Visual.Num(), PreCollision, PreVisual);
 }
 
+void UVoxelSpawnHandlerComponent::ClearState()
+{
+    bWaitingForInitialSpawn = false;
+    InitialSpawnCoords.Empty();
+    InitialSpawnCoords_Visual.Empty();
+    InitialSpawnCollisionReadyCount = 0;
+    InitialSpawnVisualReadyCount = 0;
+    SpawnWaitAccum = 0.f;
+    SpawnDelayAccum = 0.f;
+}

@@ -158,6 +158,9 @@ void AVoxelWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
     QueueHead         = 0;
     ActiveGenerations = 0;
 
+    if (StreamingComponent) StreamingComponent->ClearState();
+    if (SpawnHandlerComponent) SpawnHandlerComponent->ClearState();
+
     Super::EndPlay(EndPlayReason);
 }
 
@@ -224,9 +227,9 @@ void AVoxelWorld::Tick(float DeltaTime)
         DirtyRebuildQueue.RemoveAtSwap(i);
         if (ActiveGenerations >= MaxConcurrentGenerations) { DirtyRebuildQueue.Add(Coord); break; }
         Chunk->MarkMeshDirty(false);
-        ActiveGenerations++;
+        ActiveGenerations.FetchAdd(1);
         TWeakObjectPtr<AVoxelWorld> W(this);
-        Chunk->OnGenerationComplete = [W](){ if (AVoxelWorld* S=W.Get()) S->ActiveGenerations = FMath::Max(0, (int32)S->ActiveGenerations-1); };
+        Chunk->OnGenerationComplete = [W](){ if (AVoxelWorld* S=W.Get()) S->ActiveGenerations.FetchSub(1); };
         Chunk->GenerateAsync();
     }
 
@@ -262,7 +265,14 @@ void AVoxelWorld::ClearWorld()
     DirtyRebuildQueue.Empty(); ChunkManager.Clear(); QueueHead = 0;
     ActiveGenerations = 0;
     ChunksNeedingVisibilityCheck.Empty(); // FIX-1: clear pending-set on world reset
-    GenerationConfig.Craters.ForcedCraterCenter = FVector2D(0.f, 0.f);
+    
+    if (StreamingComponent) StreamingComponent->ClearState();
+    if (SpawnHandlerComponent) SpawnHandlerComponent->ClearState();
+
+    // Reset crater logic
+    GenerationConfig.Craters.ForcedCraterCenter = FVector2D(1000000.f, 1000000.f); // Use far-out value to disable
+    bSpawnInNaturalCrater = false; // Disable by default on clear
+    
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: World cleared"));
 }
 

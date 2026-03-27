@@ -19,6 +19,7 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:	
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
@@ -32,6 +33,7 @@ public:
 
     void AddChunkNeedingVisibilityCheck(const FIntVector& Coord);
     void ClearVisibilityChecks();
+    void ClearState();
 
 private:
     float StreamingTimer = 0.f;
@@ -52,8 +54,17 @@ private:
     int32 MegaChunkMultiplier = 4;        // 4x4x4 chunks
 
     // ── GPU Culling State ──────────────────────────────────────────────
-    int32 CurrentCullingRequestID = -1;
+    struct FCullingStateProxy
+    {
+        TAtomic<int32> RequestID{ -1 };
+    };
+    TSharedPtr<FCullingStateProxy> CullingProxy;
+    
     TArray<FIntVector> PendingCullingChunks;
+
+    // ── Background Task Epoch Tracking ──────────────────────────────────
+    // Incremented on ClearState to invalidate in-flight AsyncTasks
+    TAtomic<int32> CurrentStreamingGeneration{0};
 
     TWeakObjectPtr<AVoxelWorld> WorldOwner;
     UPROPERTY(Transient)
