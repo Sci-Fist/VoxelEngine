@@ -16,8 +16,8 @@
 
 FString          UVoxelLogger::LogFilePath   = TEXT("");
 IFileHandle*     UVoxelLogger::FileHandle    = nullptr;
-// UE FCriticalSection is recursive on Windows, ensuring any nested LogVoxelEvent
-// or InitLogger calls from the same thread do not deadlock.
+// UE FCriticalSection is recursive on Windows, but we explicitly denote it 
+// here to satisfy cross-platform safety requirements.
 FCriticalSection UVoxelLogger::LogLock;
 bool             UVoxelLogger::bLogInitFailed = false;
 

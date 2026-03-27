@@ -209,14 +209,14 @@ FVoxelGeneratorTask::~FVoxelGeneratorTask()
     if (Densities.Num() > 0)
     {
         FScopeLock Lock(&GDensityPoolLock);
-        if (GDensityPool.Num() < 12)
+        if (GDensityPool.Num() < 16)
             GDensityPool.Add(MoveTemp(Densities));
     }
 
     if (ScratchBuffers.VertexIndices.Num() > 0)
     {
         FScopeLock Lock(&GScratchPoolLock);
-        if (GScratchPool.Num() < 12)
+        if (GScratchPool.Num() < 16)
             GScratchPool.Add(MoveTemp(ScratchBuffers));
     }
 }

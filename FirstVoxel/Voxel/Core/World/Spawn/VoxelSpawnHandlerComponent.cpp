@@ -39,12 +39,25 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
     {
         const int32 CollisionTotal = InitialSpawnCoords.Num();
         const int32 VisualTotal = InitialSpawnCoords_Visual.Num();
-        bAllReady = (InitialSpawnCollisionReadyCount >= CollisionTotal) && (InitialSpawnVisualReadyCount >= VisualTotal);
+        bAllReady = (GetCollisionReadyCount() == GetTotalCollisionCount()) && 
+                    (GetVisualReadyCount() == GetTotalVisualCount());
 
         if (bAllReady)
         {
-            SpawnDelayAccum += DeltaTime;
-            if (SpawnDelayAccum < 3.0f) bAllReady = false; 
+            UE_LOG(LogVoxelWorld, Log, TEXT("VoxelSpawnHandler: All initial chunks ready (%d col, %d vis). Dropping player."), 
+                InitialSpawnCollisionReadyCount, InitialSpawnVisualReadyCount);
+            
+            if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
+            {
+                Player->SetActorLocation(FVector(SpawnTarget.X, SpawnTarget.Y, TargetCoordsZ + 200.f), false, nullptr, ETeleportType::TeleportPhysics);
+                Player->SetActorEnableCollision(true);
+                if (ACharacter* Char = Cast<ACharacter>(Player))
+                {
+                    Char->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+                }
+            }
+            bWaitingForInitialSpawn = false;
+            if (WorldOwner.IsValid()) WorldOwner->OnInitialSpawnComplete();
         }
         else
         {

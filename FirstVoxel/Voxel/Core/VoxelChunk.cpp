@@ -523,15 +523,24 @@ void AVoxelChunk::ClearMesh()
 	WaterMesh->SetVisibility(false);
 	++WaterGeneration; // FIX-2
 	WaterData.Reset(); // also resets WaterCellCount to 0
-	for (UInstancedStaticMeshComponent* H : BiomeFoliageHISMs)
+	// Implement eviction policy: keep up to 8 foliage components, destroy the rest
+	for (int32 i = BiomeFoliageHISMs.Num() - 1; i >= 0; --i)
 	{
-		if (IsValid(H)) 
-		{ 
-			H->ClearInstances(); 
-			H->DestroyComponent(); 
+		UInstancedStaticMeshComponent* H = BiomeFoliageHISMs[i];
+		if (IsValid(H))
+		{
+			H->ClearInstances();
+			if (i >= 8) // Evict excess components
+			{
+				H->DestroyComponent();
+				BiomeFoliageHISMs.RemoveAt(i);
+			}
+		}
+		else
+		{
+			BiomeFoliageHISMs.RemoveAt(i);
 		}
 	}
-	BiomeFoliageHISMs.Empty();
 	bFlatMaterialWarned  = false; // FIX-4
 	bSlopeMaterialWarned = false;
 	bMeshApplied = false;

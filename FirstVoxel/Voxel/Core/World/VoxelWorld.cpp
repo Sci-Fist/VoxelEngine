@@ -254,7 +254,14 @@ void AVoxelWorld::MarkChunkDirty(const FIntVector& Coord)
 {
     if (AVoxelChunk** P = LoadedChunks.Find(Coord))
         if (*P) (*P)->MarkMeshDirty(true);
-    DirtyRebuildQueue.AddUnique(Coord);
+
+    // Directive 2: Implement Backpressure
+    // AddUnique is O(N). If the queue becomes too large (e.g. during massive 
+    // destructive operations), we cap it to prevent game-thread stalls.
+    if (DirtyRebuildQueue.Num() < 512)
+    {
+        DirtyRebuildQueue.AddUnique(Coord);
+    }
 }
 
 void AVoxelWorld::ClearWorld()

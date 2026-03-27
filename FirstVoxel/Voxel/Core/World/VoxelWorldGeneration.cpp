@@ -521,10 +521,6 @@ void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
         if      (DistSq > LOD2Distance * LOD2Distance) TargetLOD = 2;
         else if (DistSq > LOD1Distance * LOD1Distance) TargetLOD = 1;
 
-        // Zone C distant terrain: cap at LOD 1 so StepSize=2 (not 4) gives
-        // enough density resolution to capture thin vertical walls and rim faces.
-        if (TargetLOD >= 2) TargetLOD = 1;
-
         // High elevation chunks retain 3-D mesh overhangs
         if (Coord.Z >= 4) TargetLOD = FMath::Min(TargetLOD, 1);
 
