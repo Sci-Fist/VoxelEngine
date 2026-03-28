@@ -655,7 +655,11 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         Pass_Surface(PassCtx, SteepW, StartZIdx, EndZIdx);
 
-        if (bEnCaves && EffVoxSz <= 1)
+        // FIX CAVES-NEVER-RUN: EffVoxSz = VoxelSize * StepSize = 100 * 1 = 100.
+        // The old condition (EffVoxSz <= 1) was ALWAYS false — caves silently
+        // skipped for every chunk at every LOD. Correct gate is StepSize == 1
+        // (full-resolution only; LOD chunks intentionally skip caves).
+        if (bEnCaves && StepSize == 1)
         {
             Pass_Caves(PassCtx, EndZIdx);
         }

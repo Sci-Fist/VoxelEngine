@@ -154,13 +154,27 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     const FVector     Anchor   = SpawnTargetPos;
     const FIntVector  Origin   = WorldToChunkCoord(Anchor);
     // FIX RIM-1: lowered to 64 to prevent 6M chunk explosions while still providing 1km radius
-    const int32 MaxRadius = DistantRenderDistanceXY;
-    const FIntVector  MinCoord = Origin - FIntVector(MaxRadius, MaxRadius, RenderDistanceZ);
-    const FIntVector  MaxCoord = Origin + FIntVector(MaxRadius, MaxRadius, RenderDistanceZ);
-    const FIntVector  Center   = MinCoord + (MaxCoord - MinCoord) / 2;
+    // HARD-LIMIT: only scan 512m vertically (±16 chunks). This is the permanent fix 
+    // for the 2.1-million-chunk explosion seen in V13.0-V13.3.
+    // FIX CHUNK-EXPLOSION: DistantRenderDistanceXY values > 128 create 1M+ chunk
+    // queues that produce extreme load times (the 1.8M chunk queue in the screenshot).
+    // Cap at 128 and warn so the designer can fix the level actor value.
+    static constexpr int32 MaxSafeDiscoveryRadius = 128;
+    const int32 MaxRadius = FMath::Min(DistantRenderDistanceXY, MaxSafeDiscoveryRadius);
+    if (DistantRenderDistanceXY > MaxSafeDiscoveryRadius)
+    {
+        UE_LOG(LogVoxelWorld, Error,
+            TEXT("VoxelWorld: DistantRenderDistanceXY=%d exceeds safe cap %d — clamped to %d. "
+                 "Reduce DistantRenderDistanceXY on the VoxelWorld Details panel to fix loading time."),
+            DistantRenderDistanceXY, MaxSafeDiscoveryRadius, MaxSafeDiscoveryRadius);
+    }
+    const int32 VerticalDiscoveryRange = 16; 
+    const FIntVector  MinCoord = Origin - FIntVector(MaxRadius, MaxRadius, VerticalDiscoveryRange);
+    const FIntVector  MaxCoord = Origin + FIntVector(MaxRadius, MaxRadius, VerticalDiscoveryRange);
+    const FIntVector  Center   = Origin; 
 
-    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Discovery Area (%d,%d,%d)→(%d,%d,%d)"),
-        MinCoord.X, MinCoord.Y, MinCoord.Z, MaxCoord.X, MaxCoord.Y, MaxCoord.Z);
+    UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Discovery Area (%d,%d,%d)→(%d,%d,%d) MaxRadius=%d Z-HardCap=%d"),
+        MinCoord.X, MinCoord.Y, MinCoord.Z, MaxCoord.X, MaxCoord.Y, MaxCoord.Z, MaxRadius, VerticalDiscoveryRange);
 
     TArray<TPair<int32,FIntVector>> Sorted;
     const FVoxelGenerationConfig Cfg = GetEffectiveConfig();
@@ -207,59 +221,58 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
             for (int32 b = 0; b < 8; ++b)
             {
                 const int32 y = MinCoord.Y + y_off + b;
-                const float Surface = SurfHs[b];
-                const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
+                const float SurfacePos = SurfHs[b];
+                const int32 GroundZ = FMath::FloorToInt(SurfacePos / GridSize);
                 const float Roughness = FMath::Clamp(PeaksW[b] * 2.f + CliffsW[b], 0.f, 1.f);
-
-                float MinSkyAlt, MaxSkyAlt;
-                FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Roughness, Cfg, MinSkyAlt, MaxSkyAlt);
-                const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
-                const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
-
-                int32 ExtraMinZ = 0, ExtraMaxZ = 0;
-                const float dx = WX - Cfg.Craters.ForcedCraterCenter.X;
-                const float dy = WYs[b] - Cfg.Craters.ForcedCraterCenter.Y;
-                const float DistSq = dx * dx + dy * dy;
                 const float CraterRad = Cfg.Craters.CentralCraterRadius;
-
-                if (CraterRad > 0.f && DistSq < CraterRad * CraterRad * 2.25f)
-                {
-                    ExtraMinZ = FMath::CeilToInt(FMath::Abs(Cfg.Craters.CentralCraterDepth) / GridSize) + 3;
-                    ExtraMaxZ = FMath::CeilToInt(Cfg.Craters.CentralCraterRimHeight    / GridSize) + 4;
-                }
 
                 const int32 dx_c = x - Center.X;
                 const int32 dy_c = y - Center.Y;
                 const int32 DistSq_C = dx_c * dx_c + dy_c * dy_c;
 
-                const int32 EffMinZ = (DistSq_C <= RenderDistanceXY * RenderDistanceXY) ? (2 + ExtraMinZ) : 
-                                     (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY ? (MidRenderDistanceZ + ExtraMinZ) : (4 + ExtraMinZ));
-                const int32 EffMaxZ = (DistSq_C <= RenderDistanceXY * RenderDistanceXY) ? (12 + ExtraMaxZ) : 
-                                     (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY ? (MidRenderDistanceZ + ExtraMaxZ) : (4 + ExtraMaxZ));
+                // ── Ground Slab ──────────────────────────────────────────────────
+                // Zone-based vertical thickness for efficiency
+                int32 G_Reach = (DistSq_C <= RenderDistanceXY * RenderDistanceXY) ? 3 : 2;
+                if (CraterRad > 0.f)
+                {
+                    const float dx_cr = WX - Cfg.Craters.ForcedCraterCenter.X;
+                    const float dy_cr = WYs[b] - Cfg.Craters.ForcedCraterCenter.Y;
+                    if (dx_cr*dx_cr + dy_cr*dy_cr < CraterRad * CraterRad * 2.25f) G_Reach = 18; // Crater clearance
+                }
 
                 {
                     FReadScopeLock ReadLock(LoadedChunksLock);
-                    for (int32 z = GroundZ - EffMinZ; z <= GroundZ + EffMaxZ; ++z)
+                    for (int32 z = GroundZ - G_Reach; z <= GroundZ + G_Reach; ++z)
                     {
-                        const FIntVector C(x, y, z);
+                        if (z < -VerticalDiscoveryRange || z > VerticalDiscoveryRange) continue;
+                        FIntVector C(x, y, z);
                         if (!LoadedChunks.Contains(C))
                         {
-                            const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
-                            LocalSorted.Add({Dist, C});
+                            const int32 D = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
+                            LocalSorted.Add({D, C});
                         }
                     }
 
+                    // ── Skyland Shells ───────────────────────────────────────────────
+                    // Only discover skyland 'surfaces' to save 1M+ chunks of air/rock
                     if (DistSq_C <= SkylandsRenderDistanceXY * SkylandsRenderDistanceXY)
                     {
-                        for (int32 z = SkyZ_Min; z <= SkyZ_Max; ++z)
-                        {
-                            const FIntVector C(x, y, z);
-                            if ((z < GroundZ - EffMinZ || z > GroundZ + EffMaxZ) && !LoadedChunks.Contains(C))
-                            {
-                                const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
-                                LocalSorted.Add({Dist, C});
+                        float MinSkyAlt, MaxSkyAlt;
+                        FVoxelBiomeGenerators::GetSkylandAltitudeBounds(SurfacePos, Roughness, Cfg, MinSkyAlt, MaxSkyAlt);
+                        const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
+                        const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
+
+                        auto AddZSafe = [&](int32 z) {
+                            if (z < -VerticalDiscoveryRange || z > VerticalDiscoveryRange) return;
+                            FIntVector C(x,y,z);
+                            if (!LoadedChunks.Contains(C)) {
+                                const int32 D = FMath::Max3(FMath::Abs(x-Center.X), FMath::Abs(y-Center.Y), FMath::Abs(z-Center.Z));
+                                LocalSorted.Add({D, C});
                             }
-                        }
+                        };
+                        
+                        for (int32 sz = SkyZ_Min - 2; sz <= SkyZ_Min + 2; ++sz) AddZSafe(sz);
+                        for (int32 sz = SkyZ_Max - 2; sz <= SkyZ_Max + 2; ++sz) AddZSafe(sz);
                     }
                 }
             }

@@ -137,20 +137,28 @@ float FVoxelBiomeManager::GetSurfaceHeightStatic(
     if (PeaksW  > 0.01f) { Height += FVoxelBiomeGenerators::GetPeaksHeight(X,Y,Config)*PeaksW;   BaseWeightSum += PeaksW; }
     if (CliffsW > 0.01f) { Height += FVoxelBiomeGenerators::GetCliffsHeight(X,Y,Config)*CliffsW; BaseWeightSum += CliffsW; }
     if (MesaW   > 0.01f) { Height += FVoxelBiomeGenerators::GetMesaHeight(X,Y,Config)*MesaW;     BaseWeightSum += MesaW; }
-    Height /= (BaseWeightSum + 0.0001f);
+    
+    // NAN-SAFEGUARD: Prevent division by near-zero and vertex spikes
+    if (BaseWeightSum < 0.001f) Height = Config.SeaLevel + 5000.f; // Safe default above water
+    else Height /= BaseWeightSum;
+
+    if (FMath::IsNaN(Height) || !FMath::IsFinite(Height)) Height = Config.SeaLevel + 5000.f;
 
     // Crater overlay — restricted to local crater influence bounds
     if (Config.Craters.CentralCraterRadius > 0.f)
     {
         const float dx = X - Config.Craters.ForcedCraterCenter.X;
         const float dy = Y - Config.Craters.ForcedCraterCenter.Y;
-        const float Dist = FMath::Sqrt(dx*dx + dy*dy);
-        if (Dist < Config.Craters.CentralCraterRadius * 1.80f)
+        const float DistSq = dx * dx + dy * dy;
+        const float MaxDist = Config.Craters.CentralCraterRadius * 1.80f;
+        if (DistSq < MaxDist * MaxDist)
         {
             Height = FVoxelBiomeGenerators::GetCraterHeight(X, Y, Config, Height);
         }
     }
-    return Height;
+
+    // FINAL CLAMP: Catch all vertex explosions
+    return FMath::Clamp(Height, -200000.f, 400000.f);
 }
 
 // ============================================================

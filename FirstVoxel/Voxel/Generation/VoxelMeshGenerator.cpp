@@ -21,6 +21,16 @@
 //   Proof (Z-axis): i0=(X,Y,Z), i1=(X,Y-1,Z), i2=(X-1,Y-1,Z), i3=(X-1,Y,Z)
 //     V1−V0=(0,−1,0), V2−V0=(−1,−1,0) → Cross=(0,0,−1)=−Z.
 //     bD0Solid=true wants +Z → was backface culled. Same proof holds for X/Y.
+//
+// FIX FLAT-WORLD — Removed "Directive C: Directional Face Occlusion" from EmitQuad.
+//   Root cause: the block culled every face where OutwardNormal.Z < 0.2 when
+//   CameraPos.Z > 10000 cm. During world gen the player is parked at
+//   TargetCoordsZ = Surface + 40000 cm, so the camera is permanently above
+//   10000 cm during ALL initial chunk generation. Every X-axis and Y-axis face
+//   (walls, cliff sides, terrain height variation) was permanently deleted from
+//   the baked mesh. Only top-facing quads survived, producing a visually flat
+//   world with no terrain height visible. GPU backface culling handles this at
+//   render time without destroying geometry permanently.
 
 #include "Generation/VoxelMeshGenerator.h"
 #include "CoreMinimal.h"
@@ -333,21 +343,8 @@ void FVoxelMeshGenerator::GenerateMesh(
         int32 ValidCount = (cb0?1:0) + (cb1?1:0) + (cb2?1:0) + (cb3?1:0);
 
         const FVector OutwardNormal = bD0Solid ? Axis : -Axis;
-
-        // ── Directive C: Directional Face Occlusion ──────────────────────
-        // At high altitudes, aggressively cull backfaces and bottom faces.
-        const FVector ViewDir = (CellVertices[i0] + ChunkOrigin - CameraPos).GetSafeNormal();
-        const float   CosTheta = FVector::DotProduct(OutwardNormal, ViewDir);
-        
-        // If facing away from camera (> 90 degrees)
-        if (CosTheta > 0.1f) 
-        {
-            // Aggressive culling for non-upward faces at high altitude
-            if (CameraPos.Z > 10000.f && OutwardNormal.Z < 0.2f) return;
-            
-            // Standard backface culling for all distances if extremely pointing away
-            if (CosTheta > 0.7f) return;
-        }
+        // FIX FLAT-WORLD: Directional face occlusion removed (see file header).
+        // GPU backface culling handles this correctly at render time.
 
         const bool bSwap = false; // Regular CW continuous corner loop requires false
 

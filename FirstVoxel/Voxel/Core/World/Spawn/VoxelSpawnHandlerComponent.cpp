@@ -157,10 +157,16 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
         {
             if (UCharacterMovementComponent* CMC = Ch->GetCharacterMovement())
             {
-                CMC->Velocity = FVector::ZeroVector; 
+                CMC->Velocity = FVector::ZeroVector;
                 CMC->SetMovementMode(MOVE_Walking);
-                CMC->UpdateFloorFromAdjustment(); 
-                CMC->bJustTeleported = false; 
+                // FIX SPAWN-INSIDE-MESH: bJustTeleported must remain true here.
+                // Clearing it immediately after SetActorLocation bypasses UE5's
+			// teleport-safe floor detection path. On the next physics tick the
+			// CMC applies interpenetration corrections that push the capsule
+			// through the terrain. Leave it true — CMC clears it automatically
+			// after it processes the first valid grounded step.
+			CMC->UpdateFloorFromAdjustment();
+			// bJustTeleported intentionally NOT cleared here.
             }
         }
     }
@@ -223,18 +229,23 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
 
     if (TargetZ > 100000.f || CraterW > 0.3f) TargetZ = Surface + SafeOff;
 
-    UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn Pos=(%.0f,%.0f) Surface=%.0f Z=%.0f CraterW=%.2f Sky=%d CONFIG_DEPTH=%.0f CONFIG_RADIUS=%.0f"),
-        Pos.X, Pos.Y, Surface, TargetZ, CraterW, bSky ? 1 : 0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
+    UE_LOG(LogVoxelWorld, Warning, TEXT("VoxelWorld: Spawn Pos=(%.0f,%.0f) Surface=%.0f Z=%.0f CraterW=%.2f Sky=%d"),
+        Pos.X, Pos.Y, Surface, TargetZ, CraterW, bSky ? 1 : 0);
 
     Pos.Z = TargetZ;
-    TargetCoordsZ = TargetZ + 120000.f; // ~1.2km above spawn to clear massive 700m crater rims and peaks
+
+    TargetCoordsZ = TargetZ + 40000.f; // 400m drone view to stay below clouds and see the world loading
     ActualSpawnXY = FVector2D(Pos.X, Pos.Y);
 
     if (Player)
     {
-        // Place them immediately into the drone hover position to avoid spawning inside procedural terrain.
+        // Place them immediately into the stratosphere drone position
         FVector InitialHover(ActualSpawnXY.X, ActualSpawnXY.Y, TargetCoordsZ);
         Player->SetActorLocation(InitialHover, false, nullptr, ETeleportType::TeleportPhysics);
+        
+        if (APawn* P = Cast<APawn>(Player))
+            if (APlayerController* PC = Cast<APlayerController>(P->GetController()))
+                PC->SetControlRotation(FRotator(-80.f, 0.f, 0.f)); // Look down at the world
     }
     
     if (bWaitingForInitialSpawn) return;

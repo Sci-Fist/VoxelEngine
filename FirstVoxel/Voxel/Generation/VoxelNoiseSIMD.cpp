@@ -1293,7 +1293,8 @@ void EvaluateColumn_Skylands_AVX2(
 
                 __m256 WallBaseH = _mm256_fmadd_ps(AbsDepth, _mm256_set1_ps(0.12f), SafeFloorH);
 
-                static const float LUT[32] = {
+                // Central Crater Shape LUT (aligned for SIMD gather safety)
+                static const alignas(32) float LUT[32] = {
                     -1.00f, -1.00f, -1.00f, -0.99f, -0.97f, -0.94f, -0.88f, -0.78f, -0.64f, -0.45f, -0.15f,  0.20f,
                      0.55f,  0.90f,  1.15f,  1.32f,  1.35f,  1.28f,  1.10f,  0.85f,  0.55f,  0.28f,  0.10f,  0.03f,
                      0.01f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f
@@ -1314,6 +1315,10 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 Alpha = _mm256_sub_ps(Indexf, Index0_f);
                 __m256 Mult = _mm256_add_ps(v0, _mm256_mul_ps(Alpha, _mm256_sub_ps(v1, v0)));
 
+                // NAN-SAFEGUARD: If Mult is NaN for any reason, use 0.0f
+                __m256 Mult_Mask = _mm256_cmp_ps(Mult, Mult, _CMP_ORD_Q);
+                Mult = _mm256_blendv_ps(_mm256_setzero_ps(), Mult, Mult_Mask);
+
                 __m256 NegMask = _mm256_cmp_ps(Mult, _mm256_setzero_ps(), _CMP_LT_OQ);
                 __m256 AbsMult = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), Mult);
 
@@ -1331,5 +1336,14 @@ void EvaluateColumn_Skylands_AVX2(
                 OutSurfH = Lerp_AVX2(Dominance, OutSurfH, CraterH);
             }
         }
+
+        // --- FINAL NAN CHECK ---
+        // If the resulting surface height is NaN or extreme (outside world bounds), clamp to CenterH
+        __m256 Extreme_Mask = _mm256_and_ps(
+            _mm256_cmp_ps(OutSurfH, _mm256_set1_ps(-1000000.f), _CMP_GT_OQ),
+            _mm256_cmp_ps(OutSurfH, _mm256_set1_ps(1000000.f), _CMP_LT_OQ)
+        );
+        __m256 Valid_Mask = _mm256_and_ps(_mm256_cmp_ps(OutSurfH, OutSurfH, _CMP_ORD_Q), Extreme_Mask);
+        OutSurfH = _mm256_blendv_ps(_mm256_set1_ps(CenterH), OutSurfH, Valid_Mask);
     }
 } // namespace FVoxelNoiseSIMD
