@@ -45,6 +45,21 @@
 #include "Voxel/Biomes/VoxelBiome.h"
 #include "Voxel/Config/VoxelGenerationConfig.h"
 
+/**
+ * @class FVoxelBiomeManager
+ * @brief Static utility class for biome weight evaluation and terrain height derivation.
+ *
+ * This manager provides the core mathematical bridge between noise fields (Temperature, 
+ * Erosion) and the physical geometry of the world. It is designed to be purely 
+ * stateless and thread-safe, allowing any VoxelGeneratorTask to evaluate surface 
+ * metrics concurrently without synchronization overhead.
+ *
+ * Key Concepts:
+ * - Determinism: Every function relies strictly on the passed FVoxelGenerationConfig 
+ *   and coordinated XY world positions (plus SeedOffset).
+ * - Multi-Layer Evaluation: Handles the primary surface height, but also provides 
+ *   "Neutral" height variants for subsystems that must ignore local crater geometry.
+ */
 class FIRSTVOXEL_API FVoxelBiomeManager
 {
 public:

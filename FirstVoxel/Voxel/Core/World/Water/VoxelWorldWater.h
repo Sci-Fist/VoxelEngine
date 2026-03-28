@@ -1,16 +1,14 @@
-// VoxelWorldWater.h
-// FIX #35 — WaterSources changed from TArray (O(N) AddUnique) to TSet (O(1))
-#pragma once
-
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Math/IntVector.h"
+#include "Async/AsyncWork.h"
 #include "VoxelWorldWater.generated.h"
 
 class AVoxelWorld;
 class AVoxelChunk;
 class FVoxelWaterSimulator;
 class UVoxelWaterComponent;
+class FWaterSimAsyncTask;
 
 UCLASS(ClassGroup=(Voxel), meta=(BlueprintSpawnableComponent))
 class FIRSTVOXEL_API UVoxelWorldWaterComponent : public UActorComponent
@@ -23,6 +21,8 @@ public:
 
     virtual void TickComponent(float DeltaTime, ELevelTick TickType,
                                FActorComponentTickFunction* Tick) override;
+
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     void InitChunkWater(AVoxelChunk* Chunk);
     void RemoveChunkFromWaterSimulation(const FIntVector& ChunkCoord);
@@ -40,6 +40,12 @@ public:
 private:
     TUniquePtr<FVoxelWaterSimulator>   WaterSimulator;
     TWeakObjectPtr<UVoxelWaterComponent> OceanComponent;
+
+    /** Background task currently executing a simulation step. */
+    FAsyncTask<FWaterSimAsyncTask>* CurrentSimTask = nullptr;
+
+    /** Results from the background thread waiting to be processed on the Game Thread. */
+    TArray<FIntVector> QueuedDirtyChunks;
 
     // FIX #35: TSet for O(1) Add/Remove deduplication (was TArray with AddUnique → O(N))
     TSet<FIntVector> WaterSources;

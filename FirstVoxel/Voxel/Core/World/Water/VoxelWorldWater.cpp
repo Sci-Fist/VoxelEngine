@@ -13,6 +13,7 @@
 #include "Voxel/Core/VoxelChunk.h"
 #include "Voxel/Water/VoxelWaterSimulator.h"
 #include "Voxel/Water/VoxelWaterComponent.h"
+#include "Voxel/Core/World/Water/VoxelWaterSimTask.h"
 #include "Engine/World.h"
 #include "Voxel/VoxelLogger.h"
 
@@ -43,24 +44,63 @@ void UVoxelWorldWaterComponent::TickComponent(float DeltaTime, ELevelTick TickTy
     UpdateWaterSimulation(DeltaTime);
 }
 
+void UVoxelWorldWaterComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (CurrentSimTask)
+    {
+        CurrentSimTask->Cancel();
+        CurrentSimTask->EnsureCompletion();
+        delete CurrentSimTask;
+        CurrentSimTask = nullptr;
+    }
+    Super::EndPlay(EndPlayReason);
+}
+
 void UVoxelWorldWaterComponent::UpdateWaterSimulation(float)
 {
     if (!WaterSimulator.IsValid()) return;
 
-    const TArray<FIntVector>& DirtyChunks = WaterSimulator->Step();
-
-    if (AVoxelWorld* VW = Cast<AVoxelWorld>(GetOwner()))
+    // 1. Check if the previous async task is complete
+    if (CurrentSimTask)
     {
-        const TMap<FIntVector, AVoxelChunk*>* LC = VW->GetLoadedChunks();
-        if (LC)
+        if (CurrentSimTask->IsDone())
         {
-            for (const FIntVector& Coord : DirtyChunks)
+            // The simulator's Step() has finished on the background thread.
+            // Retrieve the results without re-running the simulation.
+            const TArray<FIntVector>& DirtyChunks = WaterSimulator->GetLastDirtyChunks();
+            
+            if (AVoxelWorld* VW = Cast<AVoxelWorld>(GetOwner()))
             {
-                if (AVoxelChunk* const* P = LC->Find(Coord))
-                    if (*P && (*P)->GetWaterData().bMeshDirty)
-                        RebuildWaterMeshForChunk(*P);
+                if (const TMap<FIntVector, AVoxelChunk*>* LC = VW->GetLoadedChunks())
+                {
+                    for (const FIntVector& Coord : DirtyChunks)
+                    {
+                        if (AVoxelChunk* const* P = LC->Find(Coord))
+                        {
+                            if (*P && (*P)->GetWaterData().bMeshDirty)
+                            {
+                                RebuildWaterMeshForChunk(*P);
+                            }
+                        }
+                    }
+                }
             }
+
+            delete CurrentSimTask;
+            CurrentSimTask = nullptr;
         }
+        else
+        {
+            // Simulation still running on background thread, skip this tick
+            return;
+        }
+    }
+
+    // 2. Start a new simulation task if we are idle
+    if (!CurrentSimTask)
+    {
+        CurrentSimTask = new FAsyncTask<FWaterSimAsyncTask>(WaterSimulator.Get());
+        CurrentSimTask->StartBackgroundTask();
     }
 }
 

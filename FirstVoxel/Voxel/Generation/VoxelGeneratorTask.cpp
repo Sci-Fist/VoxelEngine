@@ -219,22 +219,38 @@ FVoxelGeneratorTask::~FVoxelGeneratorTask()
     if (Densities.Num() > 0)
     {
         FScopeLock Lock(&GDensityPoolLock);
-        if (GDensityPool.Num() < 16)
+        if (GDensityPool.Num() < 512)
             GDensityPool.Add(MoveTemp(Densities));
     }
-
+    
     if (ScratchBuffers.VertexIndices.Num() > 0)
     {
         FScopeLock Lock(&GScratchPoolLock);
-        if (GScratchPool.Num() < 16)
+        if (GScratchPool.Num() < 512)
             GScratchPool.Add(MoveTemp(ScratchBuffers));
     }
-
+    
     if (ColScratch.PrecalcColumns.Num() > 0)
     {
         FScopeLock Lock(&GColumnPoolLock);
-        if (GColumnPool.Num() < 16)
+        if (GColumnPool.Num() < 512)
             GColumnPool.Add(MoveTemp(ColScratch));
+    }
+}
+
+void FVoxelGeneratorTask::ClearGeneratorPools()
+{
+    {
+        FScopeLock Lock(&GDensityPoolLock);
+        GDensityPool.Empty();
+    }
+    {
+        FScopeLock Lock(&GScratchPoolLock);
+        GScratchPool.Empty();
+    }
+    {
+        FScopeLock Lock(&GColumnPoolLock);
+        GColumnPool.Empty();
     }
 }
 
@@ -387,7 +403,8 @@ void FVoxelGeneratorTask::BuildDensityField()
         }
     }
     
-    ParallelFor(NumCols / 8, [&](int32 idx)
+    const int32 NumBatches = NumCols / 8;
+    ParallelFor(NumBatches, [&](int32 idx)
     {
         const int32 ColIdx = idx * 8;
         // ── 8-WIDE SIMD PRE-CALC ───────────────────────────────────────────────
@@ -466,20 +483,20 @@ void FVoxelGeneratorTask::BuildDensityField()
         }
     });
 
-    int32 ColIdx = (NumCols / 8) * 8;
-    // ── REMAINDER FALLBACK ──────────────────────────────────────────────────
-    for (; ColIdx < NumCols; ++ColIdx)
+    // ── REMAINDER FALLBACK (1-7 trailing columns) ─────────────────────────────
+    for (int32 ColIdx = NumBatches * 8; ColIdx < NumCols; ++ColIdx)
     {
-        const int32 Y  = ColIdx / EffSize;
-        const int32 X  = ColIdx % EffSize;
+        const int32 Y = ColIdx / EffSize;
+        const int32 X = ColIdx % EffSize;
         const float CX = WorldOrigin.X + (X - 1.f) * EffVoxSz;
         const float CY = WorldOrigin.Y + (Y - 1.f) * EffVoxSz;
 
         FColumnCacheItem& Item = ColScratch.PrecalcColumns[ColIdx];
-
+        
         // FIX: Use accurate Config for fallback height estimation
         float Temp = -999.f, Erosion = -999.f;
         Item.Weights = FVoxelBiomeManager::GetBiomeWeightsStatic(CX, CY, Config, &Temp, &Erosion);
+        
         if (!LocalConfig.Performance.bEnableForest)  Item.Weights.SetWeight(EVoxelBiome::Forest,  0.f);
         if (!LocalConfig.Performance.bEnableDesert)  Item.Weights.SetWeight(EVoxelBiome::Desert,  0.f);
         if (!LocalConfig.Performance.bEnablePeaks)   Item.Weights.SetWeight(EVoxelBiome::Peaks,   0.f);
@@ -495,6 +512,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         ColScratch.ColumnWeights[ColIdx]  = Item.Weights;
         ColScratch.ColumnSurfaceH[ColIdx] = Item.SurfH;
     }
+
 
     if (bIsDistantHeightmesh)
     {

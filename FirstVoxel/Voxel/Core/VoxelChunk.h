@@ -210,6 +210,13 @@ public:
 	 */
 	int32 WaterGeneration = 0;
 	
+	/**
+	 * Generational counter for water mesh stability.
+	 * Stores the CRC32 hash of the last successfully built water mesh
+	 * to avoid redundant GPU buffer updates and clearing.
+	 */
+	uint32 LastWaterMeshHash = 0;
+	
 	/** Warning flags to avoid duplicate logs. Reset in ClearMesh() for pool safety. */
 	bool bFlatMaterialWarned = false;
 	bool bSlopeMaterialWarned = false;
@@ -321,7 +328,7 @@ private:
 	FThreadSafeBool bGenerating  { false };
 
 	/** Incremented each time a new task is launched; stale task completions are silently discarded. */
-	TAtomic<uint32> GenerationId { 0 };
+	TAtomic<uint64> GenerationId { 0 };
 
 	/** Previous mesh data for smooth transitions during LOD changes. */
 	FVoxelMeshOutput PreviousMesh;

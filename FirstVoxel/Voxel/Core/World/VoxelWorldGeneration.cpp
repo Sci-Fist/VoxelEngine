@@ -80,17 +80,28 @@ void AVoxelWorld::GenerateWorldDeferred()
             AVoxelWorld* Self2 = WeakThis.Get();
             if (!Self2 || Self2->bShutdown) return;
 
-            FVector FinalPos = CandidatePos;
-            if (CraterPos != CandidatePos)
+        // ── RELOCATION LOGIC ────────────────────────────────────────────────
+        // v18.1: Only relocate if the actor is at (0,0,0). This allows the user 
+        // to manually position the AVoxelWorld while still having a natural 
+        // crater spawn by default.
+        const bool bIsAtOrigin = CandidatePos.IsNearlyZero(10.f);
+        FVector FinalPos = CandidatePos;
+        if (bIsAtOrigin && CraterPos != CandidatePos)
+        {
+            UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Natural crater at %s"), *CraterPos.ToString());
+            FinalPos = CraterPos;
+            Self2->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
+            if (Self2->BiomePreset != nullptr)
             {
-                UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Natural crater at %s"), *CraterPos.ToString());
-                FinalPos = CraterPos;
-                Self2->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
-                if (Self2->BiomePreset != nullptr)
-                {
-                    Self2->BiomePreset->Config.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
-                }
+                Self2->BiomePreset->Config.Craters.ForcedCraterCenter = FVector2D(CraterPos.X, CraterPos.Y);
             }
+        }
+        else if (!bIsAtOrigin)
+        {
+            // If moved manually, force the local center to the current actor pos
+            Self2->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(CandidatePos.X, CandidatePos.Y);
+            UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Manual position detected, forcer crater set to %s"), *CandidatePos.ToString());
+        }
 
 #if !WITH_EDITOR
             {
@@ -373,7 +384,7 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     }
 #endif
 
-    if (bWaitingForInitialSpawn && SpawnHandlerComponent)
+    if (IsWaitingForInitialSpawn() && SpawnHandlerComponent)
     {
         TArray<FVoxelGenerationQueueEntry> TempQueue;
         for (const FIntVector& C : SpawnHandlerComponent->GetInitialSpawnCoords())
@@ -482,7 +493,7 @@ void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
         // the pawn can become pending-kill between the null-check and the
         // dereference, causing the ACCESS_VIOLATION crash in DrainGenerationQueue.
         APawn* CachedPawn = UGameplayStatics::GetPlayerPawn(this, 0);
-        const FVector RefPos = bWaitingForInitialSpawn
+        const FVector RefPos = IsWaitingForInitialSpawn()
             ? SpawnTargetPos
             : (IsValid(CachedPawn) ? CachedPawn->GetActorLocation() : SpawnTargetPos);
 
@@ -564,7 +575,7 @@ void AVoxelWorld::DrainGenerationQueue()
     // (SpawnActor + configure + AsyncTask launch). 128/frame was consuming the
     // entire frame budget and causing 2.5 FPS during initial generation.
     // 8/frame keeps the GameThread fed without starving rendering.
-    const bool bFastDrain = bWaitingForInitialSpawn;
+    const bool bFastDrain = IsWaitingForInitialSpawn();
     // PERF: Capping fast drain to 256 per frame protects the GameThread while fast-forwarding initial queue
     const int32 Limit = bFastDrain ? 256 : (!GetWorld()->IsGameWorld() ? 4 : 8);
     const int32 MaxConc = bFastDrain ? 2048 : MaxConcurrentGenerations;

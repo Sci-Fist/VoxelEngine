@@ -163,11 +163,18 @@ void UVoxelStreamingComponent::UpdateStreaming()
     const float ChunkWorldSize = World->ChunkSize * World->VoxelSize;
 
     // ── Pre-calculate Dynamic Discovery Radius ─────────────────────────
-    // Urgent: Scale discovery radius dynamically based on Camera.Z
+    // FIX STREAMING-RADIUS: AltFactor up to 2.0 was tripling DistantRenderDistanceXY
+    // (e.g. 64 -> 192), creating up to 442 k desired chunks per streaming tick and
+    // completely bypassing the MaxSafeDiscoveryRadius=128 guard in initial generation.
+    // Cap AltFactor at 0.5 so the maximum radius is 1.5x base (96 when base=64).
+    // Also hard-cap the result at MaxSafeDiscoveryRadius to be doubly safe.
+    static constexpr int32 MaxSafeStreamingRadius = 128;
     const float AltBase = 10000.f; // 100m
     const float AltMax  = 30000.f; // 300m
-    const float AltFactor = FMath::Clamp((PlayerPos.Z - AltBase) / (AltMax - AltBase), 0.f, 2.0f);
-    const int32 DynamicRadius = World->DistantRenderDistanceXY + FMath::RoundToInt(AltFactor * World->DistantRenderDistanceXY);
+    const float AltFactor = FMath::Clamp((PlayerPos.Z - AltBase) / (AltMax - AltBase), 0.f, 0.5f);
+    const int32 DynamicRadius = FMath::Min(
+        World->DistantRenderDistanceXY + FMath::RoundToInt(AltFactor * World->DistantRenderDistanceXY),
+        MaxSafeStreamingRadius);
 
     // 2. Launch Background Discovery Task
     TWeakObjectPtr<UVoxelStreamingComponent> WeakThis(this);
@@ -192,7 +199,7 @@ void UVoxelStreamingComponent::UpdateStreaming()
         // 4. Build Desired Set (Pass DynamicRadius)
         TSet<FIntVector> Desired;
         int32 SkyZMin, SkyZMax;
-        StrongThis->BuildDesiredChunkSet(PlayerCoord, CachedColumns, ChunkWorldSize, SkyAltWorld, HalfThickCm, DynamicRadius, SkyZMin, SkyZMax, Desired);
+        StrongThis->BuildDesiredChunkSet(PlayerCoord, PlayerPos, CachedColumns, ChunkWorldSize, SkyAltWorld, HalfThickCm, DynamicRadius, SkyZMin, SkyZMax, Desired);
 
         // 5. Update on Game Thread
         AsyncTask(ENamedThreads::GameThread, [WeakThis, PlayerPos, PlayerCoord, SkyZMin, SkyZMax, Desired, ForwardVector, Generation]()
@@ -334,7 +341,7 @@ void UVoxelStreamingComponent::GatherColumnHeights(const FIntVector& PlayerCoord
     });
 }
 
-void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32 Radius, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired)
+void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoord, const FVector& PlayerPos, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32 Radius, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired)
 {
     AVoxelWorld* World = WorldOwner.Get();
     if (!World) return;
@@ -375,7 +382,7 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
 
     // ── Hierarchical Discovery ──────────────────────────────────────────
     // Instead of a flat O(N^2) loop, we use a recursive approach for Zone C/D
-    DiscoverHierarchical(PlayerCoord, CachedColumns, MaxRad, OutDesired);
+    DiscoverHierarchical(PlayerCoord, PlayerPos, CachedColumns, MaxRad, OutDesired);
 
     // ── Sky Band Filling (Horizontal Ring) ──────────────────────────────
     const int32 SkylandsZMin = OutSkyZMin;
@@ -388,7 +395,7 @@ void UVoxelStreamingComponent::BuildDesiredChunkSet(const FIntVector& PlayerCoor
             OutDesired.Add(FIntVector(PlayerCoord.X+x, PlayerCoord.Y+y, z));
 }
 
-void UVoxelStreamingComponent::DiscoverHierarchical(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, int32 Radius, TSet<FIntVector>& OutDesired)
+void UVoxelStreamingComponent::DiscoverHierarchical(const FIntVector& PlayerCoord, const FVector& PlayerPos, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, int32 Radius, TSet<FIntVector>& OutDesired)
 {
     AVoxelWorld* World = WorldOwner.Get();
     if (!World) return;
@@ -411,8 +418,10 @@ void UVoxelStreamingComponent::DiscoverHierarchical(const FIntVector& PlayerCoor
             if (radSq > MaxRad * MaxRad) continue;
 
             // Mega-Chunk Logic:
+            // FIX-MEGA-ALTITUDE: was using World->GetActorLocation().Z (always 0 — that is
+            // the VoxelWorld actor origin, not the player). PlayerPos.Z is the correct value.
             bool bIsMega = false;
-            if (radSq > MidRenderDistanceXY * MidRenderDistanceXY && World->GetActorLocation().Z > HighAltitudeThreshold)
+            if (radSq > MidRenderDistanceXY * MidRenderDistanceXY && PlayerPos.Z > HighAltitudeThreshold)
             {
                 bIsMega = true;
                 if ((x % MegaChunkMultiplier != 0) || (y % MegaChunkMultiplier != 0)) continue;

@@ -45,6 +45,20 @@ class USceneComponent;
 class UVoxelStreamingComponent;
 class UVoxelSpawnHandlerComponent;
 
+/**
+ * @class AVoxelWorld
+ * @brief The central orchestration hub for the procedural voxel terrain engine.
+ *
+ * AVoxelWorld manages the global generation state, coordinate transformations,
+ * and lifecycle of AVoxelChunk actors. It serves as the primary interface for 
+ * both editor-time world building and runtime streaming.
+ * 
+ * Key Responsibilities:
+ * - Maintains the FVoxelDataMap for persistent modifications.
+ * - Manages the FVoxelChunkPool for performant actor reuse.
+ * - Coordinates with UVoxelStreamingComponent for proximity-based loading.
+ * - Handles initial player spawn and natural crater detection.
+ */
 UCLASS()
 class FIRSTVOXEL_API AVoxelWorld : public AActor
 {
@@ -54,6 +68,11 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
     AVoxelWorld();
     virtual ~AVoxelWorld();
 
+    /** 
+     * Edge size of a single voxel chunk in voxels. 
+     * Default 16 results in 16x16x16 chunks. Higher values improve draw call 
+     * efficiency but increase per-chunk generation latency. 
+     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|World")
     int32 ChunkSize = 16;
 
@@ -254,6 +273,7 @@ public:
     void DestroyChunk      (const FIntVector& Coord);
     void RebuildChunk      (const FIntVector& Coord);
     UFUNCTION(BlueprintPure, Category="Voxel") bool IsWaitingForInitialSpawn() const;
+    void SetWaitingForInitialSpawn(bool bWait);
     
     UFUNCTION(BlueprintPure, Category="Voxel") float GetGenerationProgress()    const;
     UFUNCTION(BlueprintPure, Category="Voxel") FString GetGenerationStatusString() const;
@@ -274,12 +294,7 @@ private:
     void FinalizeGenerationSetup();
     void CheckCloseRangeVisibility();
 
-    // Spawn HUD stats
-    TSet<FIntVector> InitialSpawnCoords;
-    TAtomic<int32> InitialSpawnCollisionReadyCount{0};
-    TAtomic<int32> InitialSpawnVisualReadyCount{0};
-    bool bWaitingForInitialSpawn = false;
 public:
-    int32 GetInitialSpawnReadyCount() const { return InitialSpawnCollisionReadyCount.Load(); }
-    int32 GetInitialSpawnTotalCount() const { return InitialSpawnCoords.Num(); }
+    int32 GetInitialSpawnReadyCount() const;
+    int32 GetInitialSpawnTotalCount() const;
 };

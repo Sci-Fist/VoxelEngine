@@ -148,12 +148,18 @@ void AVoxelChunk::Reset()
 void AVoxelChunk::GenerateAsync()
 {
 	if (bGenerating) return;
+	
+	// FIX-REENTRANCY: prevent infinite loop if callback triggers immediate rebuild
+	static thread_local bool bInGenerateAsync = false;
+	if (bInGenerateAsync) return;
+	bInGenerateAsync = true;
+	
 	bGenerating  = true;
 	bMeshApplied = false;
 
 	UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelChunk: GenerateAsync (%d,%d,%d)"), ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z));
 
-	uint32 TaskId = ++GenerationId;
+	uint64 TaskId = ++GenerationId;
 
 	IVoxelDensityProvider* Provider = DensityGenerator;
 	if (!Provider) { static FVoxelDensityGenerator FBD; Provider = &FBD; }
@@ -186,10 +192,12 @@ void AVoxelChunk::GenerateAsync()
 		LocalTask->Execute();
 		AsyncTask(ENamedThreads::GameThread, [SafeThis, LocalTask, TaskId]()
 		{
-			if (SafeThis.IsValid() && TaskId == SafeThis->GenerationId)
+			if (SafeThis.IsValid() && TaskId == (uint64)SafeThis->GenerationId)
 				SafeThis->ApplyMesh(LocalTask);
 		});
 	});
+	
+	bInGenerateAsync = false;
 }
 
 void AVoxelChunk::GenerateSync()
@@ -537,7 +545,19 @@ void AVoxelChunk::DestroyAndRebuildMesh() { GenerateAsync(); }
 void AVoxelChunk::RebuildWaterMesh()
 {
 	if (!IsValid(WaterMesh) || !WaterData.bMeshDirty) return;
+	
+	// FIX WATER-REDUN: Skip rebuild if cell data hasn't actually changed.
+	// This avoids clearing sections and re-uploading identical GPU buffers
+	// when the simulation is active but this chunk's content is static.
+	const uint32 Hash = FCrc::MemCrc32(WaterData.Cells.GetData(), WaterData.Cells.Num() * sizeof(uint8));
+	if (Hash == LastWaterMeshHash)
+	{
+		WaterData.bMeshDirty = false;
+		return;
+	}
+	
 	BuildWaterMeshInternal();
+	LastWaterMeshHash = Hash;
 	WaterData.bMeshDirty = false;
 }
 
@@ -668,7 +688,16 @@ void AVoxelChunk::PostEditChangeProperty(FPropertyChangedEvent& E)
 // ── LOD Transition ────────────────────────────────────────────────────────────
 void AVoxelChunk::TransitionToLOD(int32 NewLOD)
 {
-	if (NewLOD==LOD || bGenerating) return;
+	if (NewLOD==LOD) return;
+	
+	if (bGenerating)
+	{
+		// FIX-SILENTDROP: if we are busy, queue the transition for the next Tick
+		bPendingLODTransition = true;
+		PendingLOD.Store(NewLOD);
+		return;
+	}
+	
 	PreviousMesh        = MeshOutput;
 	TargetLOD           = NewLOD;
 	MeshState           = EChunkMeshState::Transitioning;

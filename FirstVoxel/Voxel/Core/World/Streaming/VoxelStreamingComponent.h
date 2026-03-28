@@ -73,8 +73,8 @@ private:
     // ── Refactored Helpers for UpdateStreaming ────────────────────────────
     void CalculateSkyAltitude(const FVector& PlayerPos, const struct FVoxelGenerationConfig& Config);
     void GatherColumnHeights(const FIntVector& PlayerCoord, float ChunkWorldSize, const struct FVoxelGenerationConfig& Config, int32 Radius, TArray<FVoxelBiomeManager::FWeightsAndHeight>& OutColumns);
-    void BuildDesiredChunkSet(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32 Radius, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired);
-    void DiscoverHierarchical(const FIntVector& PlayerCoord, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, int32 Radius, TSet<FIntVector>& OutDesired);
+    void BuildDesiredChunkSet(const FIntVector& PlayerCoord, const FVector& PlayerPos, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, float ChunkWorldSize, float SkyAltWorld, float HalfThickCm, int32 Radius, int32& OutSkyZMin, int32& OutSkyZMax, TSet<FIntVector>& OutDesired);
+    void DiscoverHierarchical(const FIntVector& PlayerCoord, const FVector& PlayerPos, const TArray<FVoxelBiomeManager::FWeightsAndHeight>& CachedColumns, int32 Radius, TSet<FIntVector>& OutDesired);
     void UpdateLODs(const FVector& PlayerPos, const FIntVector& PlayerCoord, int32 SkyZMin, int32 SkyZMax, const TSet<FIntVector>& Desired);
     void RebuildGenerationQueue(const FVector& PlayerPos, const FVector& PlayerForward, const TSet<FIntVector>& Desired);
 };

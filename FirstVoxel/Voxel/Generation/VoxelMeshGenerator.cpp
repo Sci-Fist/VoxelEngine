@@ -219,28 +219,46 @@ void FVoxelMeshGenerator::GenerateMesh(
             if (CubeIndex == 0 || CubeIndex == 255) continue;
  
             FVector CellPos  = FVector::ZeroVector;
-            int32   EdgeCount = 0;
+            float   TotalW   = 0.f;
             for (int32 e = 0; e < 12; ++e)
             {
                 const int32 c0 = EdgeToCorner[e][0], c1 = EdgeToCorner[e][1];
                 if ((D[c0] > 0.f) != (D[c1] > 0.f))
                 {
-                    CellPos += InterpolateEdge(P[c0], D[c0], P[c1], D[c1]);
-                    ++EdgeCount;
+                    const FVector P_Interp = InterpolateEdge(P[c0], D[c0], P[c1], D[c1]);
+                    // ROOT FIX N1: Gradient-Aware Vertex Placement
+                    const float W = FMath::Max(0.001f, FMath::Abs(D[c1] - D[c0]));
+                    CellPos += P_Interp * W;
+                    TotalW  += W;
                 }
             }
- 
-            // FIX #12: guard against degenerate cells with zero cut edges
-            if (EdgeCount < 1) continue;
- 
-            CellPos /= (float)EdgeCount;
- 
+            if (TotalW < 0.001f) continue;
+            CellPos /= TotalW;
+
+            // ── In-Place Surface Alignment (v18.0) ──────────────────────────
+            // For nearly horizontal surfaces (floors/ceilings), we snap the vertex 
+            // to the weighted Z-crossing to eliminate micro-shimmer and gaps.
+            FVector N = ComputeNormal(Densities, X, Y, Z, EffectiveSize);
+            if (FMath::Abs(N.Z) > 0.985f)
+            {
+                CellPos.Z = 0.f; float Zw = 0.f;
+                for (int32 e = 8; e < 12; ++e) // Z-axis edges only
+                {
+                    const int32 c0 = EdgeToCorner[e][0], c1 = EdgeToCorner[e][1];
+                    if ((D[c0] > 0.f) != (D[c1] > 0.f))
+                    {
+                        const float w = FMath::Max(0.001f, FMath::Abs(D[c1] - D[c0]));
+                        CellPos.Z += InterpolateEdge(P[c0], D[c0], P[c1], D[c1]).Z * w;
+                        Zw += w;
+                    }
+                }
+                if (Zw > 0.001f) CellPos.Z /= Zw;
+            }
+
             // ── Directive C: TSR Jittering ──────────────────────────────────
-            // Jitter vertex based on FrameNumber for temporal super-resolution.
-            // Only applied for LOD 1+ to avoid sub-voxel artifacts on near terrain.
             if (InStepSize >= 2)
             {
-                const float JitterScale = 0.08f * EffVoxelSize; // 8% jitter
+                const float JitterScale = 0.08f * EffVoxelSize;
                 uint32 Seed = FrameNumber ^ (X * 73856093) ^ (Y * 19349663) ^ (Z * 83492791);
                 float jX = (((Seed >> 0)  & 0xFF) - 128) * (1.f/128.f) * JitterScale;
                 float jY = (((Seed >> 8)  & 0xFF) - 128) * (1.f/128.f) * JitterScale;
@@ -250,7 +268,7 @@ void FVoxelMeshGenerator::GenerateMesh(
 
             const int32 CI    = Idx(X, Y, Z, S);
             CellVertices[CI]  = CellPos;
-            CellNormals[CI]   = ComputeNormal(Densities, X, Y, Z, EffectiveSize);
+            CellNormals[CI]   = N;
             VertexIndices[CI] = 1;
         }
     });
@@ -282,7 +300,7 @@ void FVoxelMeshGenerator::GenerateMesh(
             const float WY = ChunkOrigin.Y + (CY - 1.f) * EffVoxelSize;
             W = FVoxelBiomeManager::GetBiomeWeightsStatic(WX, WY, Config);
         }
-        FLinearColor C(W.Forest, W.Desert, W.Peaks + W.Cliffs, W.Craters + W.Mesa);
+        FLinearColor C(W.Forest, W.Desert + W.Mesa, W.Peaks + W.Cliffs, W.Craters);
         ColumnColors[FlatIdx] = C.ToFColor(false);
     });
 
@@ -422,7 +440,7 @@ void FVoxelMeshGenerator::GenerateMesh(
         const bool bFlip = d13 < d02;
 
         // EmitTriangle handles internal indexing perfectly
-        if (bD0Solid)
+        if (!bD0Solid)
         {
             if (bFlip)
             {
@@ -450,6 +468,52 @@ void FVoxelMeshGenerator::GenerateMesh(
         }
     };
 
+    const float SkirtDepth = InVoxelSize * InStepSize * 2.0f; // Ensure overlap even at lower LODs
+
+    // FIX EMITSKIRT — three bugs fixed:
+    // (1) Body used Scratch-> (raw pointer, potentially null) instead of S_Buf (guaranteed valid ref).
+    // (2) Dead TArray<int32>& Map line also used Scratch-> — removed entirely (skirts bypass vertex map).
+    // (3) All 4 vertex-add lines were missing Dest.Tangents.Add(); CreateMeshSection requires
+    //     Vertices/Normals/UVs/VertexColors/Tangents arrays to have identical counts — mismatch = crash.
+    auto EmitSkirt = [&](int32 i0, int32 i1, int32 qX, int32 qY, bool bReverse)
+    {
+        // Guard: both cell vertices must exist (VertexIndices initialised to 0xFF = -1 via Memset)
+        if (S_Buf.VertexIndices[i0] == -1 || S_Buf.VertexIndices[i1] == -1) return;
+
+        // Skirts always go into FlatMesh for a consistent visual transition at chunk borders.
+        FVoxelMeshData& Dest = OutMesh.FlatMesh;
+
+        // Fetch surface vertices and normals from the valid scratch buffer reference.
+        const FVector  v0 = S_Buf.CellVertices[i0];
+        const FVector  v1 = S_Buf.CellVertices[i1];
+        const FVector  n0 = S_Buf.CellNormals[i0];
+        const FVector  n1 = S_Buf.CellNormals[i1];
+        const FColor&  VC = GetQuadColor(qX, qY);
+
+        // Drop-down vertices that seal the gap between adjacent chunks.
+        const FVector v0d = v0 - FVector(0, 0, SkirtDepth);
+        const FVector v1d = v1 - FVector(0, 0, SkirtDepth);
+
+        // FIX (3): add Tangents alongside every other per-vertex array.
+        // All six arrays must stay the same length or CreateMeshSection asserts.
+        static const FProcMeshTangent SkirtTangent(1, 0, 0);
+        int32 iv0  = Dest.Vertices.Add(v0);  Dest.Normals.Add(n0); Dest.VertexColors.Add(VC); Dest.UVs.Add(MakeUV(v0));  Dest.Tangents.Add(SkirtTangent);
+        int32 iv1  = Dest.Vertices.Add(v1);  Dest.Normals.Add(n1); Dest.VertexColors.Add(VC); Dest.UVs.Add(MakeUV(v1));  Dest.Tangents.Add(SkirtTangent);
+        int32 iv0d = Dest.Vertices.Add(v0d); Dest.Normals.Add(n0); Dest.VertexColors.Add(VC); Dest.UVs.Add(MakeUV(v0d)); Dest.Tangents.Add(SkirtTangent);
+        int32 iv1d = Dest.Vertices.Add(v1d); Dest.Normals.Add(n1); Dest.VertexColors.Add(VC); Dest.UVs.Add(MakeUV(v1d)); Dest.Tangents.Add(SkirtTangent);
+
+        if (bReverse)
+        {
+            Dest.Triangles.Add(iv0); Dest.Triangles.Add(iv1d); Dest.Triangles.Add(iv1);
+            Dest.Triangles.Add(iv0); Dest.Triangles.Add(iv0d); Dest.Triangles.Add(iv1d);
+        }
+        else
+        {
+            Dest.Triangles.Add(iv0); Dest.Triangles.Add(iv1); Dest.Triangles.Add(iv1d);
+            Dest.Triangles.Add(iv0); Dest.Triangles.Add(iv1d); Dest.Triangles.Add(iv0d);
+        }
+    };
+
 
     // ── PASS 2: quad emission ─────────────────────────────────────────────
     for (int32 Z = 1; Z <= EffectiveSize; ++Z)
@@ -470,11 +534,24 @@ void FVoxelMeshGenerator::GenerateMesh(
               EmitQuad(Idx(X,Y,Z,S),Idx(X-1,Y,Z,S),Idx(X-1,Y,Z-1,S),Idx(X,Y,Z-1,S),
                        X,Y,D0>0.f,FVector(0,1,0)); }
 
-        // Z-axis edges
+        // Z-axis edges (Surfaces)
         { const float D0 = Densities[Idx(X,Y,Z,S)], D1 = Densities[Idx(X,Y,Z+1,S)];
-          if ((D0>0.f)!=(D1>0.f))
-              EmitQuad(Idx(X,Y,Z,S),Idx(X,Y-1,Z,S),Idx(X-1,Y-1,Z,S),Idx(X-1,Y,Z,S),
-                       X,Y,D0>0.f,FVector(0,0,1)); }
+          if ((D0>0.f)!=(D1>0.f)) {
+              const int32 ci0 = Idx(X,Y,Z,S);
+              const int32 ci1 = Idx(X,Y-1,Z,S);
+              const int32 ci2 = Idx(X-1,Y-1,Z,S);
+              const int32 ci3 = Idx(X-1,Y,Z,S);
+              EmitQuad(ci0, ci1, ci2, ci3, X, Y, D0>0.f, FVector(0,0,1));
+
+               // ── Skirting ────────
+              // FIX (1): was passing FVector Normal as qX arg (compile error — wrong type/count).
+              // Correct call passes cell X,Y ints for color lookup and explicit bReverse.
+              if (X == 1)             EmitSkirt(ci2, ci3, X, Y, D0 > 0.f);
+              if (X == EffectiveSize) EmitSkirt(ci0, ci1, X, Y, D0 <= 0.f);
+              if (Y == 1)             EmitSkirt(ci1, ci2, X, Y, D0 > 0.f);
+              if (Y == EffectiveSize) EmitSkirt(ci3, ci0, X, Y, D0 <= 0.f);
+          }
+        }
     }
 }
 }

@@ -1050,8 +1050,11 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 nYf = _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(FC.NoiseFrequency));
                 __m256 Base = FBM_AVX2(nXf, nYf, Zero, FC.Octaves, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves, PermTable);
                 
+                // FIX-SIMD-HEIGHTMIN-FOREST: Lerp(Min,Max,t) = Min + Range*t. SIMD was only
+                // computing Range*t, dropping the HeightMin baseline entirely.
                 __m256 Range = _mm256_set1_ps(FC.HeightMax - FC.HeightMin);
-                __m256 FH = _mm256_add_ps(SeaLevel, _mm256_mul_ps(Range, _mm256_mul_ps(_mm256_add_ps(Base, One), _mm256_set1_ps(0.5f))));
+                __m256 t_Forest = _mm256_mul_ps(_mm256_add_ps(Base, One), _mm256_set1_ps(0.5f));
+                __m256 FH = _mm256_add_ps(SeaLevel, _mm256_add_ps(_mm256_set1_ps(FC.HeightMin), _mm256_mul_ps(Range, t_Forest)));
                 
                 __m256 dXf = _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(FC.DetailFrequency));
                 __m256 dYf = _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(FC.DetailFrequency));
@@ -1064,20 +1067,21 @@ void EvaluateColumn_Skylands_AVX2(
 
         // 2. Desert
         {
-            __m256 Mask = _mm256_cmp_ps(Weights.Desert, _mm256_set1_ps(0.001f), _CMP_GT_OQ);
-            if (_mm256_movemask_ps(Mask))
-            {
-                const FDesertBiomeConfig& DC = Config.Desert;
-                __m256 nXf = _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(DC.NoiseFrequency));
-                __m256 nYf = _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(DC.NoiseFrequency));
-                __m256 Base = FBM_AVX2(nXf, nYf, _mm256_set1_ps(40.f), DC.Octaves, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves, PermTable);
-                
-                __m256 t = _mm256_max_ps(Zero, _mm256_mul_ps(_mm256_add_ps(Base, One), _mm256_set1_ps(0.5f)));
-                __m256 Shaped = t; // Pow approximation layout safely.
-                if (DC.Sharpness == 2.0f) Shaped = _mm256_mul_ps(t, t);
+        __m256 Mask = _mm256_cmp_ps(Weights.Desert, _mm256_set1_ps(0.001f), _CMP_GT_OQ);
+        if (_mm256_movemask_ps(Mask))
+        {
+        const FDesertBiomeConfig& DC = Config.Desert;
+        __m256 nXf = _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(DC.NoiseFrequency));
+        __m256 nYf = _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(DC.NoiseFrequency));
+        __m256 Base = FBM_AVX2(nXf, nYf, _mm256_set1_ps(40.f), DC.Octaves, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves, PermTable);
+        
+        __m256 t = _mm256_max_ps(Zero, _mm256_mul_ps(_mm256_add_ps(Base, One), _mm256_set1_ps(0.5f)));
+        __m256 Shaped = t;
+        if (DC.Sharpness == 2.0f) Shaped = _mm256_mul_ps(t, t);
 
-                __m256 Range = _mm256_set1_ps(DC.HeightMax - DC.HeightMin);
-                __m256 DH = _mm256_add_ps(SeaLevel, _mm256_mul_ps(Range, Shaped));
+        // FIX-SIMD-HEIGHTMIN-DESERT: Add HeightMin baseline (was dropped).
+        __m256 Range = _mm256_set1_ps(DC.HeightMax - DC.HeightMin);
+                __m256 DH = _mm256_add_ps(SeaLevel, _mm256_add_ps(_mm256_set1_ps(DC.HeightMin), _mm256_mul_ps(Range, Shaped)));
                 
                 __m256 dXf = _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(DC.RippleFrequency));
                 __m256 dYf = _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(DC.RippleFrequency));
@@ -1101,8 +1105,10 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 t = _mm256_max_ps(Zero, _mm256_mul_ps(_mm256_add_ps(Base, One), _mm256_set1_ps(0.5f)));
                 __m256 Shaped = _mm256_mul_ps(_mm256_mul_ps(t, t), _mm256_sqrt_ps(t)); // t^2.5 layout safely securely.
 
+                // FIX-SIMD-HEIGHTMIN-PEAKS: Add HeightMin baseline (was 3000cm, dropped entirely).
+                // At Shaped=0 scalar gives SeaLevel+3000, SIMD gave SeaLevel+0 — 30m lower.
                 __m256 Range = _mm256_set1_ps(PC.HeightMax - PC.HeightMin);
-                __m256 PH = _mm256_add_ps(SeaLevel, _mm256_mul_ps(Range, Shaped));
+                __m256 PH = _mm256_add_ps(SeaLevel, _mm256_add_ps(_mm256_set1_ps(PC.HeightMin), _mm256_mul_ps(Range, Shaped)));
                 
                 __m256 dXf = _mm256_mul_ps(_mm256_add_ps(X_v, OffX), _mm256_set1_ps(PC.NoiseFrequency*4.f));
                 __m256 dYf = _mm256_mul_ps(_mm256_add_ps(Y_v, OffY), _mm256_set1_ps(PC.NoiseFrequency*4.f));
@@ -1256,7 +1262,7 @@ void EvaluateColumn_Skylands_AVX2(
                 __m256 dY = _mm256_sub_ps(Y_v, _mm256_set1_ps(CRC.ForcedCraterCenter.Y));
                 __m256 Dist = _mm256_sqrt_ps(_mm256_fmadd_ps(dX, dX, _mm256_mul_ps(dY, dY)));
                 
-                __m256 Radius = _mm256_set1_ps(CRC.CentralCraterRadius);
+                __m256 Radius = _mm256_max_ps(_mm256_set1_ps(0.001f), _mm256_set1_ps(CRC.CentralCraterRadius));
                 __m256 NormDist = _mm256_div_ps(Dist, Radius);
 
                 __m256 CenterH_v = _mm256_set1_ps(CenterH);

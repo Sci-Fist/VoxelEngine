@@ -118,8 +118,27 @@ static FCraterSetup ComputeCraterSetup(float X, float Y,
 //  [0.93,1.00] Drop  Outer dropoff back to BasePlains              (SmoothStep)
 //  Beyond 1.00 Ejecta (handled by ApplyEjectaBlanket)
 // ─────────────────────────────────────────────────────────────────────────────
+// FIX COMPILEERROR-BOWL: The other AI stripped the function signature from
+// ComputeBowlProfile, leaving only the body as bare namespace-scope code.
+// result: return statements at namespace scope = compile error, and
+// GetCraterHeight's call to ComputeBowlProfile = unresolved symbol linker error.
 static float ComputeBowlProfile(const FCraterSetup& S, const FCraterBiomeConfig& CRC, float BaseHeight)
 {
+    /**
+     * @brief Impact Profile LUT (Look-Up Table)
+     * Maps normalized distance (0.0 to 1.8) to a vertical displacement multiplier.
+     * 
+     * Displacement Logic:
+     * - Mult < 0: Lerp between BasePlains and CraterFloor (-1.0 = deep floor)
+     * - Mult > 0: Lerp between BasePlains and RimPeak   (+1.35 = highest rim)
+     * 
+     * Geometric Zones (assuming MaxDist = 1.8):
+     * [Indices 00-03] Flat Bowl Floor (Mult -1.0)
+     * [Indices 04-10] Inner Sloping Wall (Continuous rise to rim)
+     * [Indices 11-16] Rim Crest (Peak at 1.35, approx 12% of total radius)
+     * [Indices 17-23] Outer Dropoff (Descending back to terrain level)
+     * [Indices 24-31] Neutral Zone (Blend-out for secondary features)
+     */
     static const float LUT[32] = {
         -1.00f, -1.00f, -1.00f, -0.99f, -0.97f, -0.94f, -0.88f, -0.78f, -0.64f, -0.45f, -0.15f,  0.20f,
          0.55f,  0.90f,  1.15f,  1.32f,  1.35f,  1.28f,  1.10f,  0.85f,  0.55f,  0.28f,  0.10f,  0.03f,
@@ -222,36 +241,70 @@ static void ApplyFloorTexture(float& H, const FCraterSetup& S, const FCraterBiom
 
     H += BG_FBM(S.nX * CRC.BuildingNoiseFrequency, S.nY * CRC.BuildingNoiseFrequency, 0.f,
                 2, 2.f, 0.5f, 4) * NoiseAmp * 0.25f;
+
+    // v18.1: Impact Melt Fracture Noise
+    if (CRC.CraterStyle == ECraterStyle::Meteor && CRC.bEnableImpactMelt && S.NormDist < CRC.MeltSheetRadiusFraction * FloorEnd)
+    {
+        const float FracN = BG_Noise(S.nX * 0.008f, S.nY * 0.008f, 999.f);
+        if (FracN > 0.75f)
+        {
+            const float CrackDepth = (FracN - 0.75f) * 400.f; // 4m deep cracks
+            H -= CrackDepth * (1.f - S.NormDist / (CRC.MeltSheetRadiusFraction * FloorEnd));
+        }
+    }
 }
 
 // ── Ejecta blanket ────────────────────────────────────────────────────────────
 // Adds height just beyond the rim. Proportional to rim height, not to depth,
 // so it scales correctly with the new smaller rim parameter.
+// ── Ejecta blanket ────────────────────────────────────────────────────────────
+// Adds additional height and 'blocks' just beyond the rim.
+// Logic: Starts where the LUT dropoff ends (approx NormDist 1.45).
+// ── Rim Debris (v17.0) ───────────────────────────────────────────────────────
+// Adds small, sharp rock outcroppings to the inner face of the rim.
+static void ApplyRimDebris(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
+{
+    // Only in the inner rim zone (0.65 - 0.95)
+    if (S.NormDist < 0.65f || S.NormDist > 1.00f) return;
+
+    const float RN = BG_Noise(S.nX * 0.082f, S.nY * 0.082f, 444.f);
+    if (RN > 0.85f)
+    {
+        const float Strength = (RN - 0.85f) / 0.15f;
+        // Sharper spikes than standard ejecta
+        const float SpikeFade = FMath::SmoothStep(0.65f, 0.70f, S.NormDist) * FMath::SmoothStep(1.00f, 0.90f, S.NormDist);
+        H += Strength * 450.f * SpikeFade;
+    }
+}
+
 static void ApplyEjectaBlanket(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
-    const float EjectaStart = 1.00f;
+    const float EjectaStart = 1.45f; 
     const float EjectaEnd   = EjectaStart + CRC.EjectaBlanketWidth;
     if (S.NormDist < EjectaStart || S.NormDist > EjectaEnd) return;
 
+    // t=0 at start of blanket, t=1 at end
     const float t    = (S.NormDist - EjectaStart) / (EjectaEnd - EjectaStart);
     const float Fade = FMath::Pow(1.f - t, CRC.EjectaFadeExponent);
 
-    // Primary blanket lift — proportional to actual rim height (not depth)
+    // Primary blanket lift — proportional to rim height
     H += S.RimHeight * CRC.EjectaThickness * Fade;
 
-    // Scattered ejecta blocks
+    // Scattered blocks (boulders) — only in thickest part of blanket
     const float BN = BG_Noise(S.nX * CRC.EjectaBlockFrequency, S.nY * CRC.EjectaBlockFrequency, 0.f);
-    if (BN > 0.75f)
+    if (BN > 0.70f)
     {
-        const float BlockH = (BN - 0.75f) / 0.25f;
-        H += BlockH * CRC.EjectaBlockAmplitude * Fade * FMath::SmoothStep(0.f, 0.05f, t) * FMath::SmoothStep(0.8f, 0.4f, t);
+        const float BlockH = (BN - 0.70f) / 0.30f;
+        // Smoothly fade blocks in and out based on distance (t)
+        const float BlockFade = Fade * FMath::SmoothStep(0.f, 0.15f, t) * FMath::SmoothStep(1.0f, 0.6f, t);
+        H += BlockH * CRC.EjectaBlockAmplitude * BlockFade;
     }
 
-    // Overturned strata ripples close to rim
-    if (t < 0.35f)
+    // Overturned strata ripples (closer to impact point, fading out)
+    if (t < 0.50f)
     {
         const float SN = BG_Noise(S.nX * CRC.OverturnedStrataFrequency, S.nY * CRC.OverturnedStrataFrequency, 0.f);
-        H += FMath::Max(0.f, SN) * CRC.OverturnedStrataAmplitude * (1.f - t / 0.35f) * Fade;
+        H += FMath::Max(0.f, SN) * CRC.OverturnedStrataAmplitude * (1.f - t / 0.50f) * Fade;
     }
 }
 
@@ -259,7 +312,7 @@ static void ApplyEjectaBlanket(float& H, const FCraterSetup& S, const FCraterBio
 static void ApplyEjectaRays(float& H, const FCraterSetup& S, const FCraterBiomeConfig& CRC)
 {
     if (CRC.CraterStyle != ECraterStyle::Meteor || !CRC.bEnableEjectaRays) return;
-    const float RayStart = 1.00f;
+    const float RayStart = 1.40f; // Start just before blanket
     const float RayEnd   = CRC.EjectaRayExtent;
     if (S.NormDist < RayStart || S.NormDist >= RayEnd) return;
 
@@ -380,15 +433,20 @@ float FVoxelBiomeGenerators::GetCraterHeight(float X, float Y,
         ApplyFloorTexture(CraterH, S, CRC);
         ApplyMeteorUplift(CraterH, S, CRC);
         ApplyRimRoughness(CraterH, S, CRC);
+        ApplyRimDebris(CraterH, S, CRC); // v17.0 Addition
     }
 
-    // ── 2. Ejecta and rays ────────────────────────────────────────────────────
-    // SCRAPPED: Commented out to focus on central crater purely.
-    // ApplyEjectaBlanket(CraterH, S, CRC);
-    // ApplyEjectaRays(CraterH, S, CRC);
+    // ── 2. Ejecta and rays (High-Fidelity Restoration) ───────────────────────
+    ApplyEjectaBlanket(CraterH, S, CRC);
+    ApplyEjectaRays(CraterH, S, CRC);
 
-    // ── 3. Secondary and Tertiary craters ─────────────────────────────────────
-    // SCRAPPED: Retaining only solitary central crater.
+    // ── 3. Secondary and Tertiary craters (High-Fidelity Restoration) ────────
+    float SecH = 0.f, SecW = 0.f;
+    if (TryApplySecondaryCrater(S.nX, S.nY, S.Dist, S.BasePlains, CRC, SecH, SecW))
+    {
+        CraterH = FMath::Lerp(CraterH, SecH, SecW);
+    }
+    ApplyTertiaryCraters(CraterH, S.nX, S.nY, S.Dist, S.BasePlains, CRC);
 
     // ── 5. Blend crater into surrounding terrain ──────────────────────────────
     // FIX: Lifted to 1.10f so outer slope finishes descending to avoid "melting" effect.

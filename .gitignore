@@ -6,3 +6,5 @@ Log/
 convo/
 build_log*.txt
 build_output.txt
+~
+~/*

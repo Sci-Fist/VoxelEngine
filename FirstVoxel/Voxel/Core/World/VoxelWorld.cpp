@@ -111,8 +111,10 @@ void AVoxelWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
         GenerationQueue.Empty();
     }
     
+    // Purge orphaned density buffers from the global pools
+    FVoxelGeneratorTask::ClearGeneratorPools();
+    
     // Spinlock the Game Thread during exit to prevent DLL unload while AsyncTasks are still active.
-    // Limits wait to 2 seconds to avoid softlocking the editor exit process.
     const double WaitStart = FPlatformTime::Seconds();
     while (ActiveGenerations > 0 && (FPlatformTime::Seconds() - WaitStart) < 2.0)
     {
@@ -138,7 +140,10 @@ void AVoxelWorld::Tick(float DeltaTime)
             if (HUD->bShowLoadBar)
             {
                 const int32 TotalQ = GenerationQueue.Num();
-                if (!IsWaitingForInitialSpawn() && TotalQ == 0 && ActiveGenerations == 0)
+                // FIX-LOADBAR-RACE: GenerationQueue is empty BETWEEN GenerateWorldDeferred
+                // launching the discovery async task AND it writing results back on GameThread.
+                // Without bGenerationActive check, the bar dismissed in that window (frame 1).
+                if (!IsWaitingForInitialSpawn() && TotalQ == 0 && ActiveGenerations == 0 && !bGenerationActive.Load())
                 {
                     HUD->LoadProgress = 1.f;
                     HUD->bShowLoadBar = false;
@@ -150,29 +155,69 @@ void AVoxelWorld::Tick(float DeltaTime)
                 }
             }
 
-    if (ActiveGenerations >= MaxConcurrentGenerations) return;
-    for (int32 i = DirtyRebuildQueue.Num()-1; i >= 0; --i)
+    if (DirtyRebuildQueue.Num() > 0)
     {
-        const FIntVector Coord = DirtyRebuildQueue[i];
-        AVoxelChunk** PP = LoadedChunks.Find(Coord);
-        if (!PP || !(*PP)) { DirtyRebuildQueue.RemoveAtSwap(i); continue; }
-        AVoxelChunk* Chunk = *PP;
-        if (Chunk->IsGenerating()) continue;
-        DirtyRebuildQueue.RemoveAtSwap(i);
-        if (ActiveGenerations >= MaxConcurrentGenerations) { DirtyRebuildQueue.Add(Coord); break; }
-        Chunk->MarkMeshDirty(false);
-        ActiveGenerations += 1;
-        ActiveChunkGenerations.Add(Chunk);
+        int32 WriteIdx = 0;
+        bool bMetQuota = (ActiveGenerations >= MaxConcurrentGenerations);
 
-        TWeakObjectPtr<AVoxelWorld> W(this);
-        TWeakObjectPtr<AVoxelChunk> C(Chunk);
-        Chunk->OnGenerationComplete = [W, C](){ 
-            if (AVoxelWorld* S=W.Get()) {
-                S->ActiveGenerations -= 1;
-                if (C.IsValid()) S->ActiveChunkGenerations.Remove(C.Get());
-            } 
-        };
-        Chunk->GenerateAsync();
+        for (int32 ReadIdx = 0; ReadIdx < DirtyRebuildQueue.Num(); ++ReadIdx)
+        {
+            const FIntVector Coord = DirtyRebuildQueue[ReadIdx];
+            bool bKeepInQueue = true;
+
+            if (!bMetQuota)
+            {
+                AVoxelChunk** PP = LoadedChunks.Find(Coord);
+                if (!PP || !(*PP))
+                {
+                    // Chunk is gone, don't keep in queue
+                    bKeepInQueue = false;
+                }
+                else
+                {
+                    AVoxelChunk* Chunk = *PP;
+                    if (Chunk->IsGenerating())
+                    {
+                        // Still generating, keep in queue for next tick
+                        bKeepInQueue = true;
+                    }
+                    else
+                    {
+                        // Ready for rebuild!
+                        Chunk->MarkMeshDirty(false);
+                        ActiveGenerations += 1;
+                        ActiveChunkGenerations.Add(Chunk);
+
+                        TWeakObjectPtr<AVoxelWorld> W(this);
+                        TWeakObjectPtr<AVoxelChunk> C(Chunk);
+                        Chunk->OnGenerationComplete = [W, C]() {
+                            if (AVoxelWorld* S = W.Get()) {
+                                S->ActiveGenerations -= 1;
+                                if (C.IsValid()) S->ActiveChunkGenerations.Remove(C.Get());
+                            }
+                        };
+                        Chunk->GenerateAsync();
+                        
+                        bKeepInQueue = false;
+                        if (ActiveGenerations >= MaxConcurrentGenerations) bMetQuota = true;
+                    }
+                }
+            }
+
+            if (bKeepInQueue)
+            {
+                if (WriteIdx != ReadIdx)
+                {
+                    DirtyRebuildQueue[WriteIdx] = Coord;
+                }
+                WriteIdx++;
+            }
+        }
+
+        if (WriteIdx != DirtyRebuildQueue.Num())
+        {
+            DirtyRebuildQueue.SetNum(WriteIdx, EAllowShrinking::No);
+        }
     }
 }
 
@@ -260,15 +305,36 @@ FString AVoxelWorld::GetGenerationStatusString() const {
 }
 
 void AVoxelWorld::OnConstruction(const FTransform& T) { Super::OnConstruction(T); if (!bInitialized && ChunkSize > 0) { DataMap.Init(ChunkSize); bInitialized = true; } }
-void AVoxelWorld::MarkChunkDirty(const FIntVector& C) {}
+void AVoxelWorld::MarkChunkDirty(const FIntVector& C)
+{
+    DirtyRebuildQueue.AddUnique(C);
+}
 
 void AVoxelWorld::OnInitialSpawnComplete()
 {
-    bWaitingForInitialSpawn = false;
+    if (SpawnHandlerComponent) SpawnHandlerComponent->SetWaitingForInitialSpawn(false);
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Initial spawn complete."));
 }
 
-bool AVoxelWorld::IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
+bool AVoxelWorld::IsWaitingForInitialSpawn() const 
+{ 
+    return SpawnHandlerComponent ? SpawnHandlerComponent->IsWaitingForInitialSpawn() : false; 
+}
+
+void AVoxelWorld::SetWaitingForInitialSpawn(bool bWait)
+{
+    if (SpawnHandlerComponent) SpawnHandlerComponent->SetWaitingForInitialSpawn(bWait);
+}
+
+int32 AVoxelWorld::GetInitialSpawnReadyCount() const
+{
+    return SpawnHandlerComponent ? SpawnHandlerComponent->GetCollisionReadyCount() : 0;
+}
+
+int32 AVoxelWorld::GetInitialSpawnTotalCount() const
+{
+    return SpawnHandlerComponent ? SpawnHandlerComponent->GetTotalCollisionCount() : 0;
+}
 void AVoxelWorld::SaveCurrentToPreset() {}
 void AVoxelWorld::LoadFromPreset() {}
 

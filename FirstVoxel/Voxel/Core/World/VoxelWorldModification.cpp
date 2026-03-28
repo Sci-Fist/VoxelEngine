@@ -124,10 +124,13 @@ FVector AVoxelWorld::FindCraterSpawnLocation(
 {
     if (!GetWorld()) return StartPos;
 
-    const float SearchMax = FMath::Max(CraterSpawnSearchRadius, 200000.f);
-    const float MinWeight = CraterSpawnMinWeight;
-    const float CellSz    = 100000.f;
-    const FVector Off     = Config.GetSeedOffset();
+    TRACE_CPUPROFILER_EVENT_SCOPE(AVoxelWorld::FindCraterSpawnLocation);
+
+    const float SearchMax  = FMath::Max(CraterSpawnSearchRadius, 10000.f);
+    const float SearchStep = FMath::Max(CraterSpawnSearchStep, 2000.f); 
+    const float MinWeight  = CraterSpawnMinWeight;
+    const float EarlyOutW  = 0.85f; // "Excellent" crater found, stop here
+    const FVector Off      = Config.GetSeedOffset();
 
     float   BestWeight  = -1.f;
     float   BestSurfH   = TNumericLimits<float>::Max();
@@ -135,69 +138,92 @@ FVector AVoxelWorld::FindCraterSpawnLocation(
 
     FVector CentroidSum = FVector::ZeroVector;
     int32   CentroidN   = 0;
-    static constexpr float WeightTol = 0.002f;
+    static constexpr float WeightTol = 0.005f;
 
-    for (float y = -SearchMax; y <= SearchMax; y += CellSz)
-    for (float x = -SearchMax; x <= SearchMax; x += CellSz)
+    // ── Spiral Search ────────────────────────────────────────────────────────
+    // Prioritizes craters closest to the player's intended start position.
+    int32 x = 0, y = 0, dx = 0, dy = -1;
+    const int32 NumSteps = FMath::CeilToInt(SearchMax / SearchStep);
+    const int32 MaxSamples = 2000; // Physical safety limit (approx 45x45 grid)
+    
+    for (int32 i = 0; i < (NumSteps * 2 + 1) * (NumSteps * 2 + 1); ++i)
     {
-        const float nX = StartPos.X + x + Off.X;
-        const float nY = StartPos.Y + y + Off.Y;
-        const int32 CX = FMath::FloorToInt(nX / CellSz);
-        const int32 CY = FMath::FloorToInt(nY / CellSz);
+        if (i >= MaxSamples) break;
 
-        const float COffX = FVoxelBiomeGenerators::FastNoise3D(CX*13.f, CY*11.f, 500.f)*0.35f*CellSz;
-        const float COffY = FVoxelBiomeGenerators::FastNoise3D(CX*13.f, CY*11.f, 600.f)*0.35f*CellSz;
-        const FVector Candidate(
-            (CX+0.5f)*CellSz + COffX - Off.X,
-            (CY+0.5f)*CellSz + COffY - Off.Y,
-            StartPos.Z);
+        const float CandidateX = StartPos.X + (x * SearchStep);
+        const float CandidateY = StartPos.Y + (y * SearchStep);
+        
+        // Random jitter within the cell to avoid aliasing artifacts in the noise lookup
+        const int32 CX = FMath::FloorToInt((CandidateX + Off.X) / SearchStep);
+        const int32 CY = FMath::FloorToInt((CandidateX + Off.Y) / SearchStep);
+        const float JX = FVoxelBiomeGenerators::FastNoise3D(CX * 17.f, CY * 13.f, 500.f) * 0.4f * SearchStep;
+        const float JY = FVoxelBiomeGenerators::FastNoise3D(CX * 17.f, CY * 13.f, 600.f) * 0.4f * SearchStep;
+
+        const FVector Candidate(CandidateX + JX, CandidateY + JY, StartPos.Z);
 
         FVoxelGenerationConfig TempCfg = Config;
         TempCfg.Craters.ForcedCraterCenter = FVector2D(Candidate.X, Candidate.Y);
 
-        const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(
-            Candidate.X, Candidate.Y, TempCfg);
+        const FVoxelBiomeWeightMap W = FVoxelBiomeManager::GetBiomeWeightsStatic(Candidate.X, Candidate.Y, TempCfg);
         const float CratersW = W.GetWeight(EVoxelBiome::Craters);
-        if (CratersW < 0.15f) continue;
 
-        const float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(
-            Candidate.X, Candidate.Y, W, TempCfg);
-
-        // Avoid selecting craters that plunge below Sea Level (flooded spawn basins)
-        if (SurfH < Config.SeaLevel + 800.f) continue;
-
-        const bool bStrictlyBetter =
-            (CratersW > BestWeight + WeightTol) ||
-            (FMath::Abs(CratersW - BestWeight) <= WeightTol && SurfH < BestSurfH - 1.f);
-
-        const bool bInTieBand =
-            FMath::Abs(CratersW - BestWeight) <= WeightTol &&
-            FMath::Abs(SurfH - BestSurfH) <= 50.f;
-
-        if (bStrictlyBetter)
+        if (CratersW > 0.15f)
         {
-            BestWeight  = CratersW;
-            BestSurfH   = SurfH;
-            BestPos     = Candidate;
-            CentroidSum = Candidate;
-            CentroidN   = 1;
+            const float SurfH = FVoxelBiomeManager::GetSurfaceHeightStatic(Candidate.X, Candidate.Y, W, TempCfg);
+
+            // Avoid seleccionar craters that plunge below Sea Level (flooded spawn basins)
+            if (SurfH >= Config.SeaLevel + 500.f) 
+            {
+                const bool bStrictlyBetter =
+                    (CratersW > BestWeight + WeightTol) ||
+                    (FMath::Abs(CratersW - BestWeight) <= WeightTol && SurfH < BestSurfH - 1.f);
+
+                const bool bInTieBand =
+                    FMath::Abs(CratersW - BestWeight) <= WeightTol &&
+                    FMath::Abs(SurfH - BestSurfH) <= 100.f;
+
+                if (bStrictlyBetter)
+                {
+                    BestWeight  = CratersW;
+                    BestSurfH   = SurfH;
+                    BestPos     = Candidate;
+                    CentroidSum = Candidate;
+                    CentroidN   = 1;
+
+                    // ── Early Out ──────────────────────────────────────────
+                    // If we found a localized peak that is highly likely to 
+                    // be a great crater, stop searching further rings.
+                    if (BestWeight >= EarlyOutW) break;
+                }
+                else if (bInTieBand)
+                {
+                    CentroidSum += Candidate;
+                    CentroidN++;
+                }
+            }
         }
-        else if (bInTieBand)
+
+        // Spiral progression
+        if (x == y || (x < 0 && x == -y) || (x > 0 && x == 1 - y))
         {
-            CentroidSum += Candidate;
-            CentroidN++;
+            int32 temp = dx; dx = -dy; dy = temp;
         }
+        x += dx; y += dy;
     }
 
     if (BestWeight < MinWeight) return StartPos;
 
-    // // FIX N5: return the centroid of the high-weight plateau, not just BestPos
-    // if (CentroidN > 1)
-    // {
-    //     FVector Centroid = CentroidSum / (float)CentroidN;
-    //     Centroid.Z       = StartPos.Z; // preserve Z for later terrain height lookup
-    //     return Centroid;
-    // }
+    // ── Centroid Averaging (FIX N5 - Finalized) ─────────────────────────────
+    // If we have a cluster of samples near the crater peak, return their 
+    // center of mass. This places the player in the middle of the basin 
+    // plateau rather than on a potentially sharp edge of the detection grid.
+    if (CentroidN > 1)
+    {
+        FVector Centroid = CentroidSum / (float)CentroidN;
+        Centroid.Z = StartPos.Z; // Preserve Z for later terrain height lookup
+        return Centroid;
+    }
+
     return BestPos;
 }
 

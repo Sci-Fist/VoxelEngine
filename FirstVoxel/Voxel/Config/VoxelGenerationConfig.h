@@ -575,6 +575,15 @@ static FVoxelBiomeWaterConfig MakeCratersWaterDefaults()
 //  This is the root struct that drives the entire world.
 //  Exposed on AVoxelWorld and on UVoxelBiomeDataAsset presets.
 // ============================================================
+/**
+ * @struct FVoxelGenerationConfig
+ * @brief Global parameter set for the procedural generation pipeline.
+ *
+ * This structure contains all seeds, frequencies, amplitudes, and sub-struct 
+ * configs (Biomes, Craters, Skylands, Water) required to build the world. 
+ * Pass this as a const reference to any generation function to ensure 
+ * deterministic output.
+ */
 USTRUCT(BlueprintType)
 struct FVoxelGenerationConfig
 {

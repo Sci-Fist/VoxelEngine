@@ -253,32 +253,42 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
 
     for (const FSkylandIslandData& Isl : Cache.Islands)
     {
-        const float Margin = Isl.HalfThick * 0.4f;
-        if (Z < Isl.SkyAlt-Isl.HalfThick-Margin || Z > Isl.SkyAlt+Isl.HalfThick+Margin) continue;
+        // --- 1. Vertical Discovery & Falloff ────────────────────────────────
+        // Expand margin to 80% to ensure noise doesn't "flat-top" clip suddenly.
+        const float VerticalMargin = Isl.HalfThick * 0.8f;
+        const float ZDist = FMath::Abs(Z - Isl.SkyAlt);
+        const float ZMax  = Isl.HalfThick + VerticalMargin;
+        
+        if (ZDist > ZMax) continue;
 
-        const float tC = FMath::Clamp((Z-Isl.SkyAlt)/(Isl.HalfThick+Margin+1.f), -1.f, 1.f);
+        // Smoothly fade density as we approach the vertical bounds
+        const float VerticalFade = FMath::SmoothStep(ZMax, Isl.HalfThick * 0.5f, ZDist);
+
+        const float tC = FMath::Clamp((Z-Isl.SkyAlt)/(Isl.HalfThick+VerticalMargin+1.f), -1.f, 1.f);
         float Falloff;
-        if (tC >= 0.f) { const float FZ=0.35f; Falloff=(tC<FZ)?1.f:FMath::SmoothStep(0.f,1.f,1.f-(tC-FZ)/(1.f-FZ)); }
+        if (tC >= 0.f)
+        {
+            const float FZ = 0.35f; 
+            Falloff = (tC < FZ) ? 1.f : FMath::SmoothStep(1.f, 0.f, (tC-FZ)/(1.f-FZ));
+        }
         else 
         { 
             const float BottomWarp = BG_Noise(WX * 0.003f, WY * 0.003f, (WZ + 500.f) * 0.006f) * 0.20f;
             const float AdjustedTC = FMath::Max(0.f, -tC + BottomWarp);
-            Falloff = FMath::SmoothStep(0.f, 1.f, 1.f - FMath::Pow(AdjustedTC, 0.85f)); 
+            Falloff = FMath::SmoothStep(1.f, 0.f, FMath::Pow(AdjustedTC, 0.85f)); 
         }
-        Falloff = FMath::Lerp(FMath::SmoothStep(0.f,1.f,1.f-FMath::Pow(FMath::Abs(tC),0.6f)), Falloff, FMath::Max(0.40f,Isl.ShardT));
-        if (Isl.ShardT < 0.3f)
-        {
-            const float RF = FMath::SmoothStep(0.f,1.f,1.f-FMath::Pow(FMath::Abs(tC),FMath::Lerp(1.f,0.6f,Isl.ShardT)));
-            Falloff = FMath::Lerp(RF, Falloff, FMath::Lerp(0.8f,0.2f,Isl.ShardT));
-        }
+        
+        Falloff *= VerticalFade;
+        Falloff = FMath::Lerp(FMath::SmoothStep(1.f, 0.f, FMath::Pow(FMath::Abs(tC), 0.6f)), Falloff, FMath::Max(0.40f, Isl.ShardT));
+
         if (Falloff < 0.001f)
         {
-            MaxD = FMath::Max(MaxD, -1.8f-FMath::Max(0.f, BG_Noise(WX*0.002f,WY*0.002f,WZ*0.001f))
-                   * FMath::Lerp(0.10f, FMath::Lerp(0.50f,2.80f,Isl.HeightNorm), Isl.ShardT));
+            MaxD = FMath::Max(MaxD, -1.8f);
             continue;
         }
 
-        float QX=WX, QY=WY;
+        // --- 2. Horizontal Warp & Radial Falloff ────────────────────────────
+        float QX = WX, QY = WY;
         if (SC.bEnableDomainWarping)
         {
             const float WF = SC.DomainWarpFrequency;
@@ -286,14 +296,23 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
             QY += BG_Noise(QX*WF+50.f, QY*WF+10.f, WZ*WF+100.f)*SC.DomainWarpStrength;
         }
 
+        // Calculate horizontal distance from island center (including warp)
+        const float dX = (QX - (Isl.CX2 + Off.X));
+        const float dY = (QY - (Isl.CY2 + Off.Y));
+        const float Dist = FMath::Sqrt(dX*dX + dY*dY);
+        
+        // Radial Fade: ensure islands fade to zero at their radius boundary
+        const float RadialFade = FMath::SmoothStep(Isl.IslandSize, Isl.IslandSize * 0.85f, Dist);
+        if (RadialFade <= 0.001f) continue;
+
+        // --- 3. Noise Composition ──────────────────────────────────────────
         float SD = 0.f;
         const float ZFS = FMath::Lerp(0.50f, 0.05f, Isl.ShardT);
         if (Config.Performance.bEnable3DSkylandNoise || Isl.ShardT < 0.5f)
-            SD = BG_Noise(QX*Isl.Freq*0.6f, QY*Isl.Freq*0.6f, WZ*Isl.Freq*ZFS)
-               * FMath::Lerp(0.55f, 0.25f, Isl.ShardT);
+            SD = BG_Noise(QX*Isl.Freq*0.6f, QY*Isl.Freq*0.6f, WZ*Isl.Freq*ZFS) * FMath::Lerp(0.55f, 0.25f, Isl.ShardT);
 
         const int32 Oct2D = FMath::Clamp(FMath::Min((int32)SC.ShapeOctaves,4), 1, Config.Performance.MaxNoiseOctaves);
-        const float SZ = WZ*Isl.Freq; // FIX: Keep 3D noise enabled always so walls are not extruded cylinders (no continuous slabs)
+        const float SZ = WZ*Isl.Freq;
         const float Shape = BG_FBM(QX*Isl.Freq, QY*Isl.Freq, SZ, Oct2D, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves) + SD;
 
         float RD = 0.f;
@@ -304,22 +323,25 @@ float FVoxelBiomeGenerators::GetSkylandDensityFromCache(
                            2, 2.f, 0.5f, Config.Performance.MaxNoiseOctaves)) * (1.f-RZN) * 0.4f * Falloff;
         }
 
-        // Taper bottom radius inwards to create a bulbous cone/keel shape (from sketch)
         float Taper = 0.f;
         if (tC < 0.0f) 
         {
-            const float TaperAmt = 0.50f; // Increase max taper offset at the bottom tip
-            const float N = -tC; // goes from 0.0 at center to 1.0 at absolute bottom
-            Taper = FMath::Pow(N, 2.0f) * TaperAmt; // Concave/bulbous bow out curves inwards beautifully
+            const float TaperAmt = 0.50f;
+            const float N = -tC; 
+            Taper = FMath::Pow(N, 2.0f) * TaperAmt;
         }
 
-        float D = FMath::SmoothStep(Isl.Threshold + Taper, Isl.Threshold+0.4f + Taper, Shape)*Falloff*2.5f - (1.f-Falloff)*1.8f + RD;
-        const float BU = FMath::Max(0.f, BG_Noise(WX*0.002f,WY*0.002f,WZ*0.001f))
-                        * FMath::Lerp(0.10f, FMath::Lerp(0.50f,2.80f,Isl.HeightNorm), Isl.ShardT);
-        float PM = 1.f;
-        if (Isl.ShardT > 0.5f && tC > 0.f) PM = FMath::SmoothStep(0.15f,0.45f,1.f-tC);
-        D -= BU*PM;
+        // Apply all falloffs to the final density
+        float D = FMath::SmoothStep(Isl.Threshold + Taper, Isl.Threshold+0.4f + Taper, Shape) * Falloff * RadialFade * 2.5f 
+                  - (1.f - (Falloff * RadialFade)) * 1.8f + RD;
 
+        const float BU = FMath::Max(0.f, BG_Noise(WX*0.002f, WY*0.002f, WZ*0.001f))
+                        * FMath::Lerp(0.10f, FMath::Lerp(0.50f, 2.80f, Isl.HeightNorm), Isl.ShardT);
+        
+        float PM = 1.f;
+        if (Isl.ShardT > 0.5f && tC > 0.f) PM = FMath::SmoothStep(0.15f, 0.45f, 1.f - tC);
+        
+        D -= BU * PM;
         MaxD = FMath::Max(MaxD, D);
     }
 

@@ -18,13 +18,21 @@ FVoxelWaterSimulator::FVoxelWaterSimulator(int32 InChunkSize, float InVoxelSize)
 // ---------------------------------------------------------------------------
 void FVoxelWaterSimulator::RegisterChunk(const FIntVector& CC, FVoxelWaterData* D, int32 Gen)
 {
+    FScopeLock Lock(&MapLock);
     check(D);
     ChunkMap.Add(CC, { D, Gen, /*bSettled=*/false });
 }
 
 void FVoxelWaterSimulator::UnregisterChunk(const FIntVector& CC)
 {
+    FScopeLock Lock(&MapLock);
     ChunkMap.Remove(CC);
+}
+
+bool FVoxelWaterSimulator::IsRegistered(const FIntVector& CC) const
+{
+    FScopeLock Lock(&const_cast<FVoxelWaterSimulator*>(this)->MapLock);
+    return ChunkMap.Contains(CC);
 }
 
 // ---------------------------------------------------------------------------
@@ -44,6 +52,7 @@ FIntVector FVoxelWaterSimulator::ToLocal(const FIntVector& WV) const
 
 uint8* FVoxelWaterSimulator::CellPtr(const FIntVector& WV)
 {
+    FScopeLock Lock(&MapLock);
     FChunkEntry* E = ChunkMap.Find(ToChunkCoord(WV));
     if (!E || !E->Data) return nullptr;
     const int32 Idx = LocalIdx(ToLocal(WV));
@@ -52,6 +61,7 @@ uint8* FVoxelWaterSimulator::CellPtr(const FIntVector& WV)
 
 const uint8* FVoxelWaterSimulator::CellPtrConst(const FIntVector& WV) const
 {
+    FScopeLock Lock(&const_cast<FVoxelWaterSimulator*>(this)->MapLock);
     const FChunkEntry* E = ChunkMap.Find(ToChunkCoord(WV));
     if (!E || !E->Data) return nullptr;
     const int32 Idx = LocalIdx(ToLocal(WV));
@@ -132,6 +142,7 @@ bool FVoxelWaterSimulator::IsSolid(const FIntVector& WV) const { return IsSolidA
 // ---------------------------------------------------------------------------
 const TArray<FIntVector>& FVoxelWaterSimulator::Step()
 {
+    FScopeLock Lock(&MapLock);
     DirtyArray.Reset();
     TSet<FIntVector> DirtySet;
 
@@ -141,8 +152,7 @@ const TArray<FIntVector>& FVoxelWaterSimulator::Step()
         FVoxelWaterData* D     = Entry.Data;
         if (!D) continue;
         if (!D->HasAnyWater()) continue;
-        // FIX-3: skip settled chunks — no cells changed last step;
-        // bSettled is reset by SetSource/SetFlowing when new water arrives.
+        // FIX-3: skip settled chunks — no cells changed last step
         if (Entry.bSettled) continue;
 
         const FIntVector Base(Pair.Key.X * ChunkSize,
@@ -159,8 +169,6 @@ const TArray<FIntVector>& FVoxelWaterSimulator::Step()
                 DirtySet.Add(Pair.Key);
         }
 
-        // FIX-3: if no new dirty coords were added during this chunk's loop
-        // and the chunk previously had no movement, mark it as settled.
         const bool bChunkMoved = DirtySet.Num() > PrevDirtyCount || DirtySet.Contains(Pair.Key);
         if (!bChunkMoved) Entry.bSettled = true;
     }

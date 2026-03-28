@@ -30,9 +30,8 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
     if (!World || !bWaitingForInitialSpawn) return;
 
     SpawnWaitAccum += DeltaTime;
-    // Magic Number 900.f: Maximum 15 minutes (900 seconds) wait to prevent infinite loading screens
-    // if chunks fall out of bounds or queue locks up entirely before initial spawn.
-    const bool bTimedOut = (SpawnWaitAccum > 900.f);
+    // Use private constant to prevent infinite loading screens
+    const bool bTimedOut = (SpawnWaitAccum > MaxSpawnWaitTime);
 
     const int32 Total = InitialSpawnCoords.Num();
     bool bAllReady = bTimedOut;
@@ -40,23 +39,34 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
     if (!bTimedOut)
     {
         int32 ColReady = 0;
-        for (const FIntVector& C : InitialSpawnCoords)
-        {
-            if (AVoxelChunk*const* P = World->GetLoadedChunks()->Find(C))
-            {
-                if ((*P)->IsCollisionReady()) ColReady++;
-            }
-        }
         int32 VisReady = 0;
-        for (const FIntVector& C : InitialSpawnCoords_Visual)
+        
         {
-            if (AVoxelChunk*const* P = World->GetLoadedChunks()->Find(C))
+            // FIX-THREADSAFETY: Mandatory ReadLock on the World's chunk map during iteration.
+            // This prevents access violations if background streaming or editor actions
+            // modify the map while we are scanning for readiness.
+            FRWScopeLock Lock(World->LoadedChunksLock, SLT_ReadOnly);
+            const TMap<FIntVector, AVoxelChunk*>& Chunks = *World->GetLoadedChunks();
+
+            for (const FIntVector& C : InitialSpawnCoords)
             {
-                if ((*P)->IsReady()) VisReady++;
+                if (AVoxelChunk*const* P = Chunks.Find(C))
+                {
+                    if ((*P)->IsCollisionReady()) ColReady++;
+                }
+            }
+            
+            for (const FIntVector& C : InitialSpawnCoords_Visual)
+            {
+                if (AVoxelChunk*const* P = Chunks.Find(C))
+                {
+                    if ((*P)->IsReady()) VisReady++;
+                }
             }
         }
+
         CachedCollisionReadyCount = ColReady;
-        CachedVisualReadyCount = VisReady;
+        CachedVisualReadyCount    = VisReady;
 
         const int32 CollisionTotal = InitialSpawnCoords.Num();
         const int32 VisualTotal = InitialSpawnCoords_Visual.Num();
@@ -70,7 +80,8 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
             
             if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
             {
-                Player->SetActorLocation(FVector(ActualSpawnXY.X, ActualSpawnXY.Y, TargetCoordsZ + 200.f), false, nullptr, ETeleportType::TeleportPhysics);
+                // FIX-Z: Increased drop offset to 300.f to safely clear new ejecta boulders/rocks.
+                Player->SetActorLocation(FVector(ActualSpawnXY.X, ActualSpawnXY.Y, TargetCoordsZ + 300.f), false, nullptr, ETeleportType::TeleportPhysics);
                 Player->SetActorEnableCollision(true);
                 if (ACharacter* Char = Cast<ACharacter>(Player))
                 {
@@ -79,10 +90,6 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
             }
             bWaitingForInitialSpawn = false;
             if (WorldOwner.IsValid()) WorldOwner->OnInitialSpawnComplete();
-        }
-        else
-        {
-            SpawnDelayAccum = 0.f;
         }
     }
 
@@ -174,6 +181,7 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
 
 void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn);
     if (!WorldOwner.IsValid()) return;
 
     APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
@@ -254,6 +262,13 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     CachedVisualReadyCount = 0;
 
     bWaitingForInitialSpawn = true;
+    // FIX-SPAWN-SYNC: Propagate the waiting flag to AVoxelWorld so that
+    // DrainGenerationQueue fast-drain (2048 concurrent) and SpawnChunk LOD
+    // assignment (uses SpawnTargetPos not parked player Z) both activate.
+    // Without this both optimizations were dead code — World.bWaitingForInitialSpawn
+    // was never set true, so every initial chunk got LOD 2 (flat world) and
+    // generation ran at the slow 8/frame rate instead of 256/frame.
+    WorldOwner->SetWaitingForInitialSpawn(true);
 
     const FIntVector SpawnCoord = WorldOwner->WorldToChunkCoord(FVector(Pos.X, Pos.Y, TargetZ));
     const FIntVector GroundCoord = WorldOwner->WorldToChunkCoord(FVector(Pos.X, Pos.Y, Surface));

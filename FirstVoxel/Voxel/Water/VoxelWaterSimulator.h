@@ -7,8 +7,22 @@
 
 #include "CoreMinimal.h"
 #include "Math/IntVector.h"
+#include "HAL/CriticalSection.h"
 #include "Voxel/Water/VoxelWaterTypes.h"
 
+/**
+ * @class FVoxelWaterSimulator
+ * @brief High-performance cellular automata water simulation for the voxel world.
+ *
+ * This simulator manages a sparse grid of FVoxelWaterData blocks, executing 
+ * bit-packed flow logic (CA) on the game thread. It tracks "settled" chunks 
+ * to skip idle volumes and minimize CPU overhead.
+ * 
+ * Key Features:
+ * - Constant-time (O(1)) cell access via ChunkMap.
+ * - Dirty tracking for efficient mesh rebuilding in UVoxelWorldWaterComponent.
+ * - Thread-safe registration allowing background tasks to submit water sources.
+ */
 class FIRSTVOXEL_API FVoxelWaterSimulator
 {
 public:
@@ -17,7 +31,7 @@ public:
     // Registration
     void RegisterChunk  (const FIntVector& ChunkCoord, FVoxelWaterData* WaterData, int32 Generation);
     void UnregisterChunk(const FIntVector& ChunkCoord);
-    bool IsRegistered   (const FIntVector& ChunkCoord) const { return ChunkMap.Contains(ChunkCoord); }
+    bool IsRegistered   (const FIntVector& ChunkCoord) const;
 
     // Water cell management
     void  SetSource  (const FIntVector& WorldVoxel);
@@ -27,7 +41,11 @@ public:
     bool  IsWater    (const FIntVector& WorldVoxel) const;
     bool  IsSolid    (const FIntVector& WorldVoxel) const;
 
-    // FIX #38: returns const ref to reused member — no per-tick heap alloc
+    // FIX #38: returns const ref to reused member — MUST be called from GT
+    // after an async task is confirmed done.
+    // MUST be called from GT after an async task is confirmed done.
+    const TArray<FIntVector>& GetLastDirtyChunks() const { return DirtyArray; }
+
     const TArray<FIntVector>& Step();
 
     void ClearAll();
@@ -41,12 +59,17 @@ private:
         FVoxelWaterData* Data       = nullptr;
         int32            Generation = -1;
         // FIX-3: when true, Step() skips the 16³ voxel loop for this chunk.
-        // Reset to false by SetSource/SetFlowing whenever new water arrives.
         bool             bSettled   = false;
     };
+
+    /** Lock for ChunkMap access during Step() vs registration.
+     *  FCriticalSection on Windows wraps CRITICAL_SECTION which is re-entrant by the OS,
+     *  so nested acquisition from SimCell helpers inside Step() is safe. */
+    FCriticalSection MapLock;
+
     TMap<FIntVector, FChunkEntry> ChunkMap;
 
-    // FIX #38: reused each Step() to avoid per-tick TSet::Array() allocation
+    /** Reused each Step() to avoid per-tick TSet::Array() allocation */
     TArray<FIntVector> DirtyArray;
 
     FORCEINLINE FIntVector ToChunkCoord(const FIntVector& WV) const;

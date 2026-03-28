@@ -40,6 +40,7 @@ public:
     ~FVoxelGeneratorTask();
 
     void Execute();
+    static void ClearGeneratorPools();
     void Cancel() { bCancelled = true; }
     bool IsCancelled() const { return bCancelled; }
 

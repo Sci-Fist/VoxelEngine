@@ -21,12 +21,16 @@
 // → islands spawn 7500cm ABOVE the crater rim (12340cm) → visible floating islands.
 //
 // GetDensityFull fallback also fixed to use NeutralSurfaceHeight.
+//
+// GEOLOGICAL MICRO-DETAIL Pass (v17.0):
+//   Implemented ApplyGlobalBoulders and ApplySpeleothems to add micro-detail 
+//   (rocks, stalactites) to high-LOD chunks (StepSize=1).
 
-#include "Generation/VoxelDensityGenerator.h"
+#include "Voxel/Generation/VoxelDensityGenerator.h"
 #include "FirstVoxel.h"
-#include "Biomes/VoxelBiomeManager.h"
-#include "Biomes/VoxelBiomeGenerators.h"
-#include "Config/VoxelGenerationConfig.h"
+#include "Voxel/Biomes/VoxelBiomeManager.h"
+#include "Voxel/Biomes/VoxelBiomeGenerators.h"
+#include "Voxel/Config/VoxelGenerationConfig.h"
 
 // ============================================================
 //  IVoxelDensityProvider
@@ -56,8 +60,28 @@ FVoxelBiomeWeightMap FVoxelDensityGenerator::GetBiomeWeights(float X, float Y, c
 }
 
 // ============================================================
+//  Micro-Detail Helpers — forward declarations (defined after GetDensityFull)
+// ============================================================
+
+/** Remaps PerlinNoise3D [-1,1] output to [0,1] for threshold comparisons. */
+FORCEINLINE static float BG_Noise(float X, float Y, float Z)
+{
+    return FMath::PerlinNoise3D(FVector(X, Y, Z)) * 0.5f + 0.5f;
+}
+
+static void ApplyGlobalBoulders(float& D, const FVector& WorldPos,
+                                const FVoxelBiomeWeightMap& W,
+                                float SurfH, const FVoxelGenerationConfig& C);
+static void ApplySpeleothems(float& D, const FVector& WorldPos,
+                             float NeutralH, const FVoxelGenerationConfig& C);
+
+// ============================================================
 //  GetDensityFull — 4-layer composition
 // ============================================================
+/** 
+ * Main 5-layer density composition pipeline.
+ * Evaluates Surface, Caves, Bedrock, Skylands, and Micro-Detail in order.
+ */
 float FVoxelDensityGenerator::GetDensityFull(
     const FVector& WorldPos, const FVoxelBiomeWeightMap& Weights,
     float SurfaceHeight, float NeutralSurfaceHeight,
@@ -136,12 +160,26 @@ float FVoxelDensityGenerator::GetDensityFull(
                 X, Y, Z, NeutralSurfaceHeight, Weights, Config, StepSize);
     }
 
+    // ── Layer 5: Micro-Detail (v17.0) ────────────────────────────────────────
+    /**
+     * Micro-detail is strictly gated to LOD 0 (StepSize <= 1) to ensure zero 
+     * performance impact on distant streaming chunks.
+     */
+    if (StepSize <= 1)
+    {
+        ApplyGlobalBoulders(SurfD, WorldPos, Weights, SurfaceHeight, Config);
+        if (SurfD < 0.1f) // If inside cave air
+        {
+            ApplySpeleothems(SurfD, WorldPos, NeutralSurfaceHeight, Config);
+        }
+    }
+
     return FMath::Max(SkyD, SurfD);
 }
 
 // ============================================================
 //  SampleCaveNoise
-// ============================================================
+// ============================================
 float FVoxelDensityGenerator::SampleCaveNoise(
     const FVector& WorldPos, const FVector& SeedOff, const FVoxelGenerationConfig& Config)
 {
@@ -201,6 +239,13 @@ float FVoxelSurfacePass::EvaluateVoxel(const FVector& WorldPos,
             D += Ov * Near * OC.Amplitude * SteepW;
         }
     }
+
+    // ── Layer 5: Micro-Detail (v17.0) ─────────────────────────────────────────
+    if (Context.StepSize <= 1)
+    {
+        ApplyGlobalBoulders(D, WorldPos, Context.BiomeWeights, Context.SurfaceHeight, Config);
+    }
+
     return D;
 }
 
@@ -247,6 +292,13 @@ float FVoxelCavePass::EvaluateVoxel(const FVector& WorldPos,
             WorldPos.X, WorldPos.Y, WorldPos.Z, Context.NeutralSurfaceHeight, Config);
         D += FMath::Clamp(CD, -0.6f, 0.6f);
     }
+
+    // ── Layer 5: Micro-Detail (v17.0) ─────────────────────────────────────────
+    if (Context.StepSize <= 1 && D < 0.10f)
+    {
+        ApplySpeleothems(D, WorldPos, Context.NeutralSurfaceHeight, Config);
+    }
+
     if (WorldPos.Z < Context.BedrockHeight) D = 2.f;
     return D;
 }
@@ -303,4 +355,60 @@ float FVoxelSkylandPass::EvaluateVoxel(const FVector& WorldPos,
     }
 
     return FMath::Max(SkyD, CurrentDensity);
+}
+
+// =============================================================================
+//  MICRO-DETAIL IMPLEMENTATIONS
+// =============================================================================
+
+/** 
+ * Adds high-frequency rock outcroppings to the surface layer.
+ * Remaps BG_Noise relative to biome weights for peaks and cliffs.
+ */
+static void ApplyGlobalBoulders(float& D, const FVector& WorldPos, const FVoxelBiomeWeightMap& W, 
+                                float SurfH, const FVoxelGenerationConfig& C)
+{
+    // Skip if we're clearly below the surface crust
+    if (WorldPos.Z < SurfH - 800.f || WorldPos.Z > SurfH + 1200.f) return;
+
+    const float BFreq = 0.0025f;
+    const float BWeight = W.GetWeight(EVoxelBiome::Peaks) * 0.8f + W.GetWeight(EVoxelBiome::Cliffs) * 1.2f;
+    if (BWeight < 0.2f) return;
+
+    // BG_Noise already remaps [-1,1] -> [0,1]
+    const float Noise = BG_Noise(WorldPos.X * BFreq, WorldPos.Y * BFreq, WorldPos.Z * BFreq * 0.5f);
+    if (Noise > 0.88f)
+    {
+        const float Strength = (Noise - 0.88f) / 0.12f;
+        D += Strength * 0.45f * BWeight;
+    }
+}
+
+/** 
+ * Seeds stalactites and stalagmites in deep cavern air.
+ * Prevents surface breaches by anchoring to NeutralSurfaceHeight.
+ */
+static void ApplySpeleothems(float& D, const FVector& WorldPos, float NeutralH, 
+                             const FVoxelGenerationConfig& C)
+{
+    const FCrystalCavernsConfig& CVC = C.CaveCrystals;
+    
+    // Use deep cave threshold to ensure we don't break surface
+    const float DeepCaveZ = NeutralH - CVC.DepthStart;
+    if (WorldPos.Z > DeepCaveZ) return;
+
+    // Only apply to open air (D < 0) or thin boundaries
+    if (D > 0.1f) return;
+
+    const float SFreq = 0.004f;
+    const float Noise = BG_Noise(WorldPos.X * SFreq, WorldPos.Y * SFreq, WorldPos.Z * SFreq * 2.5f);
+    
+    // Remap noise [0,1] — speleothems appear at peak values > 0.92
+    if (Noise > 0.92f)
+    {
+        const float Strength = (Noise - 0.92f) / 0.08f;
+        // Add vertical bias to create spike-like shapes
+        const float Spikiness = FMath::Clamp(1.0f - FMath::Abs(FMath::Sin(WorldPos.Z * 0.01f)), 0.2f, 1.0f);
+        D += Strength * Spikiness * 0.65f;
+    }
 }

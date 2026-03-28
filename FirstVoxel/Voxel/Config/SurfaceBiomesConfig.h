@@ -130,124 +130,166 @@ struct FCraterBiomeConfig
 
     // ── Dimensions ────────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
-        meta=(ClampMin="5000.0", ToolTip="Config radius. S.CraterRadius = this * 0.5. 40000 gives 200m actual radius."))
+        meta=(ClampMin="5000.0", ToolTip="Radius of the central crater impact basin (cm). 40000 = approx 400m diameter."))
     float CentralCraterRadius = 60000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
-        meta=(ToolTip="Bowl floor depth below terrain surface (negative cm). Raised to -12000 for deep floors."))
+        meta=(ToolTip="Depth of the crater floor below surrounding terrain (negative cm). -25000 = 250m deep basin."))
     float CentralCraterDepth = -25000.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Dimensions",
-        meta=(ClampMin="0.0", ToolTip="Rim height above terrain (cm). Raised to 5000 for tall ridgelines."))
+        meta=(ClampMin="0.0", ToolTip="Height of the rim crest above the surrounding terrain level (cm)."))
     float CentralCraterRimHeight = 12000.f;
 
     // ── Rim ──────────────────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim", meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim", 
+        meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Relative length of the flat rim crest zone before the outer dropoff begins [0-1]."))
     float RimPeakLength = 0.08f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim",
-        meta=(ClampMin="0.0", ToolTip="Noise amplitude on the rim crest (cm)."))
+        meta=(ClampMin="0.0", ToolTip="Vertical amplitude of random jaggedness and slab offsets on the rim crest (cm)."))
     float RimNoiseAmplitude = 400.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim", meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Rim", 
+        meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Erosion factor for weathered craters. Reduces rim sharpness and fills floor slightly."))
     float RimErosion = 0.05f;
 
     // ── Central uplift ────────────────────────────────────────────────────────
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
-        meta=(ToolTip="Turned off by default so center remains a hollow flat basin bowl."))
+        meta=(ToolTip="Enable the central peak (uplift) common in complex impact craters."))
     bool bEnableCentralUplift = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
-        meta=(ClampMin="0.0", ClampMax="1.0"))
+        meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Height of the central uplift peak relative to the crater depth [0-1]."))
     float UpliftHeightFraction = 0.35f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift", meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift", 
+        meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Radius of the central uplift region relative to the total crater radius [0-1]."))
     float UpliftRadiusFraction = 0.20f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift", meta=(ClampMin="0.5", ClampMax="4.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift", 
+        meta=(ClampMin="0.5", ClampMax="4.0", ToolTip="Exponent for the uplift shape. 1.0 = cone, 2.0 = bell curve."))
     float UpliftShapeExponent = 1.5f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|Uplift",
+        meta=(ToolTip="Small-scale noise amplitude on the central uplift peak (cm)."))
     float UpliftNoiseAmplitude = 50.f;
 
     // ── Impact melt sheet ─────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt",
+        meta=(ToolTip="Enable the impact melt sheet: a glassy, smoother floor texture in the center of the crater."))
     bool bEnableImpactMelt = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt", meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt", 
+        meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Radius of the smooth melt sheet zone relative to the floor radius [0-1]."))
     float MeltSheetRadiusFraction = 0.55f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|ImpactMelt",
+        meta=(ToolTip="Noise amplitude for the impact melt floor texture (cm). Smaller = glassy surface."))
     float MeltFloorNoiseAmplitude = 20.f;
 
     // ── Ejecta rays ───────────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
+        meta=(ToolTip="Enable directional rays of ejecta material radiating from the impact point."))
     bool bEnableEjectaRays = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays", meta=(ClampMin="4", ClampMax="24"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays", 
+        meta=(ClampMin="4", ClampMax="24", ToolTip="Number of primary ejecta rays to generate."))
     int32 EjectaRayCount = 10;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
+        meta=(ToolTip="Angular width of each individual ejecta ray in radians."))
     float EjectaRayAngularWidth = 0.12f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
+        meta=(ToolTip="Vertical thickness of the ejecta rays close to the rim (cm)."))
     float EjectaRayHeight = 200.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Meteor|EjectaRays",
+        meta=(ToolTip="Maximum radial distance the rays extend beyond the rim (multiplier of crater radius)."))
     float EjectaRayExtent = 2.2f;
 
     // ── Ejecta blanket ────────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta",
+        meta=(ToolTip="Width of the continuous ejecta blanket beyond the rim (relative to radius)."))
     float EjectaBlanketWidth = 0.35f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta",
+        meta=(ToolTip="Thickness of the ejecta blanket near the rim crest as a fraction of rim height."))
     float EjectaThickness = 0.30f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta") float EjectaBlockFrequency     = 0.0015f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta") float EjectaBlockAmplitude     = 100.f;
-
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta", meta=(ClampMin="0.0", ClampMax="1.0"))
-    float EjectaBlockSize = 0.08f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta") float OverturnedStrataFrequency = 0.0025f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta",
+        meta=(ToolTip="Spatial frequency of scattered ejecta blocks (boulders) beyond the rim."))
+    float EjectaBlockFrequency     = 0.0015f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta",
-        meta=(ToolTip="Height of overturned strata ripples near rim (cm)."))
+        meta=(ToolTip="Maximum height of individual scattered ejecta blocks (cm)."))
+    float EjectaBlockAmplitude     = 100.f;
+
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta", 
+        meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Average size (radius) of scattered ejecta blocks [0-1]."))
+    float EjectaBlockSize = 0.08f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta",
+        meta=(ToolTip="Frequency of the overturned strata ripples (concentric waves) near the rim."))
+    float OverturnedStrataFrequency = 0.0025f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta",
+        meta=(ToolTip="Height of overturned strata ripples near the rim crest (cm)."))
     float OverturnedStrataAmplitude = 400.f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta", meta=(ClampMin="1.0", ClampMax="5.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Ejecta", 
+        meta=(ClampMin="1.0", ClampMax="5.0", ToolTip="Exponent for ejecta blanket falloff. Higher = thinner blanket far from rim."))
     float EjectaFadeExponent = 2.0f;
 
     // ── Secondary craters ─────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Secondary", meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Secondary", 
+        meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Density of medium-sized secondary impact craters in the ejecta zone."))
     float SecondaryCraterDensity = 0.7f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Secondary", meta=(ClampMin="1000.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Secondary", 
+        meta=(ClampMin="1000.0", ToolTip="Maximum radius for secondary craters (cm)."))
     float SecondaryCraterMaxRadius = 8000.f;
 
     // ── Tertiary craters ──────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Tertiary", meta=(ClampMin="0.0", ClampMax="1.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Tertiary", 
+        meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Density of small micro-craters on the rim and ejecta blanket."))
     float TertiaryCraterDensity = 0.6f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Tertiary") float TertiaryCraterMaxRadius = 2500.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Tertiary") float TertiaryCraterMinRadius = 600.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Tertiary",
+        meta=(ToolTip="Maximum radius for tertiary craters (cm)."))
+    float TertiaryCraterMaxRadius = 2500.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Tertiary",
+        meta=(ToolTip="Minimum radius for tertiary craters (cm)."))
+    float TertiaryCraterMinRadius = 600.f;
 
     // ── Distribution ──────────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution") float Frequency      = 0.00008f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution", meta=(ClampMin="-1.0", ClampMax="0.0")) float ImpactThreshold = -0.2f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution") float ImpactFrequency = 0.00015f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution",
+        meta=(ToolTip="Density frequency of autonomous craters across the map (spatial noise)."))
+    float Frequency      = 0.00008f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution", 
+        meta=(ClampMin="-1.0", ClampMax="0.0", ToolTip="Noise threshold for impact. Lower = more craters per square km."))
+    float ImpactThreshold = -0.2f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Distribution",
+        meta=(ToolTip="Frequency of the inner crater center variation noise."))
+    float ImpactFrequency = 0.00015f;
 
     // ── Floor detail ──────────────────────────────────────────────────────────
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Floor") float BuildingNoiseFrequency = 0.0006f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Floor",
+        meta=(ToolTip="Spatial frequency of rocky clusters on the crater floor."))
+    float BuildingNoiseFrequency = 0.0006f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Crater|Floor",
-        meta=(ToolTip="Floor noise amplitude (cm). Small = smooth glassy lake bed. Large = rough rocky floor."))
+        meta=(ToolTip="Amplitude of rocky floor clusters (cm). High = rough rubble, Low = smooth silt."))
     float BuildingNoiseAmplitude = 150.f;
 
     // ── Coordinate handshake ──────────────────────────────────────────────────
     UPROPERTY(VisibleAnywhere, Category="Crater|SpawnSystem",
-        meta=(ToolTip="Set automatically by spawn system. Do not edit manually."))
+        meta=(ToolTip="Dynamic world-space center of the current forced crater. Managed by the Spawn System."))
     FVector2D ForcedCraterCenter = FVector2D(0.f, 0.f);
 };
 

@@ -52,8 +52,13 @@
 struct FIRSTVOXEL_API FVoxelDensityGenerator : public IVoxelDensityProvider
 {
     // IVoxelDensityProvider
+    /** Basic density query (slow path - use GetDensityFull for performance). */
     virtual float              GetDensity    (float X, float Y, float Z, const FVoxelGenerationConfig& Config) override;
+    
+    /** Returns the combined surface height for a given 2D column. */
     virtual float              GetSurfaceHeight(float X, float Y, const FVoxelGenerationConfig& Config) override;
+    
+    /** Returns the biome weight distribution for a given 2D column. */
     virtual FVoxelBiomeWeightMap GetBiomeWeights(float X, float Y, const FVoxelGenerationConfig& Config) override;
 
     /**
