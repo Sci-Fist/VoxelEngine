@@ -110,6 +110,15 @@ void AVoxelWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
         FScopeLock Lock(&GenerationQueueLock);
         GenerationQueue.Empty();
     }
+    
+    // Spinlock the Game Thread during exit to prevent DLL unload while AsyncTasks are still active.
+    // Limits wait to 2 seconds to avoid softlocking the editor exit process.
+    const double WaitStart = FPlatformTime::Seconds();
+    while (ActiveGenerations > 0 && (FPlatformTime::Seconds() - WaitStart) < 2.0)
+    {
+        FPlatformProcess::Sleep(0.01f);
+    }
+    
     Super::EndPlay(EndPlayReason);
 }
 

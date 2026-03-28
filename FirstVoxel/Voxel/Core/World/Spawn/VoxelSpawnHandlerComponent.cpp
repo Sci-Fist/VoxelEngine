@@ -30,6 +30,8 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
     if (!World || !bWaitingForInitialSpawn) return;
 
     SpawnWaitAccum += DeltaTime;
+    // Magic Number 900.f: Maximum 15 minutes (900 seconds) wait to prevent infinite loading screens
+    // if chunks fall out of bounds or queue locks up entirely before initial spawn.
     const bool bTimedOut = (SpawnWaitAccum > 900.f);
 
     const int32 Total = InitialSpawnCoords.Num();
@@ -68,8 +70,7 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
             
             if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
             {
-                const FVector TargetPos = World->GetSpawnTargetPos();
-                Player->SetActorLocation(FVector(TargetPos.X, TargetPos.Y, TargetCoordsZ + 200.f), false, nullptr, ETeleportType::TeleportPhysics);
+                Player->SetActorLocation(FVector(ActualSpawnXY.X, ActualSpawnXY.Y, TargetCoordsZ + 200.f), false, nullptr, ETeleportType::TeleportPhysics);
                 Player->SetActorEnableCollision(true);
                 if (ACharacter* Char = Cast<ACharacter>(Player))
                 {
@@ -104,14 +105,13 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
         
         FVector HoverPos = SpawnPlayer->GetActorLocation();
         const FVoxelGenerationConfig EffConfig = WorldOwner->GetEffectiveConfig();
-        const FVector TargetPos = WorldOwner->GetSpawnTargetPos();
 
-        if (FMath::Abs(HoverPos.X - TargetPos.X) > 10.f ||
-            FMath::Abs(HoverPos.Y - TargetPos.Y) > 10.f ||
+        if (FMath::Abs(HoverPos.X - ActualSpawnXY.X) > 10.f ||
+            FMath::Abs(HoverPos.Y - ActualSpawnXY.Y) > 10.f ||
             FMath::Abs(HoverPos.Z - TargetCoordsZ) > 10.f)
         {
-            HoverPos.X = TargetPos.X;
-            HoverPos.Y = TargetPos.Y;
+            HoverPos.X = ActualSpawnXY.X;
+            HoverPos.Y = ActualSpawnXY.Y;
             HoverPos.Z = TargetCoordsZ;
             SpawnPlayer->SetActorLocation(HoverPos, false, nullptr, ETeleportType::TeleportPhysics);
         }
@@ -180,19 +180,25 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     // FIX #30: Use effective config
     FVoxelGenerationConfig Config = WorldOwner->GetEffectiveConfig(); 
     const FVector TargetSpawnPos = WorldOwner->GetSpawnTargetPos();
-    if (!TargetSpawnPos.IsZero())
-        Config.Craters.ForcedCraterCenter = FVector2D(TargetSpawnPos.X, TargetSpawnPos.Y);
-
     FVector Pos = TargetSpawnPos;
+
     if (Pos.IsZero())
     {
         TArray<AActor*> PS;
         UGameplayStatics::GetAllActorsOfClass(this, APlayerStart::StaticClass(), PS);
-        if (PS.Num() > 0 && PS[0]) Pos = PS[0]->GetActorLocation();
+        if (PS.Num() > 0 && PS[0]) 
+            Pos = PS[0]->GetActorLocation();
+        
+        // If TargetSpawnPos was zero, ensure the crater spawns exactly where the PlayerStart is
+        Config.Craters.ForcedCraterCenter = FVector2D(Pos.X, Pos.Y);
+        WorldOwner->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(Pos.X, Pos.Y);
     }
-    
-    Pos.X = Config.Craters.ForcedCraterCenter.X;
-    Pos.Y = Config.Craters.ForcedCraterCenter.Y;
+    else
+    {
+        Config.Craters.ForcedCraterCenter = FVector2D(TargetSpawnPos.X, TargetSpawnPos.Y);
+        WorldOwner->GenerationConfig.Craters.ForcedCraterCenter = FVector2D(TargetSpawnPos.X, TargetSpawnPos.Y);
+    }
+
     Pos.Z = 0.f; 
     Pos = WorldOwner->SnapToVoxelGrid(Pos);
 
@@ -211,15 +217,8 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
     bool bSky = false;
     if (SkyAlt > Surface + 5000.f && Surface < 50000.f)
     {
-        for (float z2 = SkyAlt + IHT; z2 >= FMath::Max(SkyAlt - IHT, Surface + 500.f); z2 -= 200.f)
-        {
-            if (WorldOwner->GetDensityGenerator() && WorldOwner->GetDensityGenerator()->GetDensity(Pos.X, Pos.Y, z2, Config) > 0.f)
-            {
-                TargetZ = z2 + SafeOff;
-                bSky = true;
-                break;
-            }
-        }
+        TargetZ   = SkyAlt + SafeOff;
+        bSky      = true;
     }
 
     if (TargetZ > 100000.f || CraterW > 0.3f) TargetZ = Surface + SafeOff;
@@ -228,13 +227,14 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         Pos.X, Pos.Y, Surface, TargetZ, CraterW, bSky ? 1 : 0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
 
     Pos.Z = TargetZ;
-    // Hover just above the crater rim so it's visible behind the loading overlay.
-    // Was +45000 (450m in the sky — camera sees nothing useful during generation).
     TargetCoordsZ = TargetZ + 8000.f; // ~80m above spawn — rim and bowl visible at load
-    CachedSurfaceHeight = Surface;
+    ActualSpawnXY = FVector2D(Pos.X, Pos.Y);
 
-    Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
-
+    if (Player)
+    {
+        Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
+    }
+    
     if (bWaitingForInitialSpawn) return;
     InitialSpawnCoords.Empty();
     CachedCollisionReadyCount = 0;

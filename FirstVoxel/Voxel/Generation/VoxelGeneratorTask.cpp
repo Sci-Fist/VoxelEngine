@@ -27,14 +27,21 @@
 #include "Templates/Atomic.h"
 #include "VoxelLogger.h"
 
-static FCriticalSection      GDensityPoolLock;
-static TArray<TArray<float>> GDensityPool;
+static FCriticalSection& GetDensityPoolLock() { static FCriticalSection* L = new FCriticalSection(); return *L; }
+static TArray<TArray<float>>& GetDensityPool() { static TArray<TArray<float>>* P = new TArray<TArray<float>>(); return *P; }
 
-static FCriticalSection           GScratchPoolLock;
-static TArray<FVoxelMeshScratchBuffers> GScratchPool;
+static FCriticalSection& GetScratchPoolLock() { static FCriticalSection* L = new FCriticalSection(); return *L; }
+static TArray<FVoxelMeshScratchBuffers>& GetScratchPool() { static TArray<FVoxelMeshScratchBuffers>* P = new TArray<FVoxelMeshScratchBuffers>(); return *P; }
 
-static FCriticalSection           GColumnPoolLock;
-static TArray<FVoxelGeneratorTask::FColumnScratchData> GColumnPool;
+static FCriticalSection& GetColumnPoolLock() { static FCriticalSection* L = new FCriticalSection(); return *L; }
+static TArray<FVoxelGeneratorTask::FColumnScratchData>& GetColumnPool() { static TArray<FVoxelGeneratorTask::FColumnScratchData>* P = new TArray<FVoxelGeneratorTask::FColumnScratchData>(); return *P; }
+
+#define GDensityPoolLock GetDensityPoolLock()
+#define GDensityPool GetDensityPool()
+#define GScratchPoolLock GetScratchPoolLock()
+#define GScratchPool GetScratchPool()
+#define GColumnPoolLock GetColumnPoolLock()
+#define GColumnPool GetColumnPool()
 
 static const EVoxelBiome GBiomeOrder[] =
 {

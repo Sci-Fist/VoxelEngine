@@ -568,13 +568,12 @@ void UVoxelStreamingComponent::RebuildGenerationQueue(const FVector& PlayerPos, 
 
     const TMap<FIntVector, AVoxelChunk*>* LoadedChunks = World->GetLoadedChunks();
 
-    // 1. Merge Desired coords with current WorldQueue coords to form a unique candidate set
+    // 1. Desired coords that are not yet loaded become our new queue candidates
+    // We do NOT copy existing WorldQueue because un-desired out-of-bounds chunks 
+    // must be implicitly orphaned and dropped to prevent a 1.2M memory leak.
     TSet<FIntVector> Candidates;
-    const TArray<FVoxelGenerationQueueEntry>& WorldQueue = World->GetGenerationQueue();
+    Candidates.Reserve(Desired.Num());
     
-    Candidates.Reserve(Desired.Num() + WorldQueue.Num());
-    
-    // Add desired chunks that aren't already loaded or dead
     for (const FIntVector& C : Desired)
     {
         if (!LoadedChunks->Contains(C) && !World->ContainsEmptyChunk(C))
@@ -582,14 +581,8 @@ void UVoxelStreamingComponent::RebuildGenerationQueue(const FVector& PlayerPos, 
             Candidates.Add(C);
         }
     }
-    
-    // Add existing queue chunks (they might need priority updates)
-    for (const FVoxelGenerationQueueEntry& Entry : WorldQueue)
-    {
-        Candidates.Add(Entry.Coord);
-    }
 
-    // 2. Calculate priority for all candidates
+    // 2. Calculate priority for all valid candidates
     TArray<FVoxelGenerationQueueEntry> NewQueue;
     NewQueue.Reserve(Candidates.Num());
 
@@ -603,23 +596,18 @@ void UVoxelStreamingComponent::RebuildGenerationQueue(const FVector& PlayerPos, 
         
         Delta.Normalize();
         const float ViewDot = FVector::DotProduct(PlayerForward, Delta);
-        // Visual Impact: chunks in front (Dot ~ 1) get higher priority than behind
         const float ViewFactor = FMath::Clamp((ViewDot + 1.0f) / 2.0f, 0.2f, 1.3f); 
 
-        // LOD Weight: Zone A (LOD0) > Zone B (LOD1) > Zone C (LOD2)
         float LODWeight = 1.0f;
         if (DistCm < World->LOD1Distance) LODWeight = 1.0f;
         else if (DistCm < World->LOD2Distance) LODWeight = 0.5f;
         else LODWeight = 0.1f;
 
-        // Formula: Inverse distance weighted by view and LOD
-        // We use (1000 / Dist) so chunks at 10m have ~100 priority, at 100m have ~10.
         const float Priority = (1000.0f / (DistMeters + 1.0f)) * ViewFactor * LODWeight;
-        
         NewQueue.Add(FVoxelGenerationQueueEntry(C, Priority));
     }
 
-    // 3. Heapify the new queue (O(N)) and update World
+    // 3. Heapify the purged queue and update World
     NewQueue.Heapify();
     World->SetGenerationQueue(NewQueue);
 }

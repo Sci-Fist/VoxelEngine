@@ -59,6 +59,7 @@ private:
     float SpawnWaitAccum = 0.f;
     float SpawnDelayAccum = 0.f;
     float TargetCoordsZ = 0.f;
+    FVector2D ActualSpawnXY = FVector2D(0.f, 0.f);
     float CachedSurfaceHeight = 0.f;
 
     TWeakObjectPtr<AVoxelWorld> WorldOwner;

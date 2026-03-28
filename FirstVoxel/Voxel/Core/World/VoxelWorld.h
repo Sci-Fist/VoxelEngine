@@ -1,5 +1,12 @@
-// VoxelWorld.h — Valheim-scale render distance parameters
-
+/**
+ * @file VoxelWorld.h
+ * @brief Top-level spatial and lifecycle manager for the procedural terrain engine.
+ *
+ * AVoxelWorld orchestrates the engine rendering grid, distributing thread tasks 
+ * across the thread pool via UVoxelStreamingComponent, managing editor/shutdown
+ * states, and maintaining the global registry of instantiated Voxels and Water pools.
+ * Includes synchronized mechanisms for editor shutdown and actor spawning.
+ */
 #pragma once
 
 #include "FirstVoxel.h"

@@ -1,9 +1,11 @@
-// =============================================================================
-// VoxelGeneratorTask.h
-// FIX #5 — SkylandColumnCaches changed from TArray<TArray<FSkylandColumnCache>>
-//           (2D, 33+ heap allocs per chunk) to TArray<FSkylandColumnCache>
-//           (1D, single allocation). Indexed as [i * ChunkSize + j].
-// =============================================================================
+/**
+ * @file VoxelGeneratorTask.h
+ * @brief Background asynchronous payload for evaluating density and terrain metrics.
+ *
+ * FVoxelGeneratorTask encapsulates SIMD-driven heightmap generation, biome evaluations,
+ * crater resolutions, and volumetric meshing via Surface Nets. This task safely 
+ * manages internal pooling to alleviate heap allocation overhead dynamically.
+ */
 #pragma once
 
 #include "CoreMinimal.h"

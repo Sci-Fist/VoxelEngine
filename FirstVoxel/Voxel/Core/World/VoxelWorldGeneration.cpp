@@ -148,10 +148,8 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     if (!GetWorld() || bShutdown) return;
     if (!bInitialized) { DataMap.Init(ChunkSize); bInitialized = true; }
 
-    ActiveGenerations = 0;
-    GenerationQueue.Empty();
-    EmptyChunks.Empty();
-    QueueHead = 0;
+    // FIX Threading Crash: Array mutations deferred until discovery completes.
+    // ActiveGenerations stays untouched to prevent active tasks from being lost.
 
     const FVector     Anchor   = SpawnTargetPos;
     const FIntVector  Origin   = WorldToChunkCoord(Anchor);
@@ -363,7 +361,8 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     Sorted.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key<B.Key; });
 
     TSet<FIntVector> QSet;
-    for (auto& P : Sorted) if (!QSet.Contains(P.Value)) { QSet.Add(P.Value); GenerationQueue.Add(FVoxelGenerationQueueEntry(P.Value, 0.f)); }
+    TArray<FVoxelGenerationQueueEntry> NewQueue;
+    for (auto& P : Sorted) if (!QSet.Contains(P.Value)) { QSet.Add(P.Value); NewQueue.Add(FVoxelGenerationQueueEntry(P.Value, 0.f)); }
 
 #if WITH_EDITOR
     if (!GetWorld()->IsGameWorld())
@@ -386,8 +385,8 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
         const int32 SkyZ = FMath::FloorToInt(TargetZ/(ChunkSize*VoxelSize));
         for (int32 x=-1;x<=1;x++) for (int32 y=-1;y<=1;y++) if (bSky && SkyZ!=0)
         {
-            FIntVector S(SC2.X+x,SC2.Y+y,SkyZ);  if (!QSet.Contains(S)){ QSet.Add(S); GenerationQueue.Add(FVoxelGenerationQueueEntry(S, 0.f)); }
-            if (SkyZ>0) { FIntVector B(SC2.X+x,SC2.Y+y,SkyZ-1); if (!QSet.Contains(B)){ QSet.Add(B); GenerationQueue.Add(FVoxelGenerationQueueEntry(B, 0.f)); } }
+            FIntVector S(SC2.X+x,SC2.Y+y,SkyZ);  if (!QSet.Contains(S)){ QSet.Add(S); NewQueue.Add(FVoxelGenerationQueueEntry(S, 0.f)); }
+            if (SkyZ>0) { FIntVector B(SC2.X+x,SC2.Y+y,SkyZ-1); if (!QSet.Contains(B)){ QSet.Add(B); NewQueue.Add(FVoxelGenerationQueueEntry(B, 0.f)); } }
         }
     }
 #endif
@@ -417,11 +416,19 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 
         if (TempQueue.Num() > 0)
         {
-            GenerationQueue.Insert(MoveTemp(TempQueue), 0);
+            NewQueue.Insert(MoveTemp(TempQueue), 0);
         }
     }
 
-    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d chunks."), GenerationQueue.Num());
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d chunks."), NewQueue.Num());
+    
+    // FIX Threading Crash: Perform instantaneous pointer swap under lock
+    {
+        FScopeLock Lock(&GenerationQueueLock);
+        GenerationQueue = MoveTemp(NewQueue);
+        QueueHead = 0;
+        EmptyChunks.Empty(); 
+    }
 }
 
 // ============================================================
@@ -600,24 +607,37 @@ void AVoxelWorld::DrainGenerationQueue()
     // PERF-4: compute once per drain cycle — ConfigureChunk reads by const-ref.
     CachedEffectiveConfig = GetEffectiveConfig();
     int32 N = 0;
-    while (N < Limit && QueueHead < GenerationQueue.Num())
+    while (N < Limit)
     {
         if ((int32)ActiveGenerations >= MaxConc) break;
-        if (!GenerationQueue.IsValidIndex(QueueHead)) break;
+
+        FIntVector NextCoord(0);
+        bool bHaveCoord = false;
+        {
+            FScopeLock Lock(&GenerationQueueLock);
+            if (QueueHead < GenerationQueue.Num() && GenerationQueue.IsValidIndex(QueueHead))
+            {
+                NextCoord = GenerationQueue[QueueHead++].Coord;
+                bHaveCoord = true; // Lock secured extraction
+            }
+        }
         
+        if (!bHaveCoord) break;
+
         // Isolate dereference into local variable to separate instruction trace branches
-        const FIntVector NextCoord = GenerationQueue[QueueHead++].Coord;
         SpawnChunk(NextCoord);
-        
         N++;
     }
     // PERF-5: Never RemoveAt(0,N) — that's an O(remaining) element shift.
     // Instead, only reset once the queue is fully consumed. The backing array
     // stays hot in cache during the fill phase with no shifting overhead.
-    if (QueueHead >= GenerationQueue.Num())
     {
-        GenerationQueue.Reset();
-        QueueHead = 0;
+        FScopeLock Lock(&GenerationQueueLock);
+        if (QueueHead >= GenerationQueue.Num() && GenerationQueue.Num() > 0)
+        {
+            GenerationQueue.Reset();
+            QueueHead = 0;
+        }
     }
 }
 
