@@ -50,10 +50,10 @@ public:
     const TArray<float>&              GetDensities()             const { return Densities;            }
     const FIntVector&                 GetChunkCoord()            const { return ChunkCoord;           }
     // OPT-4: pre-computed water column data (background thread) — consumed by ApplyMesh
-    const TArray<float>& GetWaterColOceanWeights()   const { return WaterColOceanWeights;   }
-    const TArray<float>& GetWaterColCraterWeights()  const { return WaterColCraterWeights;  }
-    const TArray<float>& GetWaterColNeutralHeights() const { return WaterColNeutralHeights; }
-    const TArray<float>& GetWaterColSurfaceHeights() const { return WaterColSurfaceHeights; }
+    const TArray<float>& GetWaterColOceanWeights()   const { return ColScratch.WaterColOceanWeights;   }
+    const TArray<float>& GetWaterColCraterWeights()  const { return ColScratch.WaterColCraterWeights;  }
+    const TArray<float>& GetWaterColNeutralHeights() const { return ColScratch.WaterColNeutralHeights; }
+    const TArray<float>& GetWaterColSurfaceHeights() const { return ColScratch.WaterColSurfaceHeights; }
 
 private:
     // Inputs
@@ -93,10 +93,21 @@ private:
     };
 
     TArray<float>                 Densities;
-    TArray<FVoxelBiomeWeightMap>  ColumnWeights;
-    TArray<float>                 ColumnSurfaceH;
-    TArray<FColumnCacheItem>      PrecalcColumns;  // PERF-2: shared with ComputeWaterColumns
     int32                         EffSize = 0;     // PERF-2: EffCS+3, set in BuildDensityField
+    
+public:
+    struct FColumnScratchData
+    {
+        TArray<FVoxelBiomeWeightMap>  ColumnWeights;
+        TArray<float>                 ColumnSurfaceH;
+        TArray<FColumnCacheItem>      PrecalcColumns;
+        TArray<float>                 WaterColOceanWeights;
+        TArray<float>                 WaterColCraterWeights;
+        TArray<float>                 WaterColNeutralHeights;
+        TArray<float>                 WaterColSurfaceHeights;
+    };
+private:
+    FColumnScratchData ColScratch;
 
     // FIX #5: flattened 1D array — single alloc, indexed [i*ChunkSize+j]
     TArray<FSkylandColumnCache>   SkylandColumnCaches;
@@ -104,12 +115,6 @@ private:
     TArray<FIntVector>            WaterSources;
 
     FVoxelMeshScratchBuffers      ScratchBuffers;
-
-    // OPT-4: water column biome data pre-computed on background thread
-    TArray<float> WaterColOceanWeights;
-    TArray<float> WaterColCraterWeights;
-    TArray<float> WaterColNeutralHeights;
-    TArray<float> WaterColSurfaceHeights;
 
     void BuildDensityField();
     void PostProcessDensities(int32 TotalSamples);

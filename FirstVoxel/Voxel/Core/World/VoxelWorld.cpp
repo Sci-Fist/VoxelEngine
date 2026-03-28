@@ -152,71 +152,18 @@ void AVoxelWorld::Tick(float DeltaTime)
         DirtyRebuildQueue.RemoveAtSwap(i);
         if (ActiveGenerations >= MaxConcurrentGenerations) { DirtyRebuildQueue.Add(Coord); break; }
         Chunk->MarkMeshDirty(false);
-        ActiveGenerations.FetchAdd(1);
+        ActiveGenerations += 1;
         ActiveChunkGenerations.Add(Chunk);
 
         TWeakObjectPtr<AVoxelWorld> W(this);
         TWeakObjectPtr<AVoxelChunk> C(Chunk);
         Chunk->OnGenerationComplete = [W, C](){ 
             if (AVoxelWorld* S=W.Get()) {
-                S->ActiveGenerations.FetchSub(1);
+                S->ActiveGenerations -= 1;
                 if (C.IsValid()) S->ActiveChunkGenerations.Remove(C.Get());
             } 
         };
         Chunk->GenerateAsync();
-    }
-}
-
-void AVoxelWorld::DrainGenerationQueue()
-{
-    if (bShutdown) return;
-    if (ActiveGenerations >= MaxConcurrentGenerations) return;
-
-    FScopeLock Lock(&GenerationQueueLock);
-    while (GenerationQueue.Num() > 0)
-    {
-        // Peek at the highest priority to see if we should preempt
-        FVoxelGenerationQueueEntry BestEntry = GenerationQueue[0]; // Heap root is always at 0
-
-        if (ActiveGenerations >= MaxConcurrentGenerations)
-        {
-            // PREEMPTION LOGIC: If the best waiting task is very high priority (>8000) 
-            // and we have active tasks with very low priority (<100), abort the low one.
-            if (BestEntry.Priority > 8000.0f)
-            {
-                AVoxelChunk* Victim = nullptr;
-                float LowestActivePriority = 1e10f;
-
-                for (AVoxelChunk* ActiveChunk : ActiveChunkGenerations)
-                {
-                    if (!ActiveChunk) continue;
-                    float P = (StreamingComponent) ? StreamingComponent->GetChunkPriority(ActiveChunk->GetChunkCoord()) : 0.f;
-                    if (P < LowestActivePriority)
-                    {
-                        LowestActivePriority = P;
-                        Victim = ActiveChunk;
-                    }
-                }
-
-                if (Victim && LowestActivePriority < 200.0f)
-                {
-                    UE_LOG(LogVoxelWorld, Warning, TEXT("Preempting low-priority chunk (%d,%d,%d) P=%.1f for high-priority (%d,%d,%d) P=%.1f"),
-                        Victim->GetChunkCoord().X, Victim->GetChunkCoord().Y, Victim->GetChunkCoord().Z, LowestActivePriority,
-                        BestEntry.Coord.X, BestEntry.Coord.Y, BestEntry.Coord.Z, BestEntry.Priority);
-                    
-                    Victim->CancelGeneration(); // This will trigger ActiveGenerations.FetchSub(1) and removal from set
-                    break; // Wait for slot to free up
-                }
-            }
-            break; // Still full and no good preemption candidates
-        }
-
-        FVoxelGenerationQueueEntry Entry;
-        GenerationQueue.HeapPop(Entry, true); 
-
-        if (LoadedChunks.Contains(Entry.Coord) || EmptyChunks.Contains(Entry.Coord)) continue;
-
-        SpawnChunk(Entry.Coord);
     }
 }
 
@@ -303,116 +250,19 @@ FString AVoxelWorld::GetGenerationStatusString() const {
     return FString::Printf(TEXT("Building World (Priority): %d chunks left"), GenerationQueue.Num());
 }
 
-// Stub implementations for the rest to keep it compiling
 void AVoxelWorld::OnConstruction(const FTransform& T) { Super::OnConstruction(T); if (!bInitialized && ChunkSize > 0) { DataMap.Init(ChunkSize); bInitialized = true; } }
-void AVoxelWorld::SetVoxelSphere(FVector P, float R, float D, bool RB) {}
-void AVoxelWorld::RunVoxelTests() {}
-void AVoxelWorld::SaveToFile(const FString& S) {}
-void AVoxelWorld::LoadFromFile(const FString& S) {}
-void AVoxelWorld::ClearModifications() {}
-void AVoxelWorld::SaveDefaultSlot() {}
-void AVoxelWorld::LoadDefaultSlot() {}
-void AVoxelWorld::TestSmoothLODTransitions() {}
-float AVoxelWorld::GetTerrainHeight(float X, float Y) const { return 0.f; }
-float AVoxelWorld::GetSurfaceZ(float X, float Y) const { return 0.f; }
 void AVoxelWorld::MarkChunkDirty(const FIntVector& C) {}
-void AVoxelWorld::UpdateChunkStreaming() {}
-void AVoxelWorld::GenerateWorldDeferred()
+
+void AVoxelWorld::OnInitialSpawnComplete()
 {
-    if (DeferTickerHandle.IsValid()) FTSTicker::GetCoreTicker().RemoveTicker(DeferTickerHandle);
-    DeferTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
-        FTSTicker::FDelegate::CreateLambda([this](float){
-            PerformWorldDiscoveryAndBoundsCalculation();
-            FinalizeGenerationSetup();
-            return false;
-        }), 0.1f);
+    bWaitingForInitialSpawn = false;
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Initial spawn complete."));
 }
 
-void AVoxelWorld::DiscoverExistingChunks()
-{
-    // Implementation for discovering chunks in the level if needed
-}
-void AVoxelWorld::ConfigureChunk(AVoxelChunk* Chunk) const
-{
-    if (!Chunk) return;
-    
-    Chunk->SetActorLocation(ChunkCoordToWorld(Chunk->Coord));
-    Chunk->MasterFlatMaterial  = MasterFlatMaterial;
-    Chunk->MasterSlopeMaterial = MasterSlopeMaterial;
-    Chunk->SlopeThreshold      = SlopeThreshold;
-    Chunk->World               = const_cast<AVoxelWorld*>(this);
-}
-void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
-{
-    // This is essentially just preparing the initial spawn area for now
-    if (StreamingComponent)
-    {
-        StreamingComponent->InitialPass();
-    }
-}
+bool AVoxelWorld::IsWaitingForInitialSpawn() const { return bWaitingForInitialSpawn; }
+void AVoxelWorld::SaveCurrentToPreset() {}
+void AVoxelWorld::LoadFromPreset() {}
 
-void AVoxelWorld::FinalizeGenerationSetup()
-{
-    if (GEngine) GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("[VoxelWorld] Finalizing Setup..."));
-}
-void AVoxelWorld::CheckCloseRangeVisibility() {}
-void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
-{
-    if (bShutdown) return;
-    
-    TWeakObjectPtr<AVoxelWorld> W(this);
-    
-    // Check if pooled
-    AVoxelChunk* Chunk = ChunkPool.AcquireChunk(this, ChunkSize, VoxelSize);
-    if (!Chunk)
-    {
-        // Fallback to spawning (should not happen with 1200 chunk pool)
-        FActorSpawnParameters Params;
-        Params.Owner = this;
-        Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-        Chunk = GetWorld()->SpawnActor<AVoxelChunk>(AVoxelChunk::StaticClass(), GetActorLocation(), FRotator::ZeroRotator, Params);
-    }
-    
-    if (Chunk)
-    {
-        Chunk->Coord = Coord;
-        ConfigureChunk(Chunk);
-        
-        {
-            FWriteScopeLock Lock(LoadedChunksLock);
-            LoadedChunks.Add(Coord, Chunk);
-        }
-
-        ActiveGenerations.FetchAdd(1);
-        Chunk->OnGenerationComplete = [W](){ if (AVoxelWorld* S=W.Get()) S->ActiveGenerations.FetchSub(1); };
-        
-        if (bSyncCollision) Chunk->GenerateSync();
-        else Chunk->GenerateAsync();
-    }
-}
-void AVoxelWorld::DestroyChunk(const FIntVector& Coord)
-{
-    FWriteScopeLock Lock(LoadedChunksLock);
-    AVoxelChunk* Chunk = nullptr;
-    if (LoadedChunks.RemoveAndCopyValue(Coord, Chunk))
-    {
-        if (Chunk)
-        {
-            Chunk->CancelGeneration();
-            ChunkPool.ReleaseChunk(Chunk);
-        }
-    }
-}
-
-void AVoxelWorld::RebuildChunk(const FIntVector& Coord)
-{
-    DestroyChunk(Coord);
-    SpawnChunk(Coord);
-}
-void AVoxelWorld::ProcessInitialPlayerSpawn() {}
-FVector AVoxelWorld::FindCraterSpawnLocation(const FVector& S, const FVoxelGenerationConfig& C) const { return S; }
-FVector AVoxelWorld::SnapToVoxelGrid(const FVector& W) const { return W; }
-float AVoxelWorld::GetSafeSpawnHeightOffset() const { return SafeSpawnHeightOffset; }
 #if WITH_EDITOR
 void AVoxelWorld::PostEditChangeProperty(FPropertyChangedEvent& E) { Super::PostEditChangeProperty(E); }
 #endif

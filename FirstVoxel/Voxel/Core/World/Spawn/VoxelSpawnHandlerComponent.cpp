@@ -37,15 +37,33 @@ void UVoxelSpawnHandlerComponent::TickComponent(float DeltaTime, ELevelTick Tick
 
     if (!bTimedOut)
     {
+        int32 ColReady = 0;
+        for (const FIntVector& C : InitialSpawnCoords)
+        {
+            if (AVoxelChunk*const* P = World->GetLoadedChunks()->Find(C))
+            {
+                if ((*P)->IsCollisionReady()) ColReady++;
+            }
+        }
+        int32 VisReady = 0;
+        for (const FIntVector& C : InitialSpawnCoords_Visual)
+        {
+            if (AVoxelChunk*const* P = World->GetLoadedChunks()->Find(C))
+            {
+                if ((*P)->IsReady()) VisReady++;
+            }
+        }
+        CachedCollisionReadyCount = ColReady;
+        CachedVisualReadyCount = VisReady;
+
         const int32 CollisionTotal = InitialSpawnCoords.Num();
         const int32 VisualTotal = InitialSpawnCoords_Visual.Num();
-        bAllReady = (GetCollisionReadyCount() == GetTotalCollisionCount()) && 
-                    (GetVisualReadyCount() == GetTotalVisualCount());
+        bAllReady = (ColReady == CollisionTotal) && (VisReady == VisualTotal);
 
         if (bAllReady)
         {
             UE_LOG(LogVoxelWorld, Log, TEXT("VoxelSpawnHandler: All initial chunks ready (%d col, %d vis). Dropping player."), 
-                InitialSpawnCollisionReadyCount.GetValue(), InitialSpawnVisualReadyCount.GetValue());
+                ColReady, VisReady);
 
             
             if (APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0))
@@ -219,8 +237,8 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
 
     if (bWaitingForInitialSpawn) return;
     InitialSpawnCoords.Empty();
-    InitialSpawnCollisionReadyCount.Reset();
-    InitialSpawnVisualReadyCount.Reset();
+    CachedCollisionReadyCount = 0;
+    CachedVisualReadyCount = 0;
 
     bWaitingForInitialSpawn = true;
 
@@ -352,15 +370,13 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
 
     int32 PreCollision = 0;
     for (const FIntVector& C : InitialSpawnCoords)
-        if (AVoxelChunk*const* P = WorldOwner->GetLoadedChunks()->Find(C)) if ((*P)->IsReady()) PreCollision++;
-    InitialSpawnCollisionReadyCount.Set(PreCollision);
-
+        if (AVoxelChunk*const* P = WorldOwner->GetLoadedChunks()->Find(C)) if ((*P)->IsCollisionReady()) PreCollision++;
+    CachedCollisionReadyCount = PreCollision;
 
     int32 PreVisual = 0;
     for (const FIntVector& C : InitialSpawnCoords_Visual)
         if (AVoxelChunk*const* P = WorldOwner->GetLoadedChunks()->Find(C)) if ((*P)->IsReady()) PreVisual++;
-    InitialSpawnVisualReadyCount.Set(PreVisual);
-
+    CachedVisualReadyCount = PreVisual;
 
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelSpawnHandler: Waiting for %d collision + %d visual spawn chunks. Pre-ready: collision=%d, visual=%d"),
         InitialSpawnCoords.Num(), InitialSpawnCoords_Visual.Num(), PreCollision, PreVisual);
@@ -371,8 +387,8 @@ void UVoxelSpawnHandlerComponent::ClearState()
     bWaitingForInitialSpawn = false;
     InitialSpawnCoords.Empty();
     InitialSpawnCoords_Visual.Empty();
-    InitialSpawnCollisionReadyCount.Reset();
-    InitialSpawnVisualReadyCount.Reset();
+    CachedCollisionReadyCount = 0;
+    CachedVisualReadyCount = 0;
 
     SpawnWaitAccum = 0.f;
     SpawnDelayAccum = 0.f;

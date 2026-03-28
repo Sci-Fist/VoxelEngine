@@ -33,6 +33,9 @@ static TArray<TArray<float>> GDensityPool;
 static FCriticalSection           GScratchPoolLock;
 static TArray<FVoxelMeshScratchBuffers> GScratchPool;
 
+static FCriticalSection           GColumnPoolLock;
+static TArray<FVoxelGeneratorTask::FColumnScratchData> GColumnPool;
+
 static const EVoxelBiome GBiomeOrder[] =
 {
     EVoxelBiome::Forest, EVoxelBiome::Peaks, EVoxelBiome::Cliffs,
@@ -219,6 +222,13 @@ FVoxelGeneratorTask::~FVoxelGeneratorTask()
         if (GScratchPool.Num() < 16)
             GScratchPool.Add(MoveTemp(ScratchBuffers));
     }
+
+    if (ColScratch.PrecalcColumns.Num() > 0)
+    {
+        FScopeLock Lock(&GColumnPoolLock);
+        if (GColumnPool.Num() < 16)
+            GColumnPool.Add(MoveTemp(ColScratch));
+    }
 }
 
 // ============================================================
@@ -294,6 +304,15 @@ void FVoxelGeneratorTask::BuildDensityField()
     }
     Densities.SetNumUninitialized(TotalSamples);
 
+    {
+        FScopeLock Lock(&GColumnPoolLock);
+        if (GColumnPool.Num() > 0)
+        {
+            ColScratch = MoveTemp(GColumnPool.Last());
+            GColumnPool.RemoveAt(GColumnPool.Num() - 1, 1, EAllowShrinking::No);
+        }
+    }
+
     // Speedup Tier 3: Disable sub-voxel overhangs and caves on distant high-LOD chunks (silhouette only)
     FVoxelGenerationConfig LocalConfig = Config;
     if (StepSize > 1)
@@ -323,19 +342,46 @@ void FVoxelGeneratorTask::BuildDensityField()
 
     // PERF-2: PrecalcColumns is a member TArray; EffSize is a member set above.
     // ComputeWaterColumns() will read directly from them after BuildDensityField returns.
-    PrecalcColumns.SetNum(EffSize * EffSize);
-    ColumnWeights .SetNum(EffSize * EffSize);
-    ColumnSurfaceH.SetNum(EffSize * EffSize);
+    ColScratch.PrecalcColumns.SetNum(EffSize * EffSize);
+    ColScratch.ColumnWeights .SetNum(EffSize * EffSize);
+    ColScratch.ColumnSurfaceH.SetNum(EffSize * EffSize);
 
     const int32 NumCols = EffSize * EffSize;
     const int32* PermTable = FVoxelNoiseSIMD::GetPermutationTable();
     
     const float CenterH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
         LocalConfig.Craters.ForcedCraterCenter.X, LocalConfig.Craters.ForcedCraterCenter.Y, LocalConfig);
+        
+    TMap<FIntPoint, TArray<FSkylandIslandData>> SharedSkylandCache;
+    if (bEnSkylands)
+    {
+        const float GridSize = LocalConfig.SkylandsLayer.BaseIslandSize * 3.0f;
+        if (GridSize > 0.f)
+        {
+            const float SafeMinX = WorldOrigin.X - EffVoxSz;
+            const float SafeMaxX = WorldOrigin.X + (EffSize + 1) * EffVoxSz;
+            const float SafeMinY = WorldOrigin.Y - EffVoxSz;
+            const float SafeMaxY = WorldOrigin.Y + (EffSize + 1) * EffVoxSz;
+
+            const int32 MinCellX = FMath::FloorToInt(SafeMinX / GridSize) - 2;
+            const int32 MaxCellX = FMath::FloorToInt(SafeMaxX / GridSize) + 2;
+            const int32 MinCellY = FMath::FloorToInt(SafeMinY / GridSize) - 2;
+            const int32 MaxCellY = FMath::FloorToInt(SafeMaxY / GridSize) + 2;
+
+            FVoxelBiomeWeightMap DummyW;
+            for (int32 cy = MinCellY; cy <= MaxCellY; ++cy)
+            {
+                for (int32 cx = MinCellX; cx <= MaxCellX; ++cx)
+                {
+                    FVoxelBiomeGenerators::GetSkylandColumnCache(
+                        cx * GridSize, cy * GridSize, CenterH, DummyW, LocalConfig, &SharedSkylandCache);
+                }
+            }
+        }
+    }
     
     ParallelFor(NumCols / 8, [&](int32 idx)
     {
-        TMap<FIntPoint, TArray<FSkylandIslandData>> SkylandCacheMap;
         const int32 ColIdx = idx * 8;
         // ── 8-WIDE SIMD PRE-CALC ───────────────────────────────────────────────
         float CX[8], CY[8];
@@ -376,7 +422,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         for (int32 k = 0; k < 8; ++k)
         {
             const int32 curIdx = ColIdx + k;
-            FColumnCacheItem& Item = PrecalcColumns[curIdx];
+            FColumnCacheItem& Item = ColScratch.PrecalcColumns[curIdx];
 
             Item.Weights.SetWeight(EVoxelBiome::Forest,  Forest[k]);
             Item.Weights.SetWeight(EVoxelBiome::Desert,  Desert[k]);
@@ -405,17 +451,16 @@ void FVoxelGeneratorTask::BuildDensityField()
                 Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX[k], CY[k], Item.Weights, Config, Temp[k], Eros[k]);
                 Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX[k], CY[k], Config, Temp[k], Eros[k]);
             }
-            Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX[k], CY[k], Item.NeutralH, Item.Weights, Config, &SkylandCacheMap);
+            Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX[k], CY[k], Item.NeutralH, Item.Weights, Config, &SharedSkylandCache);
             
 
-            ColumnWeights[curIdx]  = Item.Weights;
-            ColumnSurfaceH[curIdx] = Item.SurfH;
+            ColScratch.ColumnWeights[curIdx]  = Item.Weights;
+            ColScratch.ColumnSurfaceH[curIdx] = Item.SurfH;
         }
     });
 
     int32 ColIdx = (NumCols / 8) * 8;
     // ── REMAINDER FALLBACK ──────────────────────────────────────────────────
-    TMap<FIntPoint, TArray<FSkylandIslandData>> SkylandCacheMap;
     for (; ColIdx < NumCols; ++ColIdx)
     {
         const int32 Y  = ColIdx / EffSize;
@@ -423,7 +468,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         const float CX = WorldOrigin.X + (X - 1.f) * EffVoxSz;
         const float CY = WorldOrigin.Y + (Y - 1.f) * EffVoxSz;
 
-        FColumnCacheItem& Item = PrecalcColumns[ColIdx];
+        FColumnCacheItem& Item = ColScratch.PrecalcColumns[ColIdx];
 
         // FIX: Use accurate Config for fallback height estimation
         float Temp = -999.f, Erosion = -999.f;
@@ -438,10 +483,10 @@ void FVoxelGeneratorTask::BuildDensityField()
 
         Item.SurfH    = FVoxelBiomeManager::GetSurfaceHeightStatic(CX, CY, Item.Weights, Config, Temp, Erosion);
         Item.NeutralH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(CX, CY, Config, Temp, Erosion);
-        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, Config, &SkylandCacheMap);
+        Item.SkylandCache = FVoxelBiomeGenerators::GetSkylandColumnCache(CX, CY, Item.NeutralH, Item.Weights, Config, &SharedSkylandCache);
 
-        ColumnWeights[ColIdx]  = Item.Weights;
-        ColumnSurfaceH[ColIdx] = Item.SurfH;
+        ColScratch.ColumnWeights[ColIdx]  = Item.Weights;
+        ColScratch.ColumnSurfaceH[ColIdx] = Item.SurfH;
     }
 
     if (bIsDistantHeightmesh)
@@ -508,7 +553,7 @@ void FVoxelGeneratorTask::BuildDensityField()
         const float WX = WorldOrigin.X + (X-1.f)*EffVoxSz;
         const float WY = WorldOrigin.Y + (Y-1.f)*EffVoxSz;
 
-        const FColumnCacheItem& Item = PrecalcColumns[FlatXY];
+        const FColumnCacheItem& Item = ColScratch.PrecalcColumns[FlatXY];
         const FVoxelBiomeWeightMap Weights = Item.Weights;
         const float SurfH    = Item.SurfH;
         const float NeutralH = Item.NeutralH;
@@ -658,15 +703,15 @@ void FVoxelGeneratorTask::BuildMesh()
     if (bIsDistantHeightmesh)
     {
         FVoxelMeshGenerator::GenerateHeightmapMesh(
-            ColumnSurfaceH, ColumnWeights, ChunkSize, VoxelSize, WorldOrigin, FrameNumber, MeshOutput, Config, StepSize);
+            ColScratch.ColumnSurfaceH, ColScratch.ColumnWeights, ChunkSize, VoxelSize, WorldOrigin, MeshOutput, Config, StepSize);
     }
     else
     {
         FVoxelMeshGenerator::GenerateMesh(
             Densities, ChunkSize, VoxelSize, WorldOrigin, CameraPos, FrameNumber, MeshOutput, Config, StepSize,
             &ScratchBuffers,
-            &ColumnWeights,
-            [this]() { return bCancelled.Load(); }); // Directive 3: Pass preemption guard
+            &ColScratch.ColumnWeights,
+            [this]() { return !!bCancelled; }); // Directive 3: Pass preemption guard
     }
     UVoxelLogger::LogVoxelEvent(FString::Printf(TEXT("VoxelMesh: [%d,%d,%d] Flat=%d Slope=%d"),
         ChunkCoord.X, ChunkCoord.Y, ChunkCoord.Z,
@@ -686,13 +731,13 @@ void FVoxelGeneratorTask::CountDensityStates(int32) {}
 void FVoxelGeneratorTask::ComputeWaterColumns()
 {
     if (bCancelled) return;
-    if (PrecalcColumns.Num() == 0 || EffSize == 0) return; // safety: BuildDensityField must have run
+    if (ColScratch.PrecalcColumns.Num() == 0 || EffSize == 0) return; // safety: BuildDensityField must have run
 
     const int32 CS = ChunkSize;
-    WaterColOceanWeights  .SetNumZeroed(CS * CS);
-    WaterColCraterWeights .SetNumZeroed(CS * CS);
-    WaterColNeutralHeights.SetNumZeroed(CS * CS);
-    WaterColSurfaceHeights.SetNumZeroed(CS * CS);
+    ColScratch.WaterColOceanWeights  .SetNumZeroed(CS * CS);
+    ColScratch.WaterColCraterWeights .SetNumZeroed(CS * CS);
+    ColScratch.WaterColNeutralHeights.SetNumZeroed(CS * CS);
+    ColScratch.WaterColSurfaceHeights.SetNumZeroed(CS * CS);
 
     // EffSize = ChunkSize/StepSize + 3 (with 1-cell border on each side).
     // For column (lx, ly) in [0, CS), the best PrecalcColumns index is:
@@ -705,12 +750,12 @@ void FVoxelGeneratorTask::ComputeWaterColumns()
         const int32 EffX   = FMath::Clamp(lx / StepSize + 1, 0, EffSize - 1);
         const int32 EffY   = FMath::Clamp(ly / StepSize + 1, 0, EffSize - 1);
         const int32 EIdx   = EffX + EffY * EffSize;
-        const FColumnCacheItem& Item = PrecalcColumns[EIdx];
+        const FColumnCacheItem& Item = ColScratch.PrecalcColumns[EIdx];
 
         const int32 ColIdx = lx + ly * CS;
-        WaterColOceanWeights  [ColIdx] = Item.Weights.GetWeight(EVoxelBiome::Ocean);
-        WaterColCraterWeights [ColIdx] = Item.Weights.GetWeight(EVoxelBiome::Craters);
-        WaterColNeutralHeights[ColIdx] = Item.NeutralH;
-        WaterColSurfaceHeights[ColIdx] = Item.SurfH;
+        ColScratch.WaterColOceanWeights  [ColIdx] = Item.Weights.GetWeight(EVoxelBiome::Ocean);
+        ColScratch.WaterColCraterWeights [ColIdx] = Item.Weights.GetWeight(EVoxelBiome::Craters);
+        ColScratch.WaterColNeutralHeights[ColIdx] = Item.NeutralH;
+        ColScratch.WaterColSurfaceHeights[ColIdx] = Item.SurfH;
     }
 }

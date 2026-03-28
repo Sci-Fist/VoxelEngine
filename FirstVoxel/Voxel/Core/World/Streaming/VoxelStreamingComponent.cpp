@@ -625,7 +625,7 @@ void UVoxelStreamingComponent::RebuildGenerationQueue(const FVector& PlayerPos, 
 }
 void UVoxelStreamingComponent::ClearState()
 {
-    CurrentStreamingGeneration.FetchAdd(1);
+    ++CurrentStreamingGeneration;
     if (CullingProxy.IsValid()) CullingProxy->RequestID.Store(-1);
     PendingCullingChunks.Empty();
     ChunksNeedingVisibilityCheck.Empty();

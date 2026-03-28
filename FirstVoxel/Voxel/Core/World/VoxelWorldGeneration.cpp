@@ -363,7 +363,7 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     Sorted.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key<B.Key; });
 
     TSet<FIntVector> QSet;
-    for (auto& P : Sorted) if (!QSet.Contains(P.Value)) { QSet.Add(P.Value); GenerationQueue.Add(P.Value); }
+    for (auto& P : Sorted) if (!QSet.Contains(P.Value)) { QSet.Add(P.Value); GenerationQueue.Add(FVoxelGenerationQueueEntry(P.Value, 0.f)); }
 
 #if WITH_EDITOR
     if (!GetWorld()->IsGameWorld())
@@ -386,15 +386,15 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
         const int32 SkyZ = FMath::FloorToInt(TargetZ/(ChunkSize*VoxelSize));
         for (int32 x=-1;x<=1;x++) for (int32 y=-1;y<=1;y++) if (bSky && SkyZ!=0)
         {
-            FIntVector S(SC2.X+x,SC2.Y+y,SkyZ);  if (!QSet.Contains(S)){ QSet.Add(S); GenerationQueue.Add(S); }
-            if (SkyZ>0) { FIntVector B(SC2.X+x,SC2.Y+y,SkyZ-1); if (!QSet.Contains(B)){ QSet.Add(B); GenerationQueue.Add(B); } }
+            FIntVector S(SC2.X+x,SC2.Y+y,SkyZ);  if (!QSet.Contains(S)){ QSet.Add(S); GenerationQueue.Add(FVoxelGenerationQueueEntry(S, 0.f)); }
+            if (SkyZ>0) { FIntVector B(SC2.X+x,SC2.Y+y,SkyZ-1); if (!QSet.Contains(B)){ QSet.Add(B); GenerationQueue.Add(FVoxelGenerationQueueEntry(B, 0.f)); } }
         }
     }
 #endif
 
     if (bWaitingForInitialSpawn && SpawnHandlerComponent)
     {
-        TArray<FIntVector> TempQueue;
+        TArray<FVoxelGenerationQueueEntry> TempQueue;
         TempQueue.Reserve(SpawnHandlerComponent->GetTotalCollisionCount() + SpawnHandlerComponent->GetTotalVisualCount());
         
         for (const FIntVector& C : SpawnHandlerComponent->GetInitialSpawnCoords())
@@ -402,7 +402,7 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
             if (!LoadedChunks.Contains(C) && !QSet.Contains(C))
             {
                 QSet.Add(C);
-                TempQueue.Add(C);
+                TempQueue.Add(FVoxelGenerationQueueEntry(C, 0.f));
             }
         }
 
@@ -411,13 +411,13 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
             if (!LoadedChunks.Contains(C) && !QSet.Contains(C))
             {
                 QSet.Add(C);
-                TempQueue.Add(C);
+                TempQueue.Add(FVoxelGenerationQueueEntry(C, 0.f));
             }
         }
 
         if (TempQueue.Num() > 0)
         {
-            GenerationQueue.Insert(TempQueue, 0); // O(N) single shift prepends efficiently!
+            GenerationQueue.Insert(MoveTemp(TempQueue), 0);
         }
     }
 
@@ -544,19 +544,10 @@ void AVoxelWorld::SpawnChunk(FIntVector Coord, bool bSyncCollision)
     {
         if (AVoxelWorld* S = WeakThis.Get())
         {
-            S->ActiveGenerations.FetchSub(1);
+            S->ActiveGenerations -= 1;
             // FIX-1: Feed the pending-set so CheckCloseRange visibility only
             // iterates chunks that JUST became ready, not all loaded chunks.
             S->ChunksNeedingVisibilityCheck.Add(ChunkCoord);
-
-            if (S->SpawnHandlerComponent && S->SpawnHandlerComponent->IsWaitingForInitialSpawn())
-            {
-                if (S->SpawnHandlerComponent->ContainsCollisionCoord(ChunkCoord))
-                    S->SpawnHandlerComponent->IncrementCollisionReady();
-                else if (S->SpawnHandlerComponent->ContainsVisualCoord(ChunkCoord))
-                    S->SpawnHandlerComponent->IncrementVisualReady();
-            }
-
         }
     };
     if (WaterSystemComponent) WaterSystemComponent->InitChunkWater(Chunk);
@@ -615,7 +606,7 @@ void AVoxelWorld::DrainGenerationQueue()
         if (!GenerationQueue.IsValidIndex(QueueHead)) break;
         
         // Isolate dereference into local variable to separate instruction trace branches
-        const FIntVector NextCoord = GenerationQueue[QueueHead++];
+        const FIntVector NextCoord = GenerationQueue[QueueHead++].Coord;
         SpawnChunk(NextCoord);
         
         N++;

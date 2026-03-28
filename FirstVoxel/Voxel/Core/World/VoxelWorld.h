@@ -157,6 +157,7 @@ public:
     mutable FCriticalSection GenerationQueueLock;
 
     int32 GetQueueCount() const { FScopeLock Lock(&GenerationQueueLock); return GenerationQueue.Num(); }
+    int32 GetQueueHead() const { return QueueHead; }
 
     bool ContainsEmptyChunk(const FIntVector& Coord) const { return EmptyChunks.Contains(Coord); }
     const TSet<FIntVector>& GetEmptyChunks() const { return EmptyChunks; }
@@ -205,6 +206,8 @@ private:
     TArray<FIntVector>             DirtyRebuildQueue;
     void MarkChunkDirty(const FIntVector& Coord);
 
+    int32 QueueHead = 0;
+
     TArray<FVoxelGenerationQueueEntry> GenerationQueue;
     TSet<class AVoxelChunk*>           ActiveChunkGenerations;
     TAtomic<int32>                     ActiveGenerations{0};
@@ -225,7 +228,9 @@ private:
     UPROPERTY(VisibleAnywhere, Category="Voxel|Spawn")
     class UVoxelSpawnHandlerComponent* SpawnHandlerComponent = nullptr;
 
+public:
     void ProcessInitialPlayerSpawn();
+    void OnInitialSpawnComplete();
     FVector SpawnTargetPos    = FVector::ZeroVector;
     static constexpr float SpawnHoldDelay = 2.f;
 

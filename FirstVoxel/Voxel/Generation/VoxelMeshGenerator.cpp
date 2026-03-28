@@ -154,7 +154,7 @@ void FVoxelMeshGenerator::GenerateMesh(
     int32                         InStepSize,
     FVoxelMeshScratchBuffers*     Scratch,
     const TArray<FVoxelBiomeWeightMap>* PrecomputedColumnWeights,
-    const TFunctionRef<bool()>&   IsCancelled)
+    TFunctionRef<bool()>          IsCancelled)
 {
     OutMesh.Reset();
     if (IsCancelled()) return;
@@ -479,6 +479,7 @@ void FVoxelMeshGenerator::GenerateMesh(
               EmitQuad(Idx(X,Y,Z,S),Idx(X,Y-1,Z,S),Idx(X-1,Y-1,Z,S),Idx(X-1,Y,Z,S),
                        X,Y,D0>0.f,FVector(0,0,1)); }
     }
+}
 }
 
 // ---------------------------------------------------------------------------

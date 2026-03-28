@@ -116,7 +116,7 @@ void FVoxelGeneratorTask::CalculateFoliage()
 
                 const FVector Centroid = (V0 + V1 + V2) / 3.f;
                 const FVoxelBiomeWeightMap W = LookupColumnWeights(
-                    Centroid.X, Centroid.Y, WorldOrigin, EffVS, EffCS, ColumnWeights, Config);
+                    Centroid.X, Centroid.Y, WorldOrigin, EffVS, EffCS, ColScratch.ColumnWeights, Config);
 
                 FRandomStream TriRNG = MakeFoliageRNG(ChunkCoord, Config.Seed + ti);
                 auto SampleTriangleLocal = [&](const FVector& V0_l, const FVector& V1_l, const FVector& V2_l) -> FVector
@@ -218,7 +218,7 @@ void FVoxelGeneratorTask::CalculateFoliage()
                 const FVector V2 = Verts[i2] + WorldOrigin;
                 const FVector C  = (V0 + V1 + V2) / 3.f;
                 const FVoxelBiomeWeightMap W = LookupColumnWeights(
-                    C.X, C.Y, WorldOrigin, EffVS, EffCS, ColumnWeights, Config);
+                    C.X, C.Y, WorldOrigin, EffVS, EffCS, ColScratch.ColumnWeights, Config);
 
                 FRandomStream TriRNG = MakeFoliageRNG(ChunkCoord, Config.Seed + ti);
                 

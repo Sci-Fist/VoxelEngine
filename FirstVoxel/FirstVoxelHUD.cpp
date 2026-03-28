@@ -103,6 +103,7 @@ void AFirstVoxelHUD::DrawLoadingScreen(UFont* Font)
     DrawRect(FLinearColor(0.1f,0.1f,0.1f,0.8f),   BX-2.f,BY-2.f,BW+4.f,BH+4.f);
     int32 Head = 0, Total = 0;
     
+    UVoxelSpawnHandlerComponent* SH = W ? W->GetSpawnHandlerComponent() : nullptr;
     // FIX: query SpawnHandler for accurate local load screen tallies
     if (SH)
     {
