@@ -153,15 +153,13 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 
     const FVector     Anchor   = SpawnTargetPos;
     const FIntVector  Origin   = WorldToChunkCoord(Anchor);
-    // FIX RIM-1: was MidRenderDistanceXY (24 chunks / 384 m) — Zone C was never queued.
-    // Now uses DistantRenderDistanceXY (48 chunks / 768 m) so the crater rim and far
-    // horizon are included. Zone C chunks use LOD 2 (StepSize=4) so the cost is low.
+    // FIX RIM-1: lowered to 64 to prevent 6M chunk explosions while still providing 1km radius
     const int32 MaxRadius = DistantRenderDistanceXY;
     const FIntVector  MinCoord = Origin - FIntVector(MaxRadius, MaxRadius, RenderDistanceZ);
     const FIntVector  MaxCoord = Origin + FIntVector(MaxRadius, MaxRadius, RenderDistanceZ);
     const FIntVector  Center   = MinCoord + (MaxCoord - MinCoord) / 2;
 
-    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Chunks (%d,%d,%d)→(%d,%d,%d)"),
+    UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Discovery Area (%d,%d,%d)→(%d,%d,%d)"),
         MinCoord.X, MinCoord.Y, MinCoord.Z, MaxCoord.X, MaxCoord.Y, MaxCoord.Z);
 
     TArray<TPair<int32,FIntVector>> Sorted;
@@ -172,7 +170,6 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     TArray<TArray<TPair<int32, FIntVector>>> ThreadResults;
     ThreadResults.SetNum(NumX);
 
-    // SIMD DISCOVERY: pre-compute crater-neutral center height once for the entire pass.
     const float DiscCenterH = FVoxelBiomeManager::GetNeutralSurfaceHeightStatic(
         Cfg.Craters.ForcedCraterCenter.X, Cfg.Craters.ForcedCraterCenter.Y, Cfg);
     const int32* DiscPermTable = FVoxelNoiseSIMD::GetPermutationTable();
@@ -212,17 +209,14 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
                 const int32 y = MinCoord.Y + y_off + b;
                 const float Surface = SurfHs[b];
                 const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
-                // Roughness approx from steep biome weights (Peaks + Cliffs)
                 const float Roughness = FMath::Clamp(PeaksW[b] * 2.f + CliffsW[b], 0.f, 1.f);
 
                 float MinSkyAlt, MaxSkyAlt;
                 FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Roughness, Cfg, MinSkyAlt, MaxSkyAlt);
-
                 const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
                 const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
 
-                int32 ExtraMinZ = 0;
-                int32 ExtraMaxZ = 0;
+                int32 ExtraMinZ = 0, ExtraMaxZ = 0;
                 const float dx = WX - Cfg.Craters.ForcedCraterCenter.X;
                 const float dy = WYs[b] - Cfg.Craters.ForcedCraterCenter.Y;
                 const float DistSq = dx * dx + dy * dy;
@@ -234,131 +228,108 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
                     ExtraMaxZ = FMath::CeilToInt(Cfg.Craters.CentralCraterRimHeight    / GridSize) + 4;
                 }
 
-                // Cascaded Z bounds setup based on radial distance
                 const int32 dx_c = x - Center.X;
-                const int32 dy_c = (MinCoord.Y + y_off + b) - Center.Y;
+                const int32 dy_c = y - Center.Y;
                 const int32 DistSq_C = dx_c * dx_c + dy_c * dy_c;
 
-                int32 EffMinZ = 1;
-                int32 EffMaxZ = 1;
+                const int32 EffMinZ = (DistSq_C <= RenderDistanceXY * RenderDistanceXY) ? (2 + ExtraMinZ) : 
+                                     (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY ? (MidRenderDistanceZ + ExtraMinZ) : (4 + ExtraMinZ));
+                const int32 EffMaxZ = (DistSq_C <= RenderDistanceXY * RenderDistanceXY) ? (12 + ExtraMaxZ) : 
+                                     (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY ? (MidRenderDistanceZ + ExtraMaxZ) : (4 + ExtraMaxZ));
 
-                if (DistSq_C <= RenderDistanceXY * RenderDistanceXY)
                 {
-                    EffMinZ = 2 + ExtraMinZ;
-                    EffMaxZ = 12 + ExtraMaxZ;
-                }
-                else if (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY)
-                {
-                    EffMinZ = MidRenderDistanceZ + ExtraMinZ;
-                    EffMaxZ = MidRenderDistanceZ + ExtraMaxZ;
-                }
-                else // FIX RIM-2: Zone C
-                {    // Expanded fully to matching Zone B scale tolerance
-                    EffMinZ = 8 + ExtraMinZ;
-                    EffMaxZ = 8 + ExtraMaxZ;
-                }
-
-                const int32 ColMaxZ = FMath::Max(MaxCoord.Z, SkyZ_Max);
-                for (int32 z = MinCoord.Z; z <= ColMaxZ; ++z)
-                {
-                    const FIntVector C(x, y, z);
-                    bool bAlreadyLoaded = false;
+                    FReadScopeLock ReadLock(LoadedChunksLock);
+                    for (int32 z = GroundZ - EffMinZ; z <= GroundZ + EffMaxZ; ++z)
                     {
-                        FReadScopeLock ReadLock(LoadedChunksLock);
-                        if (LoadedChunks.Contains(C)) bAlreadyLoaded = true;
+                        const FIntVector C(x, y, z);
+                        if (!LoadedChunks.Contains(C))
+                        {
+                            const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
+                            LocalSorted.Add({Dist, C});
+                        }
                     }
-                    if (bAlreadyLoaded) continue;
 
-                    bool bValid = false;
-                    if (z >= (GroundZ - EffMinZ) && z <= (GroundZ + EffMaxZ)) bValid = true;
-                    else if (z >= SkyZ_Min && z <= SkyZ_Max && DistSq_C <= SkylandsRenderDistanceXY * SkylandsRenderDistanceXY) bValid = true;
-
-                    if (bValid)
+                    if (DistSq_C <= SkylandsRenderDistanceXY * SkylandsRenderDistanceXY)
                     {
-                        const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
-                        LocalSorted.Add({Dist, C});
+                        for (int32 z = SkyZ_Min; z <= SkyZ_Max; ++z)
+                        {
+                            const FIntVector C(x, y, z);
+                            if ((z < GroundZ - EffMinZ || z > GroundZ + EffMaxZ) && !LoadedChunks.Contains(C))
+                            {
+                                const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
+                                LocalSorted.Add({Dist, C});
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // ── Scalar remainder (<8 leftover Y columns) ──────────────────────────
+        // ── Scalar remainder ─────────────────────────────────────────────────
         for (; y_off < NumY; ++y_off)
         {
-             const int32 y = MinCoord.Y + y_off;
-             const float WY = (y + 0.5f) * GridSize;
+            const int32 y = MinCoord.Y + y_off;
+            const float WY = (y + 0.5f) * GridSize;
+            const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WX, WY, Cfg);
+            const float Surface = Wh.SurfaceHeight;
+            const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
 
-             const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(WX, WY, Cfg);
-             const float Surface = Wh.SurfaceHeight;
-             const int32 GroundZ = FMath::FloorToInt(Surface / GridSize);
+            float MinSkyAlt, MaxSkyAlt;
+            FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Wh.Weights.GetRoughness(), Cfg, MinSkyAlt, MaxSkyAlt);
+            const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
+            const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
 
-             float MinSkyAlt, MaxSkyAlt;
-             FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Wh.Weights.GetRoughness(), Cfg, MinSkyAlt, MaxSkyAlt);
+            int32 ExtraMinZ = 0, ExtraMaxZ = 0;
+            const float dx = WX - Cfg.Craters.ForcedCraterCenter.X;
+            const float dy = WY - Cfg.Craters.ForcedCraterCenter.Y;
+            const float DistSq = dx * dx + dy * dy;
+            const float CraterRad = Cfg.Craters.CentralCraterRadius;
 
-             const int32 SkyZ_Min = FMath::FloorToInt(MinSkyAlt / GridSize);
-             const int32 SkyZ_Max = FMath::FloorToInt(MaxSkyAlt / GridSize);
+            if (CraterRad > 0.f && DistSq < CraterRad * CraterRad * 2.25f)
+            {
+                ExtraMinZ = FMath::CeilToInt(FMath::Abs(Cfg.Craters.CentralCraterDepth) / GridSize) + 3;
+                ExtraMaxZ = FMath::CeilToInt(Cfg.Craters.CentralCraterRimHeight    / GridSize) + 4;
+            }
 
-             int32 ExtraMinZ = 0;
-             int32 ExtraMaxZ = 0;
-             const float dx = WX - Cfg.Craters.ForcedCraterCenter.X;
-             const float dy = WY - Cfg.Craters.ForcedCraterCenter.Y;
-             const float DistSq = dx * dx + dy * dy;
-             const float CraterRad = Cfg.Craters.CentralCraterRadius;
+            const int32 dx_c = x - Center.X;
+            const int32 dy_c = y - Center.Y;
+            const int32 DistSq_C = dx_c * dx_c + dy_c * dy_c;
 
-             if (CraterRad > 0.f && DistSq < CraterRad * CraterRad * 2.25f)
-             {
-                 ExtraMinZ = FMath::CeilToInt(FMath::Abs(Cfg.Craters.CentralCraterDepth) / GridSize) + 3;
-                 ExtraMaxZ = FMath::CeilToInt(Cfg.Craters.CentralCraterRimHeight    / GridSize) + 4;
-             }
+            const int32 EffMinZ = (DistSq_C <= RenderDistanceXY * RenderDistanceXY) ? (2 + ExtraMinZ) : 
+                                 (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY ? (MidRenderDistanceZ + ExtraMinZ) : (4 + ExtraMinZ));
+            const int32 EffMaxZ = (DistSq_C <= RenderDistanceXY * RenderDistanceXY) ? (12 + ExtraMaxZ) : 
+                                 (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY ? (MidRenderDistanceZ + ExtraMaxZ) : (4 + ExtraMaxZ));
 
-             // Cascaded Z bounds setup based on radial distance
-             const int32 dx_c = x - Center.X;
-             const int32 dy_c = y - Center.Y;
-             const int32 DistSq_C = dx_c * dx_c + dy_c * dy_c;
+            {
+                FReadScopeLock ReadLock(LoadedChunksLock);
+                for (int32 z = GroundZ - EffMinZ; z <= GroundZ + EffMaxZ; ++z)
+                {
+                    const FIntVector C(x, y, z);
+                    if (!LoadedChunks.Contains(C))
+                    {
+                        const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
+                        LocalSorted.Add({Dist, C});
+                    }
+                }
 
-             int32 EffMinZ = 1;
-             int32 EffMaxZ = 1;
-
-             if (DistSq_C <= RenderDistanceXY * RenderDistanceXY)
-             {
-                 EffMinZ = 2 + ExtraMinZ;
-                 EffMaxZ = 12 + ExtraMaxZ;
-             }
-             else if (DistSq_C <= MidRenderDistanceXY * MidRenderDistanceXY)
-             {
-                 EffMinZ = MidRenderDistanceZ + ExtraMinZ;
-                 EffMaxZ = MidRenderDistanceZ + ExtraMaxZ;
-             }
-             else // FIX RIM-2 (scalar): Zone C distant silhouette
-             {
-                 EffMinZ = 8 + ExtraMinZ;
-                 EffMaxZ = 8 + ExtraMaxZ;
-             }
-
-             const int32 ColMaxZ = FMath::Max(MaxCoord.Z, SkyZ_Max);
-             for (int32 z = MinCoord.Z; z <= ColMaxZ; ++z)
-             {
-                 const FIntVector C(x, y, z);
-                 if (LoadedChunks.Contains(C)) continue;
-
-                 bool bValid = false;
-                 if (z >= (GroundZ - EffMinZ) && z <= (GroundZ + EffMaxZ)) bValid = true;
-                 else if (z >= SkyZ_Min && z <= SkyZ_Max && DistSq_C <= SkylandsRenderDistanceXY * SkylandsRenderDistanceXY) bValid = true;
-
-                 if (bValid)
-                 {
-                     const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
-                     LocalSorted.Add({Dist, C});
-                 }
-             }
+                if (DistSq_C <= SkylandsRenderDistanceXY * SkylandsRenderDistanceXY)
+                {
+                    for (int32 z = SkyZ_Min; z <= SkyZ_Max; ++z)
+                    {
+                        const FIntVector C(x, y, z);
+                        if ((z < GroundZ - EffMinZ || z > GroundZ + EffMaxZ) && !LoadedChunks.Contains(C))
+                        {
+                            const int32 Dist = FMath::Max3(FMath::Abs(x - Center.X), FMath::Abs(y - Center.Y), FMath::Abs(z - Center.Z));
+                            LocalSorted.Add({Dist, C});
+                        }
+                    }
+                }
+            }
         }
     });
 
-    for (const auto& LocalSorted : ThreadResults)
-    {
-        Sorted.Append(LocalSorted);
-    }
-    Sorted.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key<B.Key; });
+    for (const auto& LocalSorted : ThreadResults) { Sorted.Append(LocalSorted); }
+    Sorted.Sort([](const TPair<int32,FIntVector>& A, const TPair<int32,FIntVector>& B){ return A.Key < B.Key; });
 
     TSet<FIntVector> QSet;
     TArray<FVoxelGenerationQueueEntry> NewQueue;
@@ -367,26 +338,24 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
 #if WITH_EDITOR
     if (!GetWorld()->IsGameWorld())
     {
-        // Using outer scope Cfg
         FVector Pos = SnapToVoxelGrid(FVector(Anchor.X, Anchor.Y, 0.f));
         const auto Wh = FVoxelBiomeManager::GetWeightsAndSurfaceHeightStatic(Pos.X, Pos.Y, Cfg);
         const float Surface = Wh.SurfaceHeight;
         float MinSkyAlt, MaxSkyAlt;
         FVoxelBiomeGenerators::GetSkylandAltitudeBounds(Surface, Wh.Weights.GetRoughness(), Cfg, MinSkyAlt, MaxSkyAlt);
-        const float SkyAlt = (MinSkyAlt + MaxSkyAlt) * 0.5f;
-        const float IHT = (MaxSkyAlt - MinSkyAlt) * 0.5f;
         static FVoxelDensityGenerator EdProbe;
         float TargetZ = Surface + GetSafeSpawnHeightOffset();
         bool bSky = false;
-        if (SkyAlt > Surface+5000.f)
-            for (float z2=SkyAlt+IHT; z2>=FMath::Max(SkyAlt-IHT,Surface+500.f); z2-=200.f)
-                if (EdProbe.GetDensity(Pos.X,Pos.Y,z2,Cfg)>0.f) { TargetZ=z2+GetSafeSpawnHeightOffset(); bSky=true; break; }
+        const float SkyAlt = (MinSkyAlt + MaxSkyAlt) * 0.5f;
+        const float IHT = (MaxSkyAlt - MinSkyAlt) * 0.5f;
+        if (SkyAlt > Surface + 5000.f)
+            for (float z2 = SkyAlt + IHT; z2 >= FMath::Max(SkyAlt - IHT, Surface + 500.f); z2 -= 200.f)
+                if (EdProbe.GetDensity(Pos.X, Pos.Y, z2, Cfg) > 0.f) { TargetZ = z2 + GetSafeSpawnHeightOffset(); bSky = true; break; }
         const FIntVector SC2 = WorldToChunkCoord(Anchor);
-        const int32 SkyZ = FMath::FloorToInt(TargetZ/(ChunkSize*VoxelSize));
-        for (int32 x=-1;x<=1;x++) for (int32 y=-1;y<=1;y++) if (bSky && SkyZ!=0)
+        const int32 SkyZ = FMath::FloorToInt(TargetZ / GridSize);
+        for (int32 x = -1; x <= 1; x++) for (int32 y = -1; y <= 1; y++) if (bSky && SkyZ != 0)
         {
-            FIntVector S(SC2.X+x,SC2.Y+y,SkyZ);  if (!QSet.Contains(S)){ QSet.Add(S); NewQueue.Add(FVoxelGenerationQueueEntry(S, 0.f)); }
-            if (SkyZ>0) { FIntVector B(SC2.X+x,SC2.Y+y,SkyZ-1); if (!QSet.Contains(B)){ QSet.Add(B); NewQueue.Add(FVoxelGenerationQueueEntry(B, 0.f)); } }
+            FIntVector S(SC2.X+x, SC2.Y+y, SkyZ); if (!QSet.Contains(S)) { QSet.Add(S); NewQueue.Add(FVoxelGenerationQueueEntry(S,0.f)); }
         }
     }
 #endif
@@ -394,35 +363,18 @@ void AVoxelWorld::PerformWorldDiscoveryAndBoundsCalculation()
     if (bWaitingForInitialSpawn && SpawnHandlerComponent)
     {
         TArray<FVoxelGenerationQueueEntry> TempQueue;
-        TempQueue.Reserve(SpawnHandlerComponent->GetTotalCollisionCount() + SpawnHandlerComponent->GetTotalVisualCount());
-        
         for (const FIntVector& C : SpawnHandlerComponent->GetInitialSpawnCoords())
-        {
             if (!LoadedChunks.Contains(C) && !QSet.Contains(C))
-            {
-                QSet.Add(C);
-                TempQueue.Add(FVoxelGenerationQueueEntry(C, 0.f));
-            }
-        }
+            { QSet.Add(C); TempQueue.Add(FVoxelGenerationQueueEntry(C, 0.f)); }
 
         for (const FIntVector& C : SpawnHandlerComponent->GetInitialSpawnCoordsVisual())
-        {
             if (!LoadedChunks.Contains(C) && !QSet.Contains(C))
-            {
-                QSet.Add(C);
-                TempQueue.Add(FVoxelGenerationQueueEntry(C, 0.f));
-            }
-        }
+            { QSet.Add(C); TempQueue.Add(FVoxelGenerationQueueEntry(C, 0.f)); }
 
-        if (TempQueue.Num() > 0)
-        {
-            NewQueue.Insert(MoveTemp(TempQueue), 0);
-        }
+        if (TempQueue.Num() > 0) NewQueue.Insert(MoveTemp(TempQueue), 0);
     }
 
     UE_LOG(LogVoxelWorld, Log, TEXT("VoxelWorld: Queued %d chunks."), NewQueue.Num());
-    
-    // FIX Threading Crash: Perform instantaneous pointer swap under lock
     {
         FScopeLock Lock(&GenerationQueueLock);
         GenerationQueue = MoveTemp(NewQueue);

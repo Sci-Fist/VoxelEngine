@@ -74,7 +74,7 @@ class FIRSTVOXEL_API AVoxelWorld : public AActor
     int32 MidRenderDistanceZ = 8;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
-    int32 DistantRenderDistanceXY = 128;
+    int32 DistantRenderDistanceXY = 64;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Voxel|Streaming")
     int32 DistantLOD = 2;

@@ -227,12 +227,14 @@ void UVoxelSpawnHandlerComponent::ProcessInitialPlayerSpawn()
         Pos.X, Pos.Y, Surface, TargetZ, CraterW, bSky ? 1 : 0, Config.Craters.CentralCraterDepth, Config.Craters.CentralCraterRadius);
 
     Pos.Z = TargetZ;
-    TargetCoordsZ = TargetZ + 8000.f; // ~80m above spawn — rim and bowl visible at load
+    TargetCoordsZ = TargetZ + 120000.f; // ~1.2km above spawn to clear massive 700m crater rims and peaks
     ActualSpawnXY = FVector2D(Pos.X, Pos.Y);
 
     if (Player)
     {
-        Player->SetActorLocation(Pos, false, nullptr, ETeleportType::TeleportPhysics);
+        // Place them immediately into the drone hover position to avoid spawning inside procedural terrain.
+        FVector InitialHover(ActualSpawnXY.X, ActualSpawnXY.Y, TargetCoordsZ);
+        Player->SetActorLocation(InitialHover, false, nullptr, ETeleportType::TeleportPhysics);
     }
     
     if (bWaitingForInitialSpawn) return;
